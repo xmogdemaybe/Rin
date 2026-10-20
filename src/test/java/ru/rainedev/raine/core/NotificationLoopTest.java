@@ -96,7 +96,7 @@ class NotificationLoopTest {
         loop.process(new Notification("тебе написали"));
 
         assertEquals(2, llm.calls, "после текстового ответа модель должна получить второй шанс");
-        assertTrue(loop.context().stream().anyMatch(m -> m.content() != null && m.content().contains("tool-centric")));
+        assertTrue(loop.context().stream().anyMatch(m -> m.content() != null && m.content().contains("tool_calls")));
     }
 
     @Test
