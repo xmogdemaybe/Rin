@@ -21,6 +21,7 @@ class NotificationLoopTest {
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<ChatResponse> scripted = new ArrayDeque<>();
         private final List<List<Message>> seenContexts = new ArrayList<>();
+        private final List<String> toolChoices = new ArrayList<>();
         private int calls;
 
         private ChatResponse repeating;
@@ -32,6 +33,12 @@ class NotificationLoopTest {
         /** Отвечать так всегда — для проверки зациклившейся модели. */
         void alwaysRespond(ChatResponse response) {
             repeating = response;
+        }
+
+        @Override
+        public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools, String toolChoice) {
+            toolChoices.add(toolChoice);
+            return chat(systemPrompt, history, tools);
         }
 
         @Override
@@ -97,6 +104,7 @@ class NotificationLoopTest {
 
         assertEquals(2, llm.calls, "после текстового ответа модель должна получить второй шанс");
         assertTrue(loop.context().stream().anyMatch(m -> m.content() != null && m.content().contains("tool_calls")));
+        assertEquals(List.of("auto", "required"), llm.toolChoices, "повтор идёт с запретом текста");
     }
 
     @Test

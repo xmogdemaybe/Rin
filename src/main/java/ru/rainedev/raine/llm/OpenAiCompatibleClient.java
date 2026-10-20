@@ -83,6 +83,11 @@ public final class OpenAiCompatibleClient implements LlmClient {
 
     @Override
     public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
+        return chat(systemPrompt, history, tools, LlmClient.TOOL_CHOICE_AUTO);
+    }
+
+    @Override
+    public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools, String toolChoice) {
         List<Message> messages = new ArrayList<>();
         messages.add(Message.system(systemPrompt));
         messages.addAll(history);
@@ -94,10 +99,25 @@ public final class OpenAiCompatibleClient implements LlmClient {
         body.set("messages", mapper.valueToTree(messages));
         if (tools != null && tools.isArray() && !tools.isEmpty()) {
             body.set("tools", tools);
-            body.put("tool_choice", "auto");
+            body.put("tool_choice", toolChoice);
         }
 
         applyThoughtSignatures(body);
+        try {
+            return complete(body);
+        } catch (LlmFailure failure) {
+            if (failure.status() != 400 || !LlmClient.TOOL_CHOICE_REQUIRED.equals(toolChoice)) {
+                throw failure;
+            }
+            // «обязан вызвать инструмент» шлюз отверг — тот же запрос, но без запрета текста
+            log.warn("Шлюз отверг принудительный вызов инструментов, повторяю как обычно");
+            body.remove("tool_choice");
+            return complete(body);
+        }
+    }
+
+    /** Отправляет собранное тело и разбирает ответ. */
+    private ChatResponse complete(ObjectNode body) {
         String response = post("chat/completions", body, Duration.ofMinutes(5));
         Transcript.save(body, response);
         try {

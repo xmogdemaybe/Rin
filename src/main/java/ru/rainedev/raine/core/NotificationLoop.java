@@ -94,6 +94,8 @@ public final class NotificationLoop {
         boolean recall = true;
         boolean asked;
         boolean prepared;
+        /** После текстовой реплики следующий запрос идёт с запретом текста. */
+        boolean forceToolCall;
         Turn(Notification notification) { this.notification = notification; }
     }
 
@@ -315,7 +317,8 @@ public final class NotificationLoop {
                 appendToLast(ASK_REMINDER);
             }
             turn.prepared = true;
-            ChatResponse response = llm.chat(systemPrompt.text(), context, tools.asJson());
+            String toolChoice = turn.forceToolCall ? LlmClient.TOOL_CHOICE_REQUIRED : LlmClient.TOOL_CHOICE_AUTO;
+            ChatResponse response = llm.chat(systemPrompt.text(), context, tools.asJson(), toolChoice);
             turn.prepared = false;
             turn.step = step + 1;
             spentTokens += response.totalTokens();
@@ -331,11 +334,14 @@ public final class NotificationLoop {
             }
 
             if (calls.isEmpty()) {
-                // ответ текстом действием не является — напоминаем и пробуем снова
+                // ответ текстом действием не является — напоминаем, а следующий
+                // запрос идёт с запретом текста: инструмент обязан быть
                 log.warn("Модель не вызвала ни одного инструмента, шаг {}", step);
                 context.add(Message.user(BE_TOOL_CENTRIC));
+                turn.forceToolCall = true;
                 continue;
             }
+            turn.forceToolCall = false;
 
             List<Message> results;
             try {
