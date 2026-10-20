@@ -40,6 +40,15 @@ public final class OpenAiCompatibleClient implements LlmClient {
     private final String sessionId = java.util.UUID.randomUUID().toString();
 
     private final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * Подписи размышлений Gemini 3 (BUG-04): модель отдаёт их в
+     * extra_content.google.thought_signature каждого вызова инструмента и
+     * требует обратно в следующем запросе. Обычные record-классы это поле
+     * молча роняют, поэтому храним по id вызова и втыкаем в историю сам.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, String> thoughtSignatures =
+            new java.util.concurrent.ConcurrentHashMap<>();
     @FunctionalInterface
     interface Sender {
         HttpResponse<String> send(HttpRequest request) throws IOException, InterruptedException;
@@ -82,17 +91,18 @@ public final class OpenAiCompatibleClient implements LlmClient {
         body.put("model", config.model());
         body.put("temperature", config.temperature());
         body.put("max_tokens", MAX_OUTPUT_TOKENS);
-        body.put("session_id", sessionId);
         body.set("messages", mapper.valueToTree(messages));
         if (tools != null && tools.isArray() && !tools.isEmpty()) {
             body.set("tools", tools);
             body.put("tool_choice", "auto");
         }
 
+        applyThoughtSignatures(body);
         String response = post("chat/completions", body, Duration.ofMinutes(5));
         Transcript.save(body, response);
         try {
             ChatResponse parsed = mapper.readValue(response, ChatResponse.class);
+            rememberThoughtSignatures(response);
             if (parsed.cacheLooksBroken()) {
                 log.warn("Посредник не кэширует подсказку — каждый шаг оплачивается как первый");
             }
@@ -169,6 +179,36 @@ public final class OpenAiCompatibleClient implements LlmClient {
         log.debug("Текст для вектора длиннее допустимого, обрезан: {} → {} символов",
                 input.length(), MAX_EMBEDDING_CHARS);
         return input.substring(0, MAX_EMBEDDING_CHARS);
+    }
+
+    /** Вкладывает сохранённые подписи обратно в tool_calls истории. */
+    private void applyThoughtSignatures(ObjectNode body) {
+        for (JsonNode message : body.path("messages")) {
+            JsonNode toolCalls = message.path("tool_calls");
+            if (!toolCalls.isArray()) continue;
+            for (JsonNode call : toolCalls) {
+                String id = call.path("id").asText("");
+                String signature = id.isBlank() ? null : thoughtSignatures.get(id);
+                if (signature != null) {
+                    ((ObjectNode) call).withObject("/extra_content/google")
+                            .put("thought_signature", signature);
+                }
+            }
+        }
+    }
+
+    /** Запоминает подписи размышлений из ответа модели по id вызова. */
+    private void rememberThoughtSignatures(String response) throws IOException {
+        JsonNode calls = mapper.readTree(response)
+                .path("choices").path(0).path("message").path("tool_calls");
+        if (!calls.isArray()) return;
+        for (JsonNode call : calls) {
+            String id = call.path("id").asText("");
+            String signature = call.path("extra_content").path("google").path("thought_signature").asText("");
+            if (!id.isBlank() && !signature.isBlank()) {
+                thoughtSignatures.putIfAbsent(id, signature);
+            }
+        }
     }
 
     private String post(String path, ObjectNode body, Duration timeout) {
