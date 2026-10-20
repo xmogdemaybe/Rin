@@ -94,7 +94,7 @@ public final class NotificationLoop {
         boolean recall = true;
         boolean asked;
         boolean prepared;
-        /** После текстовой реплики следующий запрос идёт с запретом текста. */
+            /** До первого текстового промаха шаги свободные, дальше до конца хода — только вызовы. */
         boolean forceToolCall;
         Turn(Notification notification) { this.notification = notification; }
     }
@@ -334,14 +334,13 @@ public final class NotificationLoop {
             }
 
             if (calls.isEmpty()) {
-                // ответ текстом действием не является — напоминаем, а следующий
-                // запрос идёт с запретом текста: инструмент обязан быть
+                // ответ текстом действием не является — напоминаем, и до конца
+                // хода текст запрещён: каждый следующий шаг обязан содержать вызов
                 log.warn("Модель не вызвала ни одного инструмента, шаг {}", step);
                 context.add(Message.user(BE_TOOL_CENTRIC));
                 turn.forceToolCall = true;
                 continue;
             }
-            turn.forceToolCall = false;
 
             List<Message> results;
             try {

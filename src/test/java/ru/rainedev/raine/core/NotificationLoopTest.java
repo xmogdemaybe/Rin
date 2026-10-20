@@ -108,6 +108,23 @@ class NotificationLoopTest {
     }
 
     @Test
+    void keepsForcingToolCallsAfterFirstMiss() {
+        // однажды сорвавшись в текст, модель не должна жечь шаги дальше:
+        // каждый следующий запрос до конца хода идёт под запретом текста
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText("Надо бы ответить!"));
+        llm.willRespond(plainText("Снова думаю в тексте..."));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(3, llm.calls);
+        assertEquals(List.of("auto", "required", "required"), llm.toolChoices,
+                "после первого промаха запрет держится до конца хода");
+    }
+
+    @Test
     void keepsGoingUntilFinishingToolIsCalled() {
         List<String> sent = new ArrayList<>();
         Toolbox tools = new Toolbox(Tool.simple("send", "Отправляет", arguments -> {
