@@ -219,7 +219,6 @@ public final class OpenAiCompatibleClient implements LlmClient {
             request = HttpRequest.newBuilder(URI.create(baseUrl() + path))
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + config.apiKey())
-                    .header("x-session-id", sessionId)
                     .timeout(timeout)
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                     .build();
