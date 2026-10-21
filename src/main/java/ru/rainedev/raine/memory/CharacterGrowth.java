@@ -1,7 +1,6 @@
 package ru.rainedev.raine.memory;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -108,7 +107,10 @@ public final class CharacterGrowth {
         try {
             ru.rainedev.raine.storage.AtomicFiles.writeString(file, answer + "\n");
         } catch (IOException e) {
-            throw new UncheckedIOException("Не удалось перезаписать " + file, e);
+            // атомарная запись: старый файл либо цел, либо не пострадал;
+            // ошибка не вылетает в ночной сон и не кролится в цикл
+            log.error("Рост личности: не перезаписать {} — {}", file, e.getMessage());
+            return false;
         }
         log.info("Рост личности: файл перезаписан, {} строк", lines);
         return true;

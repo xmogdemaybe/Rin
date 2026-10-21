@@ -125,7 +125,10 @@ public final class Toolbox {
     }
 
     private String invokeOne(ToolCall call, java.util.function.Consumer<Tool> appeared) {
-        Tool tool = tools.get(call.name());
+        Tool tool;
+        synchronized (tools) {
+            tool = tools.get(call.name());
+        }
         if (tool == null) {
             return "Инструмент '%s' сейчас недоступен. Доступны: %s".formatted(call.name(), String.join(", ", names()));
         }
