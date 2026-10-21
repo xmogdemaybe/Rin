@@ -32,7 +32,7 @@ public final class MediaAhead {
         }
         long startedAt = System.currentTimeMillis();
         try (ExecutorService pool = Executors.newFixedThreadPool(AT_ONCE,
-                Thread.ofVirtual().name("raine-look-", 0).factory())) {
+                Thread.ofVirtual().name("rin-look-", 0).factory())) {
             List<Callable<String>> work = messages.stream()
                     .map(message -> (Callable<String>) () -> media.describe(message))
                     .toList();

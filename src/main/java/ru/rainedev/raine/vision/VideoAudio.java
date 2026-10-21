@@ -145,7 +145,7 @@ public final class VideoAudio {
 
         try {
             byte[] ogg = OggOpus.encode(Pcm.resample(samples, rate, TARGET_RATE), TARGET_RATE, BITRATE);
-            Path audio = Files.createTempFile("raine-audio-", ".ogg");
+            Path audio = Files.createTempFile("rin-audio-", ".ogg");
             Files.write(audio, ogg);
             log.debug("Дорожка вынута: {} с", samples.length / rate);
             return Optional.of(audio);

@@ -139,7 +139,7 @@ public final class ImageGenerator {
         if (!busy.compareAndSet(false, true)) {
             return false;
         }
-        Thread.ofVirtual().name("raine-camera").start(() -> {
+        Thread.ofVirtual().name("rin-camera").start(() -> {
             try {
                 onReady.accept(take(wish));
             } catch (RuntimeException e) {

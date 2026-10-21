@@ -43,7 +43,7 @@ public final class Spontaneity implements AutoCloseable {
             Act proactively!""";
 
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("raine-impulse").factory());
+            Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("rin-impulse").factory());
 
     private final NotificationLoop loop;
     private final Diary diary;

@@ -154,7 +154,7 @@ public final class Vision {
         // Порядок при этом сохраняется, иначе лента времени перестанет быть лентой
         List<String> captions;
         try (var pool = java.util.concurrent.Executors.newFixedThreadPool(FRAMES_AT_ONCE,
-                Thread.ofVirtual().name("raine-frame-", 0).factory())) {
+                Thread.ofVirtual().name("rin-frame-", 0).factory())) {
             List<java.util.concurrent.Future<String>> pending = frames.stream()
                     .map(frame -> pool.submit(() -> captionOf(frame, prompt, situation)))
                     .toList();

@@ -1,4 +1,4 @@
-rootProject.name = "raine"
+rootProject.name = "rin"
 
 dependencyResolutionManagement {
     repositories {

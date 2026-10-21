@@ -31,7 +31,7 @@ public final class LiveConfig implements AutoCloseable {
     private final Path file;
     private final List<Consumer<Config>> listeners = new CopyOnWriteArrayList<>();
     private final ScheduledExecutorService watcher =
-            Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("raine-config").factory());
+            Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("rin-config").factory());
 
     private final Config initial;
     private volatile Config current;

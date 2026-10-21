@@ -176,10 +176,10 @@ public final class TelegramTools {
                 .describedAs("Takes a photo — a selfie, surroundings, anything. Returns a filename you can then "
                         + "send with send_telegram_message. Describe the vibe, not a complex composition.")
                 .requiredString("photo_desc", "What the photo should show. Refer to yourself by name. "
-                        + "Avoid complex composition — set the vibe instead. Example: \"Raine makes a playful "
+                        + "Avoid complex composition — set the vibe instead. Example: \"She makes a playful "
                         + "selfie\". The camera only knows what you look like: to put someone else in the frame, "
                         + "name them and describe their appearance as specifically as you can. Example: "
-                        + "\"Selfie of Raine with her sister: anime young female, gold eyes, white hair, "
+                        + "\"Selfie with her sister: anime young female, gold eyes, white hair, "
                         + "white dress, black socks\".")
                 .build(arguments -> {
                     String wish = arguments.path("photo_desc").asText("").strip();

@@ -22,7 +22,7 @@ public final class TypingIndicator implements AutoCloseable {
 
     private TypingIndicator(Runnable ping) {
         ping.run();
-        this.thread = Thread.ofVirtual().name("raine-typing").start(() -> {
+        this.thread = Thread.ofVirtual().name("rin-typing").start(() -> {
             while (running.get()) {
                 try {
                     Thread.sleep(REFRESH);

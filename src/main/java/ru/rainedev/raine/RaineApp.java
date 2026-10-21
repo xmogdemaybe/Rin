@@ -156,7 +156,7 @@ public final class RaineApp implements AutoCloseable {
                 ? new TelegramActions.ReadOnly()
                 : new TelegramActions.Live(client, telegram);
         if (config.readOnly()) {
-            log.warn("Режим только чтения: Raine думает, но ничего не отправляет и не открывает чаты");
+            log.warn("Режим только чтения: она думает, но ничего не отправляет и не открывает чаты");
         }
 
         AntiRepeat antiRepeat = new AntiRepeat(llm, prompts.lazy("anti_repeat.md"), config.repeat());
@@ -356,10 +356,10 @@ public final class RaineApp implements AutoCloseable {
         loop.onIdle(() -> actions.setOnline(false));
         rest.onStateChange(resting -> actions.setOnline(false));
 
-        brain = Thread.ofVirtual().name("raine-brain").start(loop::run);
-        Thread.ofVirtual().name("raine-catchup").start(this::catchUpOnUnread);
-        Thread.ofVirtual().name("raine-pending").start(() -> rememberPending(writer, prompts.system("")));
-        log.info("Raine запущена от имени {} (id {})", config.character().name(), telegram.myId());
+        brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
+        Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
+        Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(writer, prompts.system("")));
+        log.info("Запущена от имени {} (id {})", config.character().name(), telegram.myId());
     }
 
     /**
@@ -518,7 +518,7 @@ public final class RaineApp implements AutoCloseable {
         if (senderId == config.ownerId() && rest != null) {
             rest.wakeUp();   // сообщение владельца поднимает, даже если она отошла
         }
-        Thread.ofVirtual().name("raine-incoming").start(() -> {
+        Thread.ofVirtual().name("rin-incoming").start(() -> {
             try {
                 receive(message, senderId);
             } catch (RuntimeException e) {
@@ -605,7 +605,7 @@ public final class RaineApp implements AutoCloseable {
         if (!command.equals("/version")) {
             return false;
         }
-        String answer = "Raine %s, Java %s, дневник: %d записей"
+        String answer = "Версия %s, Java %s, дневник: %d записей"
                 .formatted(version(), Runtime.version().feature(), new Diary(config.diaryDir()).size());
         actions.sendMessage(message.chatId, answer, message.id);
         log.info("Ответ на команду: {}", answer);

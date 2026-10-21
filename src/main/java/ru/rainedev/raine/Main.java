@@ -65,7 +65,7 @@ public final class Main {
                     } catch (Exception e) {
                         log.warn("При остановке что-то пошло не так", e);
                     }
-                }, "raine-farewell");
+                }, "rin-farewell");
                 Runtime.getRuntime().addShutdownHook(farewell);
 
                 app.start();
