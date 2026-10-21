@@ -53,6 +53,10 @@ public final class TrustLedger {
     /** Первые цифры после «- id» — наш формат строк, по нему запись и находится. */
     private static final Pattern ID_PREFIX = Pattern.compile("^\\s*-\\s*id\\s+(\\d+)");
 
+    /** Запись в строгом виде: id, затем имя через запятую, затем уровень и причина. */
+    private static final Pattern ENTRY = Pattern.compile(
+            "^-\\s*id\\s+(\\d+)\\s*(,\\s*([^:]*))?\\s*:\\s*([+-]?\\d+)\\s*—");
+
     /** Тегоподобное «<» гасим: граница секции и разметки структурная, а не декоративная. */
     private static final Pattern TAG_LIKE = Pattern.compile("<(?=[a-zA-Z/])");
 
@@ -75,6 +79,35 @@ public final class TrustLedger {
         this.ownerId = ownerId;
         this.ownerName = ownerName;
         this.clock = clock;
+    }
+
+    /**
+     * Человек и уровень доверия к нему из файла — как записано, так и понято.
+     * Владельца тут нет: его доверие живёт в системном промпте инвариантом.
+     */
+    public record Entry(long id, String name, int level) {}
+
+    /** Кому и сколько доверяет прямо сейчас; пусто — файла нет или он пуст. */
+    public List<Entry> entries() {
+        List<Entry> out = new ArrayList<>();
+        List<String> lines = readLines();
+        if (lines == null) {
+            return out;
+        }
+        for (String line : lines) {
+            Matcher matcher = ENTRY.matcher(line);
+            if (!matcher.find()) {
+                continue;   // чужая или ручная строка — эта механика её не трогает
+            }
+            try {
+                long id = Long.parseLong(matcher.group(1));
+                String name = matcher.group(3) == null ? "" : matcher.group(3).strip();
+                out.add(new Entry(id, name, Integer.parseInt(matcher.group(4))));
+            } catch (NumberFormatException ignored) {
+                // наших строк это не касается, а чужую не трогаем
+            }
+        }
+        return out;
     }
 
     public Tool tool() {

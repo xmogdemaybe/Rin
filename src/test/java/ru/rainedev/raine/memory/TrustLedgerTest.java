@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.rainedev.raine.core.LowQualityException;
@@ -186,5 +187,33 @@ class TrustLedgerTest {
 
         assertTrue(answer.contains("cannot be read"), "нечитаемое не переписывается молча");
         assertTrue(Files.isDirectory(broken), "поломанное место нетронуто — чинит человек");
+    }
+
+    @Test
+    void entriesAreReadBackExactlyAsWritten(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("trust.md");
+        Files.writeString(file, """
+                - id 42, Вика: +3 — выручала (2026-10-21)
+                - id 77: +5 — свой человек (2026-10-20)
+                - id 9, Тоня: -1 — интригует (2026-10-19)
+                ручная строка без формата
+                """);
+        TrustLedger ledger = new TrustLedger(file, 111, "", clock);
+
+        List<TrustLedger.Entry> entries = ledger.entries();
+
+        assertEquals(3, entries.size(), "строка без формата — не запись");
+        assertEquals(new TrustLedger.Entry(42, "Вика", 3), entries.get(0));
+        assertEquals(new TrustLedger.Entry(77, "", 5), entries.get(1));
+        assertEquals(new TrustLedger.Entry(9, "Тоня", -1), entries.get(2));
+    }
+
+    @Test
+    void emptyOrMissingLedgerMeansNobody(@TempDir Path dir) throws Exception {
+        assertEquals(List.of(), new TrustLedger(dir.resolve("trust.md"), 111, "", clock).entries(),
+                "файла нет — писать первой некому");
+        Files.writeString(dir.resolve("trust.md"), "");
+        assertEquals(List.of(), new TrustLedger(dir.resolve("trust.md"), 111, "", clock).entries(),
+                "файл пуст — тоже некому");
     }
 }

@@ -1,5 +1,6 @@
 package ru.rainedev.raine.core;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.random.RandomGenerator;
@@ -29,6 +30,29 @@ public class Rest {
     private final RandomGenerator random;
     private NightSleep night;
 
+    /** Жив ли разговор прямо сейчас — решает ядро, Rest своего мнения держать не обязан. */
+    private java.util.function.BooleanSupplier aliveTalk = () -> false;
+
+    /** Суммарный предел терпения: даже при живом разговоре дольше этого не бодрствовать. */
+    private static final java.time.Duration DEFER_LIMIT = java.time.Duration.ofMinutes(90);
+
+    /** Когда начали откладывать уход в ночь; null — никто ничего не откладывал. */
+    private java.time.Instant deferSince;
+
+    /** Предел терпения вышел: уснуть обязана, даже если разговор всё ещё жив. */
+    private boolean patienceOver;
+
+    /** Прощания перед уходом в ночь. */
+    private Runnable leavingForNight = () -> {};
+
+    /** Проснулась сама к утру — не от сообщения владельца и не от остановки. */
+    private Runnable seenMorning = () -> {};
+
+    /** Прощания этой ночи уже прозвучали: проснутая посреди ночи не повторяет их. */
+    private boolean farewellDone;
+
+    private final Clock clock;
+
     /** Дневные отлучки можно выключить: остаётся только ночной сон. */
     private volatile boolean dayNaps = true;
 
@@ -52,7 +76,13 @@ public class Rest {
     private java.time.LocalDateTime consolidatedNight;
 
     public Rest(RandomGenerator random) {
+        this(random, Clock.systemDefaultZone());
+    }
+
+    /** Часы отдельно — в тестах видно, как кончается предел терпения. */
+    Rest(RandomGenerator random, Clock clock) {
         this.random = random;
+        this.clock = clock;
     }
 
     public void dayNaps(boolean allowed) {
@@ -70,6 +100,21 @@ public class Rest {
 
     public void onStateChange(java.util.function.Consumer<Boolean> action) {
         this.onStateChange = action;
+    }
+
+    /** Жив ли разговор — спрашивается перед каждым уходом в ночь. */
+    public void aliveTalk(java.util.function.BooleanSupplier alive) {
+        this.aliveTalk = alive;
+    }
+
+    /** Прощание перед тем, как уйти в ночь. */
+    public void leavingForNight(Runnable action) {
+        this.leavingForNight = action;
+    }
+
+    /** Проснулась сама к утру — не от сообщения и не от остановки. */
+    public void seenMorning(Runnable action) {
+        this.seenMorning = action;
     }
 
     public boolean isResting() {
@@ -97,14 +142,60 @@ public class Rest {
         if (night != null) {
             var untilMorning = night.untilMorning();
             if (untilMorning.isPresent()) {
-                sleep(untilMorning.get(), "до утра", true);
+                fallAsleepTillMorning(untilMorning.get());
                 return;
             }
         }
+        // день: отложка и прощания здесь не живут — перенос сна только про ночь
+        deferSince = null;
+        patienceOver = false;
+        farewellDone = false;
         if (!dayNaps || random.nextDouble() >= CHANCE) {
             return;
         }
         sleep(Duration.ofMinutes(MIN_MINUTES + random.nextInt(MAX_MINUTES - MIN_MINUTES + 1)), "ненадолго", false);
+    }
+
+    /**
+     * Уход в ночь. Живой разговор откладывает сон, пока не стихнет или
+     * пока не кончится предел терпения.
+     */
+    private void fallAsleepTillMorning(Duration untilMorning) {
+        java.time.Instant now = java.time.Instant.now(clock);
+        boolean alive = aliveTalk.getAsBoolean();
+        if (patienceOver) {
+            // пределы уже вышли: спать обязана, даже если собеседник ещё тут
+            alive = false;
+        } else {
+            if (alive && deferSince == null) {
+                log.info("Разговор ещё жив — ночь подождёт");
+                deferSince = now;
+            }
+            if (alive && java.time.Duration.between(deferSince, now).compareTo(DEFER_LIMIT) >= 0) {
+                log.info("Предел терпения кончился — ложусь, хоть разговор и жив");
+                patienceOver = true;
+                alive = false;
+            }
+        }
+        if (alive) {
+            // ядру это ничего не стоит: в тишине вопрос повторится через минуту
+            return;
+        }
+        if (!farewellDone) {
+            // прощания идут порывами и встают в очередь ядра: спать уходим после
+            // них — в следующем же заходе очередь опустеет, и тогда до одеяла
+            farewellDone = true;
+            deferSince = null;
+            try {
+                leavingForNight.run();
+            } catch (RuntimeException e) {
+                log.error("Прощание не прозвучало: {}", e.getMessage());
+            }
+            return;
+        }
+        deferSince = null;
+        patienceOver = false;
+        sleep(untilMorning, "до утра", true);
     }
 
     private void sleep(Duration duration, String reason, boolean night) {
@@ -142,6 +233,14 @@ public class Rest {
                 if (remaining > 0) Thread.sleep(Duration.ofNanos(Math.min(TICK.toNanos(), remaining)));
             }
             log.info("Вернулась");
+            if (night) {
+                // проснулась сама, ко времени: редко, но можно и первой поприветствовать близких
+                try {
+                    seenMorning.run();
+                } catch (RuntimeException e) {
+                    log.error("Утреннее приветствие не сложилось: {}", e.getMessage());
+                }
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {

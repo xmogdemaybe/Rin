@@ -148,7 +148,10 @@ public final class ReliabilityChecks {
         rest.night(new NightSleep(LocalTime.of(0, 0), LocalTime.of(0, 1), LocalTime.of(23, 58),
                 LocalTime.of(23, 59), Clock.fixed(Instant.parse("2026-07-22T01:00:00Z"), ZoneOffset.UTC), new Random(1)));
         rest.duringNight((d, wake) -> { rest.stop(); observed.set(wake.getAsBoolean()); });
-        rest.maybeRest(); check(observed.get(), "shutdown invisible to consolidation");
+        // первый заход в ночь тратится на прощание, сон начинается вторым
+        rest.maybeRest();
+        rest.maybeRest();
+        check(observed.get(), "shutdown invisible to consolidation");
     }
     public static void pendingAndAtomicFilesRemainReadable() throws Exception {
         Path dir = temporary(); Path file = dir.resolve("memory.md");

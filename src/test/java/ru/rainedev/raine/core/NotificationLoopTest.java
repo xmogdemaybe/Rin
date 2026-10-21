@@ -401,4 +401,31 @@ class NotificationLoopTest {
         loop.process(new Notification("проверка"));
         assertTrue(true);
     }
+
+    @Test
+    void quietNightIsSleepable() {
+        NotificationLoop loop = loopWith(new ScriptedLlm(), new Toolbox());
+
+        assertFalse(loop.talkAlive(), "тишина: спать можно");
+    }
+
+    @Test
+    void unreadQueueKeepsHerAwake() {
+        NotificationLoop loop = loopWith(new ScriptedLlm(), new Toolbox());
+
+        loop.submit(new Notification("тебе написали"));
+
+        assertTrue(loop.talkAlive(), "в очереди непрочитанное — спать нельзя");
+    }
+
+    @Test
+    void justFinishedTurnStillCountsAsLivelyTalk() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали"));
+
+        assertTrue(loop.talkAlive(), "ход кончился только что — разговор живой");
+    }
 }

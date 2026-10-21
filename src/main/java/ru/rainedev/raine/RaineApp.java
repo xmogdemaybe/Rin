@@ -8,6 +8,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.config.Config;
+import ru.rainedev.raine.core.Goodnights;
 import ru.rainedev.raine.core.Notification;
 import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.core.Rest;
@@ -29,6 +30,7 @@ import ru.rainedev.raine.prompt.Prompts;
 import ru.rainedev.raine.telegram.Lockdown;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
+import ru.rainedev.raine.telegram.TelegramProxy;
 import ru.rainedev.raine.tools.AntiRepeat;
 import ru.rainedev.raine.tools.TelegramTools;
 import ru.rainedev.raine.tools.WebSearch;
@@ -67,6 +69,7 @@ public final class RaineApp implements AutoCloseable {
     private NotificationLoop loop;
     private Thread brain;
     private Rest rest;
+    private ru.rainedev.raine.core.Goodnights goodnights;
     private TelegramMedia telegramMedia;
     private Vision vision;
     private Lockdown lockdown;
@@ -105,6 +108,9 @@ public final class RaineApp implements AutoCloseable {
                 update -> telegram.onSendFailed(update.oldMessageId,
                         update.error == null ? "причина неизвестна" : update.error.message));
         this.client = builder.build(authentication);
+        // прокси включается прежде всего: в сети, где Telegram заблокирован,
+        // иначе не будет даже кода подтверждения
+        TelegramProxy.setup(client, config.telegramProxy());
     }
 
     public SimpleTelegramClient client() {
@@ -306,6 +312,14 @@ public final class RaineApp implements AutoCloseable {
             rest.night(night);
             log.info("Сегодня ложится около {}, встаёт около {}",
                     night.bedtime().toLocalTime().withSecond(0), night.wakeTime().toLocalTime().withSecond(0));
+
+            // сон по-человечески: живой разговор откладывает ночь, а отбой и подъём
+            // отмечаются парой слов тем, кто особенно близок
+            goodnights = new ru.rainedev.raine.core.Goodnights(
+                    trust, config.ownerId(), config.character().papikName(), random);
+            rest.aliveTalk(loop::talkAlive);
+            rest.leavingForNight(this::goodnightsAtBedtime);
+            rest.seenMorning(this::goodnightsAtMorning);
         }
 
         rest.duringNight((duration, wokeUp) -> {
@@ -388,6 +402,45 @@ public final class RaineApp implements AutoCloseable {
         available.add(tools.open(chatId));
         loop.submit(new Notification(text, available, true));
         log.info("Уведомление о снимке поставлено в очередь");
+    }
+
+    /**
+     * Ложится спать: кому близко — тем пара тихих слов перед сном. Порыв идёт
+     * по обычной механике: чат открывается сам, а что сказать — решает она.
+     */
+    private void goodnightsAtBedtime() {
+        for (Goodnights.Receiver receiver : goodnights.draw()) {
+            Toolbox available = new Toolbox();
+            available.add(tools.open(receiver.id()));
+            loop.submit(new Notification(goodnightPrompt(receiver), available, true));
+        }
+    }
+
+    /** Проснулась сама, ко времени: те же близкие слышат первые слова с утра. */
+    private void goodnightsAtMorning() {
+        for (Goodnights.Receiver receiver : goodnights.draw()) {
+            Toolbox available = new Toolbox();
+            available.add(tools.open(receiver.id()));
+            loop.submit(new Notification(morningPrompt(receiver), available, true));
+        }
+    }
+
+    private static String goodnightPrompt(Goodnights.Receiver receiver) {
+        return ("You are about to go to bed soon. If you feel like it, say a couple of quiet goodnight "
+                + "words to %s: open the chat (id %d) and write them yourself. If you would rather stay "
+                + "silent tonight, call #wait.").formatted(knownAs(receiver), receiver.id());
+    }
+
+    private static String morningPrompt(Goodnights.Receiver receiver) {
+        return ("You just woke up on your own, the night is over. If you feel like it, send your first "
+                + "good-morning words to %s: open the chat (id %d) and write them yourself. If you would "
+                + "rather stay quiet, call #wait.").formatted(knownAs(receiver), receiver.id());
+    }
+
+    private static String knownAs(Goodnights.Receiver receiver) {
+        return receiver.name() == null || receiver.name().isBlank()
+                ? "someone close to you"
+                : receiver.name();
     }
 
     /** Последняя реплика в контексте — чтобы подагент искал по делу, а не вообще. */

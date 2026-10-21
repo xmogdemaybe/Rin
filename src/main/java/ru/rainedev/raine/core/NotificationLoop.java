@@ -44,6 +44,12 @@ public final class NotificationLoop {
     /** Как часто в тишине переспрашивать себя, не пора ли отдохнуть. */
     private java.time.Duration idleCheck = java.time.Duration.ofMinutes(1);
 
+    /** Как долго после последнего хода разговор считается ещё живым. */
+    private static final java.time.Duration TALK_GRACE = java.time.Duration.ofMinutes(10);
+
+    /** Конец последнего живого хода. Пишет и читает один и тот же поток ядра. */
+    private java.time.Instant lastTalk = Instant.EPOCH;
+
     private static final String ASK_REMINDER = """
             [system] Have you called #ask yet this turn? If the message involves personal topics, past events, \
             questions, or people you know — call #ask BEFORE send_telegram_message.""";
@@ -205,6 +211,15 @@ public final class NotificationLoop {
         return queue.size();
     }
 
+    /**
+     * Живой разговор, спать нельзя: в очереди непрочитанное, или последний
+     * ход кончился только что. Отсчитывает Rest перед уходом в ночь.
+     */
+    public boolean talkAlive() {
+        return !queue.isEmpty() || active != null
+                || Duration.between(lastTalk, Instant.now()).compareTo(TALK_GRACE) < 0;
+    }
+
     public List<Message> context() {
         return List.copyOf(context);
     }
@@ -251,6 +266,8 @@ public final class NotificationLoop {
                 retries = 0;
                 notifyDone(notification);
                 onIdle.run();
+                // ход кончился — разговор только что был живым, ночь подождёт
+                lastTalk = Instant.now();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 stopped.countDown();
@@ -360,6 +377,7 @@ public final class NotificationLoop {
                 recallMemories = false;
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
+                    lastTalk = Instant.now();
                     active = null;
                     return;
                 }
@@ -371,6 +389,7 @@ public final class NotificationLoop {
                 if (response.totalTokens() > contextTokenLimit) {
                     log.warn("Контекст переполнен, а подходящий ответ не найден — сбрасываем");
                     onContextOverflow.run();
+                    lastTalk = Instant.now();
                     active = null;
                     return;
                 }
@@ -396,6 +415,8 @@ public final class NotificationLoop {
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
                 }
+                // ход кончился — разговор только что был живым, ночь подождёт
+                lastTalk = Instant.now();
                 active = null;
                 return;
             }
@@ -408,6 +429,7 @@ public final class NotificationLoop {
 
         reportCost(startedAt, spentTokens, MAX_STEPS_PER_NOTIFICATION);
         log.warn("Достигнут предел шагов — прекращаем ход принудительно");
+        lastTalk = Instant.now();
         active = null;
     }
 
