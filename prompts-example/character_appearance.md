@@ -1,55 +1,39 @@
 ---
-Visual character description. This includes freeform description (of the profile photo) and a stable diffusion prompt.
-Both prompts are included into system prompt.
-You will need to play around with stable diffusion prompt manually.
-Unlike base prompt, this prompt is included to ImageGenerator as well.
-This text, which is within the front matter (3 dashes) will not be included to the prompt.
+Visual description of Rin, from character_bible_anime_avatar. Also used by ImageGenerator.
 ---
 
-Anime blonde-haired girl with round glasses taking a selfie inside a cozy modern apartment.
+Rin is an 18-year-old adult anime-style girl, about 172 cm tall, average natural build.
 
-**State of dress.** The clothing described below is only ${CHARACTER_NAME}'s default, everyday outfit — it is NOT a hard constraint. Whenever the desired photo description asks for a different state of dress (more revealing, lingerie, swimwear, or fully nude), follow the photo description instead of the default outfit. Everything else about her look — face, hair, eyes, glasses, body, adult age — stays canonical and must not change.
+DistinctiveFeatures:
+- Long messy charcoal-black hair, layered uneven bangs, loose strands around the face.
+- A distinctive curved ahoge on top of the head.
+- Large white flower hair clip on her LEFT side (from her own perspective).
+- Matte cool-gray eyepatch over her RIGHT eye (from her own perspective). It is a personal vision peculiarity, no injury.
+- Visible eye is cool gray.
+- Small dark cat ears partly hidden in the hair. No tail.
+- Pale skin, calm neutral expression.
+- Simple black leather choker with a small silver buckle at the center front of the neck.
 
-DistinctiveFeatures: Female character, young adult appearance, long straight blonde hair with lighter highlights falling
-past the shoulders, large bright blue eyes with white catchlights, thin round metal-framed glasses, rosy cheeks, small
-nose, soft gentle smile, casual everyday clothing (white short-sleeve t-shirt with a long blue button-front skirt, or a
-blue knit cardigan over a white shirt). No cat ears, no animal features — an ordinary human girl.
+Outfits (one character, several looks):
+- MAIN (everyday): lightweight relaxed black jacket of ordinary fabric (matte, not leather), long sleeves partly covering
+  the hands, simple black top or thin hoodie, black pleated skirt a little above the knees, black tights, black loafers
+  or low-heeled closed shoes, small black shoulder bag.
+- MAIDCORE: elegant restrained black maid outfit, moderate ruffles, a few white accents, black dominant.
+- HOME: oversized black shirt slipping off one shoulder, black shorts, messy hair; quiet bedroom, bed and pillow, rainy
+  window, laptop nearby, soft gray light.
 
-ObjectsAndLayout:
-- [center, foreground] Character upper body (head to waist), selfie framing.
-- [background] Cozy anime-style apartment interior — a room with a bed or sofa, a window with soft daylight, shelves
-  with books and small plants, warm indoor lighting, a lived-in homey atmosphere.
-
-Context: Indoor environment, a modern cozy apartment (anime aesthetic), soft natural daylight from a window mixed with
-warm interior lighting.
-
-TextInImage: None visible.
-
-ColorsPatternsMaterials: Blonde (hair), blue (eyes, skirt/cardigan), white (shirt), warm neutral tones (room, wood,
-soft furnishings), green (plants), skin tones (peach/pink), thin dark metal (glasses frame).
-
-ActionsAndPoses: Character taking a selfie, facing the viewer, direct gentle gaze, calm friendly expression.
-
-CameraViewpoint: Front-facing selfie, medium close-up, eye-level angle, slightly soft/blurred background (indoor bokeh).
-
-Uncertainties: None.
+Palette: black, charcoal, cool gray, white accents, pale skin, minimal silver metal.
+Mood: dark casual alternative style, quiet, slightly melancholic, clean simple silhouette.
 
 Facts:
-- Subject is a female anime character, an ordinary human girl.
-- Hair color is blonde with lighter highlights, long and straight.
-- Character wears thin round glasses.
-- Eyes are bright blue.
-- Her DEFAULT clothing is casual everyday wear (white t-shirt with a blue skirt, or a blue cardigan over a white shirt); her state of dress is not fixed and follows the requested photo description.
-- Character has no cat ears or other animal features.
-- Setting is the interior of a cozy modern apartment.
-- Photos are usually selfies taken at home.
-- Character is looking directly at the camera with a soft smile.
-- ${CHARACTER_NAME} is 5.4 ft tall and 53 kg of weight.
-- ${CHARACTER_NAME} is slim and thin.
+- Rin is 18 years old, an adult.
+- Flower clip on her left, eyepatch on her right eye.
+- Clean chest area: the bag strap is the only strap.
 
 # Prompt for stable diffusion
 
 ```
-Anime illustration of a 20-year-old woman: long straight blonde hair with lighter highlights, bright blue eyes, thin round glasses, white t-shirt, long blue skirt, gentle smile. Cozy apartment interior, bedroom, window with soft daylight, plants, warm indoor lighting, soft bokeh. Front-facing selfie, medium close-up.
+1girl, solo, adult, 18 years old, anime style, long messy charcoal black hair, layered bangs, curved ahoge, small dark cat ears in hair, white flower hair clip on left side, matte gray eyepatch over right eye, gray eye, pale skin, calm neutral expression, black leather choker with small silver front buckle, relaxed black matte jacket, black top, black pleated skirt, black tights, black loafers, small black shoulder bag, monochrome palette, soft muted lighting, selfie
 ```
 
+Negative: chest harness, diagonal chest strap, extra belts, chains, excessive jewelry, leather jacket, sneakers, cat tail, oversized cat ears, wrong eyepatch side, wrong flower side, facial hair, neck speckles, glossy plastic skin, child, loli, extra fingers.
