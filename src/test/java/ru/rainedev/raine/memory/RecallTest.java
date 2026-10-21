@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,9 @@ class RecallTest {
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<ChatResponse> answers = new ArrayDeque<>();
         private ChatResponse repeating;
+        /** Что подагент видел в диалоге, включая результаты инструментов. */
+        final List<List<Message>> sessions = new ArrayList<>();
+        boolean breaksEmbeddings;
         int chatCalls;
 
         ScriptedLlm searches(String cue) {
@@ -40,6 +44,12 @@ class RecallTest {
 
         ScriptedLlm says(String text) {
             answers.addLast(response(text, List.of()));
+            return this;
+        }
+
+        /** Эмбеддинги лежат: запасной канал должен спасать поиск по словам. */
+        ScriptedLlm breaksEmbeddings() {
+            breaksEmbeddings = true;
             return this;
         }
 
@@ -62,6 +72,7 @@ class RecallTest {
 
         @Override
         public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
+            sessions.add(List.copyOf(history));
             chatCalls++;
             if (!answers.isEmpty()) {
                 return answers.removeFirst();
@@ -71,6 +82,9 @@ class RecallTest {
 
         @Override
         public double[] embedding(String input) {
+            if (breaksEmbeddings) {
+                throw new IllegalStateException("эндпоинт эмбеддингов недоступен");
+            }
             return new double[] {1, 0, 0};
         }
     }
@@ -173,5 +187,39 @@ class RecallTest {
         Diary.Match match = diary.query(new double[] {1, 0, 0}).getFirst();
         assertEquals(1, match.entry().metadata().usageCount());
         assertTrue(match.entry().metadata().score() > 0);
+    }
+
+    @Test
+    void brokenEmbedderFindsByWords(@TempDir Path dir) {
+        // раньше сбой эмбеддингов отрубал поиск целиком («Search is temporarily
+        // unavailable»), хотя тексты записей лежат рядом и доступны словам
+        Diary diary = diaryWith(dir, "Серёжа ездил на Байкал в июле", "Кот всю неделю проспал на полу");
+        ScriptedLlm llm = new ScriptedLlm().breaksEmbeddings().searches("Байкал").says("Он был на Байкале в июле.");
+
+        String answer = call(new Recall(diary, llm, "характер", NO_WEB).asTool(() -> ""),
+                "что я знаю про поездки Серёжи?");
+
+        assertEquals("Он был на Байкале в июле.", answer, "поиск по памяти не должен умирать с эмбеддингами");
+        List<String> pieces = llm.sessions.stream()
+                .flatMap(List::stream)
+                .map(Message::content)
+                .filter(text -> text != null && text.contains("memory_piece"))
+                .toList();
+        assertEquals(1, pieces.size(), pieces.toString());
+        assertTrue(pieces.getFirst().contains("matched_by=\"words\""), "запасной канал помечается явно");
+        assertTrue(pieces.getFirst().contains("Серёжа"), pieces.getFirst());
+        assertFalse(pieces.getFirst().contains("Кот"), "не совпавшее по словам не выдаётся");
+    }
+
+    @Test
+    void brokenEmbedderKeepsDiaryUntouched(@TempDir Path dir) {
+        // аварийный канал не начисляет опыт: только обычный поиск продвигает записи
+        Diary diary = diaryWith(dir, "поездка на Байкал");
+        ScriptedLlm llm = new ScriptedLlm().breaksEmbeddings().searches("Байкал").says("готово");
+
+        call(new Recall(diary, llm, "характер", NO_WEB).asTool(() -> ""), "что я знаю про поездки?");
+
+        Diary.Match match = diary.query(new double[] {1, 0, 0}).getFirst();
+        assertEquals(0, match.entry().metadata().usageCount(), "словесный канал не подтасовывает опыт");
     }
 }

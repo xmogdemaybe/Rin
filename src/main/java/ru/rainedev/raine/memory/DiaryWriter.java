@@ -113,13 +113,17 @@ public final class DiaryWriter {
             if (part.length() < MIN_ENTRY_LENGTH) {
                 continue;
             }
-            double[] embedding;
+            double[] embedding = new double[0];
             try {
                 embedding = llm.embedding(part);
             } catch (RuntimeException e) {
-                throw new IllegalStateException("Не удалось сохранить весь пересказ: ошибка эмбеддинга", e);
+                // вектор досчитается при первом же поиске, а вот день памяти
+                // без записи потерять можно всерьёз
+                log.warn("Пересказ сохраняется без вектора: {}", e.getMessage());
             }
-            if (isPlagiarism(embedding, part)) {
+            // без вектора сравнивать не с чем: запись уйдёт, дубль отсеется
+            // при первом поиске, когда вектор уже будет готов
+            if (embedding.length > 0 && isPlagiarism(embedding, part)) {
                 continue;
             }
             // заметки родились вместе, хранятся вместе: все — в первой же записи

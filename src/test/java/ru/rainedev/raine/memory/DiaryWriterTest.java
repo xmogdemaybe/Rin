@@ -21,10 +21,17 @@ class DiaryWriterTest {
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<String> answers = new ArrayDeque<>();
         private double[] vector;
+        boolean breaksEmbeddings;
         int chatCalls;
 
         ScriptedLlm willAnswer(String text) {
             answers.addLast(text);
+            return this;
+        }
+
+        /** Эмбеддинги лежат: пересказ всё равно обязан сохраниться. */
+        ScriptedLlm breaksEmbeddings() {
+            breaksEmbeddings = true;
             return this;
         }
 
@@ -40,6 +47,9 @@ class DiaryWriterTest {
         /** Разный текст — разный вектор, иначе любые две записи выглядят копиями. */
         @Override
         public double[] embedding(String input) {
+            if (breaksEmbeddings) {
+                throw new IllegalStateException("эндпоинт эмбеддингов недоступен");
+            }
             if (vector != null) {
                 return vector;
             }
@@ -158,5 +168,36 @@ class DiaryWriterTest {
                 .filter(entry -> entry.body().contains("Байкал"))
                 .findFirst().orElseThrow();
         assertEquals(signals, reloaded.metadata().signals(), "заметки не должны потеряться на диске");
+    }
+
+    @Test
+    void brokenEmbedderStillSavesTheDay(@TempDir Path dir) {
+        // раньше сбой эмбеддинга ронял весь пересказ и день памяти терялся целиком
+        ScriptedLlm llm = new ScriptedLlm().breaksEmbeddings().willAnswer("""
+                Сегодня ездили на Байкал, было холодно но красиво.
+                ---
+                Вечером обсуждали планы на отпуск в октябре.""");
+
+        List<DiaryEntry> saved = writerFor(dir, llm).save("промпт", CONTEXT);
+
+        assertEquals(2, saved.size(), "пересказ сохраняется и без векторов");
+        List<DiaryEntry> reloaded = new Diary(dir).query(new double[0]).stream()
+                .map(Diary.Match::entry)
+                .toList();
+        assertEquals(2, reloaded.size(), "на диске обе записи");
+        assertTrue(reloaded.stream().allMatch(entry -> entry.embedding().length == 0),
+                "вектор честно пуст и досчитается при первом поиске");
+    }
+
+    @Test
+    void savesWithoutSimilarityFilterWhenVectorMissing(@TempDir Path dir) {
+        // сравнивать копию не с чем: запись уйдёт, дубль отсеется при первом поиске
+        Diary diary = new Diary(dir);
+        diary.save("Сегодня ездили на Байкал.", new double[] {1, 0, 0});
+        ScriptedLlm llm = new ScriptedLlm().breaksEmbeddings().willAnswer("Сегодня ездили на Байкал, было красиво.");
+
+        List<DiaryEntry> saved = new DiaryWriter(diary, llm, "запиши дневник", 0.97).save("промпт", CONTEXT);
+
+        assertEquals(1, saved.size(), "сбой вектора не повод тонуть в исключении");
     }
 }

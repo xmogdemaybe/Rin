@@ -1,6 +1,7 @@
 package ru.rainedev.raine.memory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -170,19 +171,39 @@ public final class Recall {
             return "No data was found";
         }
 
-        double[] vector;
+        StringBuilder found = new StringBuilder();
+        boolean skippedAsDuplicate = false;
+
+        // смысловой канал: вектор запроса против векторов записей
+        double[] vector = null;
         try {
             vector = llm.embedding(cue);
         } catch (RuntimeException e) {
-            return "Search is temporarily unavailable: " + e.getMessage();
+            // векторы — не вся память: слова в записях остаются доступны
+            log.warn("Эмбеддинг не получен, ищу по совпадению слов: {}", e.getMessage());
+        }
+        if (vector != null) {
+            skippedAsDuplicate = collectByRelatedness(cue, vector, alreadyGiven, found);
+        }
+        if (found.isEmpty()) {
+            skippedAsDuplicate = collectByWords(cue, alreadyGiven, found);
         }
 
-        List<Diary.Match> matches = diary.query(vector);
-        StringBuilder found = new StringBuilder();
+        if (!found.isEmpty()) {
+            return found.toString();
+        }
+        // подсказка про повтор запроса — она полезна ровно тогда, когда всё найденное уже выдано
+        return skippedAsDuplicate
+                ? "All memory pieces conforming your query were provided already. Use other query."
+                : "No data was found";
+    }
+
+    /** Обычный канал поиска по смыслу. @return true, если всё выданное уже отдавалось */
+    private boolean collectByRelatedness(String cue, double[] vector, Set<String> alreadyGiven,
+                                         StringBuilder found) {
         int taken = 0;
         boolean skippedAsDuplicate = false;
-
-        for (Diary.Match match : matches) {
+        for (Diary.Match match : diary.query(vector)) {
             if (taken >= ENTRIES_PER_QUERY) {
                 break;
             }
@@ -196,14 +217,51 @@ public final class Recall {
             found.append("<memory_piece relatedness=\"%.3f\">\n%s\n</memory_piece>\n"
                     .formatted(match.relatedness(), entry.body()));
         }
-
-        if (!found.isEmpty()) {
+        if (taken > 0) {
             log.info("По запросу «{}» вспомнилось записей: {}", cue, taken);
-            return found.toString();
         }
-        // подсказка про повтор запроса — она полезна ровно тогда, когда всё найденное уже выдано
-        return skippedAsDuplicate
-                ? "All memory pieces conforming your query were provided already. Use other query."
-                : "No data was found";
+        return skippedAsDuplicate;
+    }
+
+    /**
+     * Запасной ход: сколько разных слов запроса встретилось в записи.
+     * Пустой вектор у query() означает «покажи всё» — никакой сети, досчитывать
+     * векторы незачем. Опыт записи здесь не начисляется: аварийный канал
+     * не должен подтасовывать обычный ранжир.
+     */
+    private boolean collectByWords(String cue, Set<String> alreadyGiven, StringBuilder found) {
+        Set<String> cueWords = WordScan.words(cue);
+        if (cueWords.isEmpty()) {
+            return false;
+        }
+        record Hit(DiaryEntry entry, int hits) {}
+        List<Hit> candidates = new ArrayList<>();
+        for (Diary.Match match : diary.query(new double[0])) {
+            int hits = WordScan.overlap(match.entry().body(), cueWords);
+            if (hits > 0) {
+                candidates.add(new Hit(match.entry(), hits));
+            }
+        }
+        candidates.sort(Comparator.comparingInt(Hit::hits).reversed());
+
+        int taken = 0;
+        boolean skippedAsDuplicate = false;
+        for (Hit candidate : candidates) {
+            if (taken >= ENTRIES_PER_QUERY) {
+                break;
+            }
+            if (alreadyGiven.contains(candidate.entry().id())) {
+                skippedAsDuplicate = true;
+                continue;
+            }
+            alreadyGiven.add(candidate.entry().id());
+            taken++;
+            found.append("<memory_piece matched_by=\"words\">\n%s\n</memory_piece>\n"
+                    .formatted(candidate.entry().body()));
+        }
+        if (taken > 0) {
+            log.info("По запросу «{}» по совпадению слов вспомнилось записей: {}", cue, taken);
+        }
+        return skippedAsDuplicate;
     }
 }

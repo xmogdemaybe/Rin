@@ -174,8 +174,10 @@ public final class ReliabilityChecks {
         catch (IllegalStateException expected) { }
         f.respond = h -> answer("Достаточно длинная запись для дневника.", List.of(), 10);
         f.embed = s -> { throw new IllegalStateException("offline"); };
-        try { writer.saveStrict("test", List.of(Message.user("hello"))); throw new AssertionError("embedding failure reported success"); }
-        catch (IllegalStateException expected) { }
+        // сбой эмбеддинга не должен убивать весь пересказ: запись остаётся без вектора
+        try { writer.saveStrict("test", List.of(Message.user("hello"))); }
+        catch (IllegalStateException e) { throw new AssertionError("embedding failure must not kill the whole day", e); }
+        check(d.size() == 2, "vectorless summary entry not saved");
     }
     public static void reloadShowsRestartOnlyChanges() throws Exception {
         Path file = temporary().resolve("config.properties");
