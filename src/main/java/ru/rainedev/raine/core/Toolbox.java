@@ -43,20 +43,36 @@ public final class Toolbox {
     }
 
     public Toolbox add(Tool tool) {
-        tools.put(tool.name(), tool);
+        synchronized (tools) {
+            tools.put(tool.name(), tool);
+        }
         return this;
     }
 
+    /** Инструмент выключается настройкой на ходу: снять, не трогая остальных. */
+    public boolean remove(String name) {
+        synchronized (tools) {
+            return tools.remove(name) != null;
+        }
+    }
+
     public boolean isEmpty() {
-        return tools.isEmpty();
+        synchronized (tools) {
+            return tools.isEmpty();
+        }
     }
 
     public Set<String> names() {
-        return tools.keySet();
+        synchronized (tools) {
+            return Set.copyOf(tools.keySet());
+        }
     }
 
+    /** Снимок набора: тумблеры меняются на ходу, чужой шаг не должен этого заметить. */
     public java.util.Collection<Tool> all() {
-        return tools.values();
+        synchronized (tools) {
+            return List.copyOf(tools.values());
+        }
     }
 
     public ArrayNode asJson() {

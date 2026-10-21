@@ -36,9 +36,6 @@ diary_plagiarism_threshold=0.97
 # ниже этой близости запись не вспоминается, как бы ни просел плавающий порог
 diary_min_relatedness=0.8
 
-# какого объёма пласт памяти пересматривается во сне за один заход
-diary_token_count_trigger=40000
-
 # видит ли она картинки и видео
 vision_enabled=true
 
@@ -155,6 +152,9 @@ lockdown_allow_channels=true
 
 # пересматривать ли память во сне
 sleep_consolidation=false
+
+# расти ли характером: днём она оставляет о себе заметки, ночью заметки закрепляются
+character_growth_enabled=false
 
 # спит ли она ночью
 night_sleep=true

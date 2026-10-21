@@ -33,7 +33,7 @@ public final class Prompts {
                 "PAPIK_NAME", character.papikName());
     }
 
-    /** Системный промпт: правила работы, характер и внешность — именно в этом порядке. */
+    /** Системный промпт: правила работы, характер, внешность и нажитое — именно в этом порядке. */
     public String system(String suffix) {
         StringBuilder result = new StringBuilder()
                 .append(load("system.md"))
@@ -42,6 +42,10 @@ public final class Prompts {
                 .append("\n\n<your_appearance>\n")
                 .append(load("character_appearance.md"))
                 .append("\n</your_appearance>\n");
+        String growth = optional("character_growth.md");
+        if (!growth.isEmpty()) {
+            result.append("\n\n<your_growth>\n").append(growth).append("\n</your_growth>\n");
+        }
         if (suffix != null && !suffix.isBlank()) {
             result.append(suffix);
         }
@@ -72,6 +76,25 @@ public final class Prompts {
     /** Промпт, читаемый в тот момент, когда он понадобится, а не при запуске. */
     public java.util.function.Supplier<String> lazy(String fileName) {
         return () -> load(fileName);
+    }
+
+    /**
+     * Читает файл, если он есть, иначе — пусто. Нажитые черты появляются, когда
+     * доживут: заглушку из сборки ради пустого места в промпте выкладывать
+     * незачем. Заголовок срезается тем же правилом, что и в {@link #load}.
+     */
+    private String optional(String fileName) {
+        try {
+            Path file = dir.resolve(fileName);
+            if (!Files.exists(file)) {
+                return "";
+            }
+            String raw = Files.readString(file);
+            return substitute(HEADER.matcher(raw).replaceFirst("").strip());
+        } catch (IOException e) {
+            log.warn("Не читается {}: {}", fileName, e.getMessage());
+            return "";
+        }
     }
 
     private void layOut(String fileName, Path file) {

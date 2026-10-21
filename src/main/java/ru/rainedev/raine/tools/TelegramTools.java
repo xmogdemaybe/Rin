@@ -124,6 +124,21 @@ public final class TelegramTools {
     /** Сейчас она пишет по своему порыву, а не отвечает на уведомление. */
     private java.util.function.BooleanSupplier actingOnImpulse = () -> false;
 
+    /** Заметки о себе за этот разговор: копит их инструмент, разбирает ночью. */
+    private ru.rainedev.raine.memory.TraitSignals traitSignals;
+
+    /** Дневник — чтобы подсказать ей её же прежнюю формулировку той же черты. */
+    private ru.rainedev.raine.memory.Diary traitDiary;
+
+    /** Заметки подключаются при настройке: без копилки писать их некуда. */
+    public void traitSignals(ru.rainedev.raine.memory.TraitSignals signals) {
+        this.traitSignals = signals;
+    }
+
+    public void traitDiary(ru.rainedev.raine.memory.Diary diary) {
+        this.traitDiary = diary;
+    }
+
     public TelegramTools(Telegram telegram, TelegramActions actions, ChatScreen screen,
                          ru.rainedev.raine.telegram.Lockdown lockdown, AntiRepeat antiRepeat) {
         this.telegram = telegram;
@@ -931,6 +946,64 @@ public final class TelegramTools {
                     log.info("Удалено сообщений: {}", ids.size());
                     return "Deleted " + ids.size() + " message(s).";
                 });
+    }
+
+    /**
+     * Заметка о себе — то, из чего характер растёт днём, а ночью закрепляется.
+     * В наборе она живёт только при включённом росте личности: выключенная
+     * заметка не выдаётся вовсе, чтоб не съедать место в схеме.
+     */
+    public Tool recordTraitSignal() {
+        return Tool.named("record_trait_signal")
+                .describedAs("Quietly note a meaningful self-observation — a moment that genuinely hurt or pleased "
+                        + "you, a preference you noticed in yourself, or a shift in how you feel about someone. "
+                        + "Use it sparingly: only for moments that really touched you, not for everyday small "
+                        + "talk. Nothing changes right now — the note is kept and may shape you over days.")
+                .requiredString("kind", "What kind of observation this is: \"hurt\", \"joy\", \"preference\", "
+                        + "\"attitude\", \"fear\", \"pride\" — whatever fits.")
+                .requiredString("trait", "The trait or preference it reveals, in your own short wording — like "
+                        + "\"gets defensive when teased\". Note the same trait again in the exact same wording: "
+                        + "repeated in the same words, your observations add up.")
+                .optionalNumber("valence", "How pleasant it felt, from -1 (it stung) to 1 (it warmed you). Default 0.")
+                .optionalNumber("intensity", "How strongly it hit you, from 0 (barely noticed) to 1 (hit deep). "
+                        + "Default 0.5.")
+                .optionalString("subject", "Who the note is about: a name or a nickname. Omit it for a note about "
+                        + "yourself or people in general.")
+                .build(arguments -> {
+                    if (traitSignals == null) {
+                        return "Noting is disabled right now. Continue as usual.";
+                    }
+                    String kind = arguments.path("kind").asText("").strip();
+                    String trait = arguments.path("trait").asText("").strip();
+                    if (kind.isEmpty() || trait.isEmpty()) {
+                        throw new LowQualityException("Нужны и что за событие, и какая черта.");
+                    }
+                    double valence = Math.max(-1, Math.min(1, arguments.path("valence").asDouble(0)));
+                    double intensity = Math.max(0, Math.min(1, arguments.path("intensity").asDouble(0.5)));
+                    String subject = arguments.path("subject").asText("").strip();
+                    long before = sameTraitCount(trait);
+                    traitSignals.add(new ru.rainedev.raine.memory.TraitSignal(
+                            kind, trait, valence, intensity, subject, java.time.Instant.now().toString()));
+                    log.info("Заметка о себе: {} ({}, {})", trait, kind,
+                            subject.isEmpty() ? "про себя вообще" : "про " + subject);
+                    return before > 0
+                            ? ("Noted — you phrased this trait the same way %d time(s) before; "
+                                    + "keeping the wording means the memory adds up.").formatted(before)
+                            : "Noted. Nothing changes right now — it may matter over time.";
+                });
+    }
+
+    /** Сколько раз эта же черта уже записана — по совпадению формулировки, без сети. */
+    private long sameTraitCount(String trait) {
+        if (traitDiary == null) {
+            return 0;
+        }
+        String marker = trait.strip().toLowerCase();
+        return traitDiary.query(new double[0]).stream()
+                .flatMapToLong(match -> match.entry().metadata().signals().stream()
+                        .filter(signal -> signal.trait().strip().toLowerCase().equals(marker))
+                        .mapToLong(signal -> 1))
+                .sum();
     }
 
     /** Крайняя мера против того, кто не понимает отказа. */

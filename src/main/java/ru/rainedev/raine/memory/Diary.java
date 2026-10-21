@@ -118,7 +118,27 @@ public final class Diary {
                 meta.path("score").asDouble(0),
                 meta.path("confidence").asDouble(0),
                 meta.path("lastUsed").asText("never"),
-                meta.path("usageCount").asInt(0)));
+                meta.path("usageCount").asInt(0),
+                signals(meta)));
+    }
+
+    /** Заметки о себе лежат рядом с эмбеддингом; у прежних записей их просто нет. */
+    private static List<TraitSignal> signals(JsonNode meta) {
+        JsonNode recorded = meta.path("signals");
+        if (!recorded.isArray()) {
+            return List.of();
+        }
+        List<TraitSignal> signals = new ArrayList<>();
+        for (JsonNode node : recorded) {
+            signals.add(new TraitSignal(
+                    node.path("kind").asText(""),
+                    node.path("trait").asText(""),
+                    node.path("valence").asDouble(0),
+                    node.path("intensity").asDouble(0),
+                    node.path("subject").asText(""),
+                    node.path("at").asText("")));
+        }
+        return List.copyOf(signals);
     }
 
     /** Найденная запись и то, насколько она близка запросу. */
@@ -201,12 +221,28 @@ public final class Diary {
      *                   1 установленный факт. Пересматривается во сне
      */
     public synchronized DiaryEntry save(String body, double[] embedding, double confidence) {
+        return save(body, embedding, confidence, List.of());
+    }
+
+    /** Новая запись с заметками о себе; уверенность нулевая — предположение. */
+    public synchronized DiaryEntry save(String body, double[] embedding, List<TraitSignal> signals) {
+        return save(body, embedding, 0, signals);
+    }
+
+    /**
+     * @param confidence насколько записи доверять: -1 ложь, 0 предположение,
+     *                   1 установленный факт. Пересматривается во сне
+     * @param signals    заметки о себе за этот разговор; хранятся в метаданных,
+     *                   рядом с эмбеддингом — их читает только ночной отбор
+     */
+    public synchronized DiaryEntry save(String body, double[] embedding, double confidence,
+                                        List<TraitSignal> signals) {
         long id = Instant.now().getEpochSecond();
         while (Files.exists(dir.resolve(id + ".md"))) {
             id++;
         }
         DiaryEntry entry = new DiaryEntry(String.valueOf(id), body.strip(), embedding,
-                new DiaryEntry.Metadata(0, confidence, "never", 0));
+                new DiaryEntry.Metadata(0, confidence, "never", 0, List.copyOf(signals)));
         write(entry);
         entries.put(entry.id(), entry);
         return entry;
@@ -218,6 +254,18 @@ public final class Diary {
         meta.put("confidence", entry.metadata().confidence());
         meta.put("lastUsed", entry.metadata().lastUsed());
         meta.put("usageCount", entry.metadata().usageCount());
+        if (!entry.metadata().signals().isEmpty()) {
+            ArrayNode signals = meta.putArray("signals");
+            for (TraitSignal signal : entry.metadata().signals()) {
+                ObjectNode node = signals.addObject();
+                node.put("kind", signal.kind());
+                node.put("trait", signal.trait());
+                node.put("valence", signal.valence());
+                node.put("intensity", signal.intensity());
+                node.put("subject", signal.subject());
+                node.put("at", signal.at());
+            }
+        }
         ArrayNode vector = meta.putArray("embedding");
         for (double value : entry.embedding()) {
             vector.add(Math.round(value * 1_000_000d) / 1_000_000d);

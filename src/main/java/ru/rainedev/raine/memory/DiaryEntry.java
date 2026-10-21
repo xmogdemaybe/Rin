@@ -1,5 +1,7 @@
 package ru.rainedev.raine.memory;
 
+import java.util.List;
+
 /**
  * Запись дневника — единица долгой памяти.
  *
@@ -15,8 +17,15 @@ public record DiaryEntry(String id, String body, double[] embedding, Metadata me
      * @param confidence 1 означает факт, а не домысел — такие записи не переписываются
      * @param lastUsed   когда последний раз попадала в контекст
      * @param usageCount сколько раз пригодилась
+     * @param signals    заметки о себе, записанные в момент создания записи;
+     *                   у прежних записей их нет, формат файла остаётся совместимым
      */
-    public record Metadata(double score, double confidence, String lastUsed, int usageCount) {
+    public record Metadata(double score, double confidence, String lastUsed, int usageCount,
+                           List<TraitSignal> signals) {
+
+        public Metadata(double score, double confidence, String lastUsed, int usageCount) {
+            this(score, confidence, lastUsed, usageCount, List.of());
+        }
 
         public static Metadata fresh() {
             return new Metadata(0, 0, "never", 0);
@@ -24,7 +33,7 @@ public record DiaryEntry(String id, String body, double[] embedding, Metadata me
 
         /** Запись пригодилась: чем выше близость, тем заметнее прибавка. */
         public Metadata used(double relatedness, String now) {
-            return new Metadata(score + (relatedness - 0.5) * 2, confidence, now, usageCount + 1);
+            return new Metadata(score + (relatedness - 0.5) * 2, confidence, now, usageCount + 1, signals);
         }
     }
 

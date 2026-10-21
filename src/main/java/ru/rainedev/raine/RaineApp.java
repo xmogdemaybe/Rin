@@ -198,6 +198,15 @@ public final class RaineApp implements AutoCloseable {
         always.add(tools.searchChats());
         always.add(tools.openById());
 
+        // рост личности: заметки о себе принимает эта же связка. Тумблер снял —
+        // инструмент из набора исчезает, вместо просьбы «не пользуйся»
+        ru.rainedev.raine.memory.TraitSignals traitSignals = new ru.rainedev.raine.memory.TraitSignals();
+        tools.traitSignals(traitSignals);
+        tools.traitDiary(diary);
+        if (config.characterGrowthEnabled()) {
+            always.add(tools.recordTraitSignal());
+        }
+
         WorkingMemory workingMemory = new WorkingMemory(config.workingMemoryFile(), llm, config.character().name());
         around = new ru.rainedev.raine.core.Surroundings(
                 config.around().enabled(), config.around().latitude(), config.around().longitude());
@@ -218,11 +227,19 @@ public final class RaineApp implements AutoCloseable {
                 return;
             }
             log.info("{} — переношу разговор в дневник", why);
+            // заметки о себе дожили до переноса: записываются вместе с дневником
+            var taken = traitSignals.drain();
             try {
                 // сначала средняя память: ей нужен ещё не урезанный разговор
                 workingMemory.update(prompts.system(""), loop.context());
-                writer.saveStrict(prompts.system(""), loop.context());
+                var saved = writer.saveStrict(prompts.system(""), loop.context(), taken);
+                if (saved.isEmpty() && !taken.isEmpty()) {
+                    traitSignals.requeue(taken);
+                }
             } catch (RuntimeException e) {
+                if (!taken.isEmpty()) {
+                    traitSignals.requeue(taken);
+                }
                 // чаще всего это оборванная сеть на остановке: пересказ делает
                 // модель, а её нет. Разговор откладывается сырым и разбирается
                 // при следующем запуске — потерять целый день из-за связи нельзя
@@ -258,6 +275,18 @@ public final class RaineApp implements AutoCloseable {
                     antiRepeat.limits(fresh.repeat());
                     diaryMemory.limits(fresh.diaryInjectionMaxLength(), fresh.diaryMinRelatedness());
                     ru.rainedev.raine.llm.Transcript.enabled(fresh.llmTranscript());
+                    // рост личности переключается на ходу: инструмент появляется
+                    // и исчезает из набора вместе с тумблером
+                    boolean growthOn = fresh.characterGrowthEnabled();
+                    boolean toolThere = always.names().contains("record_trait_signal");
+                    if (growthOn != toolThere) {
+                        log.info("Рост личности теперь: {}", growthOn ? "включён" : "выключен");
+                    }
+                    if (growthOn && !toolThere) {
+                        always.add(tools.recordTraitSignal());
+                    } else if (!growthOn && toolThere) {
+                        always.remove("record_trait_signal");
+                    }
                 });
         settings.watch();
 
@@ -273,17 +302,27 @@ public final class RaineApp implements AutoCloseable {
 
         rest.duringNight((duration, wokeUp) -> {
             Config fresh = settings.current();
-            if (!fresh.sleepConsolidation()) return;
-            var limits = fresh.consolidation();
-            var bounded = new ru.rainedev.raine.memory.SleepConsolidation(
-                    diary, llm, prompts.lazy("sleep_consolidator.md"),
-                    config.diaryDir().resolve("archive"), fresh.diaryConsolidationBudget(), random,
-                    limits.maxRequests(), limits.maxTokens());
-            bounded.run(duration.compareTo(java.time.Duration.ofMinutes(limits.minutes())) < 0
-                    ? duration : java.time.Duration.ofMinutes(limits.minutes()),
-                    () -> wokeUp.getAsBoolean() || !settings.current().sleepConsolidation());
+            if (fresh.sleepConsolidation()) {
+                var limits = fresh.consolidation();
+                var bounded = new ru.rainedev.raine.memory.SleepConsolidation(
+                        diary, llm, prompts.lazy("sleep_consolidator.md"),
+                        config.diaryDir().resolve("archive"), fresh.diaryConsolidationBudget(), random,
+                        limits.maxRequests(), limits.maxTokens());
+                bounded.run(duration.compareTo(java.time.Duration.ofMinutes(limits.minutes())) < 0
+                        ? duration : java.time.Duration.ofMinutes(limits.minutes()),
+                        () -> wokeUp.getAsBoolean() || !settings.current().sleepConsolidation());
+            }
+            // рост личности — отдельная ветка рядом с пересмотром, но не внутри
+            // него: у неё свой проход и свой тумблер, ни от чего другого не зависит
+            if (fresh.characterGrowthEnabled()) {
+                var growth = new ru.rainedev.raine.memory.CharacterGrowth(
+                        diary, llm, prompts.lazy("character_growth_pass.md"),
+                        config.promptsDir().resolve("character_growth.md"));
+                growth.pass(() -> wokeUp.getAsBoolean() || !settings.current().characterGrowthEnabled());
+            }
         });
         log.info("Пересмотр памяти во сне: {}", config.sleepConsolidation() ? "включён" : "выключен");
+        log.info("Рост личности: {}", config.characterGrowthEnabled() ? "включён" : "выключен");
 
         spontaneity = new Spontaneity(loop, diary, always, random);
         spontaneity.asleepWhen(rest::isResting);

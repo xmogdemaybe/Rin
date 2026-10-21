@@ -44,15 +44,24 @@ public final class DiaryWriter {
 
     /** @return сохранённые записи; пусто, если сохранять оказалось нечего */
     public List<DiaryEntry> save(String systemPrompt, List<Message> context) {
-        return save(systemPrompt, context, false);
+        return save(systemPrompt, context, List.of(), false);
     }
 
     /** A failed summary must leave the original conversation available for another attempt. */
     public List<DiaryEntry> saveStrict(String systemPrompt, List<Message> context) {
-        return save(systemPrompt, context, true);
+        return saveStrict(systemPrompt, context, List.of());
     }
 
-    private List<DiaryEntry> save(String systemPrompt, List<Message> context, boolean strict) {
+    /**
+     * @param signals заметки о себе за этот разговор; уходят в первую же
+     *                сохранённую запись, рядом с её эмбеддингом
+     */
+    public List<DiaryEntry> saveStrict(String systemPrompt, List<Message> context, List<TraitSignal> signals) {
+        return save(systemPrompt, context, signals, true);
+    }
+
+    private List<DiaryEntry> save(String systemPrompt, List<Message> context,
+                                  List<TraitSignal> signals, boolean strict) {
         if (context.isEmpty()) {
             return List.of();
         }
@@ -67,7 +76,7 @@ public final class DiaryWriter {
                 .split(SEPARATOR)).noneMatch(part -> part.strip().length() >= MIN_ENTRY_LENGTH)) {
             throw new IllegalStateException("Пересказ слишком короткий, исходный разговор нужно сохранить");
         }
-        return persist(summary);
+        return persist(summary, signals);
     }
 
     private String askForSummary(String systemPrompt, List<Message> context) {
@@ -94,11 +103,12 @@ public final class DiaryWriter {
         return "";
     }
 
-    private List<DiaryEntry> persist(String summary) {
+    private List<DiaryEntry> persist(String summary, List<TraitSignal> signals) {
         // модель порой ставит разделитель с лишними пробелами
         String normalized = summary.replace("- --", SEPARATOR).replace("-- -", SEPARATOR);
 
         List<DiaryEntry> saved = new ArrayList<>();
+        List<TraitSignal> attach = signals;
         for (String part : Arrays.stream(normalized.split(SEPARATOR)).map(String::strip).toList()) {
             if (part.length() < MIN_ENTRY_LENGTH) {
                 continue;
@@ -112,7 +122,9 @@ public final class DiaryWriter {
             if (isPlagiarism(embedding, part)) {
                 continue;
             }
-            saved.add(diary.save(part, embedding));
+            // заметки родились вместе, хранятся вместе: все — в первой же записи
+            saved.add(diary.save(part, embedding, attach));
+            attach = List.of();
         }
         log.info("В дневник добавлено записей: {}", saved.size());
         return saved;

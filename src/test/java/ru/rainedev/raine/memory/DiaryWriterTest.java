@@ -135,4 +135,28 @@ class DiaryWriterTest {
         assertTrue(writerFor(dir, llm).save("промпт", List.of()).isEmpty());
         assertEquals(0, llm.chatCalls, "незачем дёргать модель впустую");
     }
+
+    @Test
+    void traitSignalsGoIntoTheFirstSavedEntry(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("""
+                Сегодня ездили на Байкал, было холодно но красиво.
+                ---
+                Вечером обсуждали планы на отпуск в октябре.""");
+        var signals = List.of(new TraitSignal("joy", "окликается на длинные истории", 0.7, 0.8,
+                        "Alex", "2026-10-20T18:00:00Z"));
+
+        List<DiaryEntry> saved = new DiaryWriter(diary, llm, "запиши дневник", 0.97)
+                .saveStrict("промпт", CONTEXT, signals);
+
+        assertEquals(2, saved.size());
+        assertEquals(signals, saved.getFirst().metadata().signals());
+        assertTrue(saved.get(1).metadata().signals().isEmpty(), "вторая запись остаётся без заметок");
+        // на диске заметки читаются вместе с записью
+        DiaryEntry reloaded = new Diary(dir).query(new double[0]).stream()
+                .map(Diary.Match::entry)
+                .filter(entry -> entry.body().contains("Байкал"))
+                .findFirst().orElseThrow();
+        assertEquals(signals, reloaded.metadata().signals(), "заметки не должны потеряться на диске");
+    }
 }
