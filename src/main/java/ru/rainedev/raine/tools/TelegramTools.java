@@ -175,7 +175,8 @@ public final class TelegramTools {
         return Tool.named("take_photo")
                 .describedAs("Takes a photo — a selfie, surroundings, anything. Returns a filename you can then "
                         + "send with send_telegram_message. Describe the vibe, not a complex composition.")
-                .requiredString("photo_desc", "What the photo should show. Refer to yourself by name. "
+                .requiredString("photo_desc", "What the photo should show. Describe yourself in the third "
+                        + "person (\"she\"), not as \"I\" — the camera reads a description, not a diary. "
                         + "Avoid complex composition — set the vibe instead. Example: \"She makes a playful "
                         + "selfie\". The camera only knows what you look like: to put someone else in the frame, "
                         + "name them and describe their appearance as specifically as you can. Example: "
@@ -986,20 +987,27 @@ public final class TelegramTools {
                             kind, trait, valence, intensity, subject, java.time.Instant.now().toString()));
                     log.info("Заметка о себе: {} ({}, {})", trait, kind,
                             subject.isEmpty() ? "про себя вообще" : "про " + subject);
-                    return before > 0
-                            ? ("Noted — you phrased this trait the same way %d time(s) before; "
-                                    + "keeping the wording means the memory adds up.").formatted(before)
-                            : "Noted. Nothing changes right now — it may matter over time.";
+                    if (before == 0) {
+                        return "Noted. Nothing changes right now — it may matter over time.";
+                    }
+                    return ("Noted — you phrased this trait the same way %s before; keeping the wording "
+                            + "means the notes add up.")
+                            .formatted(before == 1 ? "once" : before + " times");
                 });
     }
 
-    /** Сколько раз эта же черта уже записана — по совпадению формулировки, без сети. */
+    /**
+     * Сколько раз эта же черта уже записана — по совпадению формулировки, без
+     * сети. Копилка считается вместе с дневником: заметка, сделанная час
+     * назад, в дневник ещё не дошла, а повтором уже считается.
+     */
     private long sameTraitCount(String trait) {
+        long pending = traitSignals.countSame(trait);
         if (traitDiary == null) {
-            return 0;
+            return pending;
         }
         String marker = trait.strip().toLowerCase();
-        return traitDiary.query(new double[0]).stream()
+        return pending + traitDiary.query(new double[0]).stream()
                 .flatMapToLong(match -> match.entry().metadata().signals().stream()
                         .filter(signal -> signal.trait().strip().toLowerCase().equals(marker))
                         .mapToLong(signal -> 1))

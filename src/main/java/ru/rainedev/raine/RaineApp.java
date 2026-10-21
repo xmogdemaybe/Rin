@@ -16,6 +16,7 @@ import ru.rainedev.raine.core.Spontaneity;
 import ru.rainedev.raine.core.Toolbox;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.OpenAiCompatibleClient;
+import ru.rainedev.raine.memory.CharacterGrowth;
 import ru.rainedev.raine.memory.Diary;
 import ru.rainedev.raine.memory.DiaryMemory;
 import ru.rainedev.raine.memory.DiaryWriter;
@@ -69,7 +70,8 @@ public final class RaineApp implements AutoCloseable {
     private NotificationLoop loop;
     private Thread brain;
     private Rest rest;
-    private ru.rainedev.raine.core.Goodnights goodnights;
+    private Goodnights goodnights;
+    private CharacterGrowth growth;
     private TelegramMedia telegramMedia;
     private Vision vision;
     private Lockdown lockdown;
@@ -212,13 +214,20 @@ public final class RaineApp implements AutoCloseable {
         if (config.characterGrowthEnabled()) {
             always.add(tools.recordTraitSignal());
         }
+        // один экземпляр на всю жизнь: о переполнении файла владелец должен
+        // услышать один раз, а не каждую ночь заново
+        growth = new CharacterGrowth(diary, llm, prompts.lazy("character_growth_pass.md"),
+                config.promptsDir().resolve("character_growth.md"));
+        growth.onOverflow(this::tellOwnerAboutGrowth);
 
         // доверие к людям: единственная бухгалтерия в data/trust.md, по строке на
         // человека. Сама она решает только «заслужено или нет» — файл правит код
         var trust = new ru.rainedev.raine.memory.TrustLedger(
                 config.diaryDir().resolveSibling("trust.md"),
                 config.ownerId(), config.character().papikName());
-        always.add(trust.tool());
+        if (config.trustLedgerEnabled()) {
+            always.add(trust.tool());
+        }
 
         WorkingMemory workingMemory = new WorkingMemory(config.workingMemoryFile(), llm, config.character().name());
         around = new ru.rainedev.raine.core.Surroundings(
@@ -227,7 +236,7 @@ public final class RaineApp implements AutoCloseable {
         loop = new NotificationLoop(
                 llm,
                 () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix()
-                        + trust.asPromptSuffix()),
+                        + (settings.current().trustLedgerEnabled() ? trust.asPromptSuffix() : "")),
                 always, config.contextTokenLimit());
         DiaryMemory diaryMemory = new DiaryMemory(diary, llm,
                 config.diaryInjectionMaxLength(), config.diaryMinRelatedness());
@@ -277,30 +286,24 @@ public final class RaineApp implements AutoCloseable {
         // всё, что можно поменять, не перезапуская бота
         settings = new ru.rainedev.raine.config.LiveConfig(Config.defaultFile(), config)
                 .onChange(fresh -> {
-                    var circle = ru.rainedev.raine.telegram.Lockdown.Mode.of(fresh.lockdown());
+                    var circle = Lockdown.Mode.of(fresh.lockdown());
                     if (circle != lockdown.mode() || fresh.lockdownAllowChannels() != lockdown.allowsChannels()) {
                         log.info("Круг общения теперь: {}{}", describe(circle),
                                 fresh.lockdownAllowChannels() ? ", каналы читаю" : ", каналы не читаю");
                     }
                     tools.behaviour(fresh.behaviour());
                     rest.dayNaps(fresh.behaviour().dayNaps());
-                    lockdown.mode(ru.rainedev.raine.telegram.Lockdown.Mode.of(fresh.lockdown()));
+                    lockdown.mode(circle);
                     lockdown.allowChannels(fresh.lockdownAllowChannels());
                     antiRepeat.limits(fresh.repeat());
                     diaryMemory.limits(fresh.diaryInjectionMaxLength(), fresh.diaryMinRelatedness());
                     ru.rainedev.raine.llm.Transcript.enabled(fresh.llmTranscript());
-                    // рост личности переключается на ходу: инструмент появляется
-                    // и исчезает из набора вместе с тумблером
-                    boolean growthOn = fresh.characterGrowthEnabled();
-                    boolean toolThere = always.names().contains("record_trait_signal");
-                    if (growthOn != toolThere) {
-                        log.info("Рост личности теперь: {}", growthOn ? "включён" : "выключен");
-                    }
-                    if (growthOn && !toolThere) {
-                        always.add(tools.recordTraitSignal());
-                    } else if (!growthOn && toolThere) {
-                        always.remove("record_trait_signal");
-                    }
+                    // тумблеры снимаются на ходу: инструмент появляется в наборе
+                    // или исчезает из него, вместо просьбы «не пользуйся»
+                    switchTool(always, fresh.characterGrowthEnabled(), "record_trait_signal",
+                            tools::recordTraitSignal, "Рост личности");
+                    switchTool(always, fresh.trustLedgerEnabled(), "note_trust", trust::tool,
+                            "Счёт доверия");
                 });
         settings.watch();
 
@@ -337,14 +340,12 @@ public final class RaineApp implements AutoCloseable {
             // рост личности — отдельная ветка рядом с пересмотром, но не внутри
             // него: у неё свой проход и свой тумблер, ни от чего другого не зависит
             if (fresh.characterGrowthEnabled()) {
-                var growth = new ru.rainedev.raine.memory.CharacterGrowth(
-                        diary, llm, prompts.lazy("character_growth_pass.md"),
-                        config.promptsDir().resolve("character_growth.md"));
                 growth.pass(() -> wokeUp.getAsBoolean() || !settings.current().characterGrowthEnabled());
             }
         });
         log.info("Пересмотр памяти во сне: {}", config.sleepConsolidation() ? "включён" : "выключен");
         log.info("Рост личности: {}", config.characterGrowthEnabled() ? "включён" : "выключен");
+        log.info("Счёт доверия: {}", config.trustLedgerEnabled() ? "ведётся" : "не ведётся");
 
         spontaneity = new Spontaneity(loop, diary, always, random);
         spontaneity.asleepWhen(rest::isResting);
@@ -409,20 +410,40 @@ public final class RaineApp implements AutoCloseable {
      * по обычной механике: чат открывается сам, а что сказать — решает она.
      */
     private void goodnightsAtBedtime() {
-        for (Goodnights.Receiver receiver : goodnights.draw()) {
-            Toolbox available = new Toolbox();
-            available.add(tools.open(receiver.id()));
-            loop.submit(new Notification(goodnightPrompt(receiver), available, true));
-        }
+        greetCloseOnes(goodnights.drawForNight(), RaineApp::goodnightPrompt);
     }
 
     /** Проснулась сама, ко времени: те же близкие слышат первые слова с утра. */
     private void goodnightsAtMorning() {
-        for (Goodnights.Receiver receiver : goodnights.draw()) {
+        greetCloseOnes(goodnights.drawForMorning(), RaineApp::morningPrompt);
+    }
+
+    /** Вечер и утро отличаются только книгой пауз и подсказкой — ход один на двоих. */
+    private void greetCloseOnes(List<Goodnights.Receiver> receivers,
+                                java.util.function.Function<Goodnights.Receiver, String> prompt) {
+        for (Goodnights.Receiver receiver : receivers) {
             Toolbox available = new Toolbox();
             available.add(tools.open(receiver.id()));
-            loop.submit(new Notification(morningPrompt(receiver), available, true));
+            loop.submit(new Notification(prompt.apply(receiver), available, true));
         }
+    }
+
+    /**
+     * Файл нажитого упёрся в лимит: об этом слышит владелец, а не только журнал.
+     * Один раз на случай — дальше файл разбирают руками.
+     */
+    private void tellOwnerAboutGrowth(long lines) {
+        long ownerId = config.ownerId();
+        if (ownerId <= 0) {
+            return;
+        }
+        Toolbox available = new Toolbox();
+        available.add(tools.open(ownerId));
+        loop.submit(new Notification(("Your prompts/character_growth.md reached its %d-line limit, so "
+                + "tonight's growth pass wrote nothing: the draft had %d lines. Open the chat with your "
+                + "person (id %d) and say plainly, in one short message, that the file is full and needs "
+                + "trimming by hand. Then call #wait.").formatted(
+                        CharacterGrowth.MAX_LINES, lines, ownerId), available, true));
     }
 
     private static String goodnightPrompt(Goodnights.Receiver receiver) {
@@ -649,6 +670,24 @@ public final class RaineApp implements AutoCloseable {
         } else {
             loop.submit(new Notification(text, available));
             log.info("Уведомление из чата \"{}\" поставлено в очередь", chat.title);
+        }
+    }
+
+    /**
+     * Тумблер снимается на ходу: инструмент появляется в наборе или исчезает
+     * из него. Просьба «не пользуйся» в промпте стоит токенов и не держит.
+     */
+    private void switchTool(Toolbox available, boolean on, String name,
+                            java.util.function.Supplier<ru.rainedev.raine.core.Tool> tool, String label) {
+        boolean there = available.names().contains(name);
+        if (on == there) {
+            return;
+        }
+        log.info("{} теперь: {}", label, on ? "включён" : "выключен");
+        if (on) {
+            available.add(tool.get());
+        } else {
+            available.remove(name);
         }
     }
 

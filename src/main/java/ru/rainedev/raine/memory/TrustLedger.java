@@ -34,8 +34,11 @@ import ru.rainedev.raine.storage.AtomicFiles;
  * не перезаписывается вовсе — сперва его чинит человек.
  * <p>
  * Доверие к владельцу живёт в системном промпте инвариантом (см.
- * {@link #asPromptSuffix()}), а вызов note_trust для него отказом: файл —
- * про всех, кроме того, кого и так нельзя переписать.
+ * {@link #asPromptSuffix()}), а вызов note_trust для него заканчивается
+ * отказом: файл — про всех, кроме того, кого и так нельзя переписать.
+ * <p>
+ * Пауза между правками одной записи живёт в памяти процесса: после
+ * перезапуска она не помнится.
  */
 public final class TrustLedger {
 
@@ -168,7 +171,7 @@ public final class TrustLedger {
         int index = indexByUser(lines, userId);
         if (index < 0 && lines.size() >= MAX_LINES) {
             log.warn("Доверие: запись о {} отклонена — лимит {} строк заполнен", userId, MAX_LINES);
-            return ("The ledger is full (%d entries) — there is no room for a new person, only an existing "
+            return ("The ledger is full (%d lines) — there is no room for a new person, only an existing "
                     + "entry can be amended.").formatted(MAX_LINES);
         }
         String line = lineFor(userId, name, level, reason);
@@ -193,8 +196,8 @@ public final class TrustLedger {
     }
 
     /**
-     * Хвост системного промпта: кто она людей расценивает. Строка владельца тут
-     * навсегда — она не из файла, потому что файл правит и рука, и вызов
+     * Хвост системного промпта: кому она доверяет и насколько. Строка владельца
+     * тут навсегда — она не из файла, потому что файл правит и рука, и вызов
      * note_trust, а владельца это не касается.
      */
     public String asPromptSuffix() {
@@ -240,7 +243,8 @@ public final class TrustLedger {
                     return i;
                 }
             } catch (NumberFormatException ignored) {
-                // это наши же строки: цифр столько не бывает, а лишняя мимо не пройдёт
+                // столько цифр в id не бывает: строка наша по форме, но не по
+                // смыслу — ищем дальше
             }
         }
         return -1;

@@ -17,8 +17,9 @@ import ru.rainedev.raine.memory.TrustLedger;
  * а порыв стоит пару обращений к модели.
  * <p>
  * Кому не ответили, тому больше не навязываются: с человеком, которому она
- * уже писала, слово держится паузу в две недели. Память живёт в процессе:
- * после перезапуска кубик крутится заново.
+ * уже писала, слово держится паузу в две недели. Книга пауз своя у ночи и своя
+ * у утра — сказав «спокойной ночи», она не лишает человека «доброго утра».
+ * Память живёт в процессе: после перезапуска кубик крутится заново.
  */
 public final class Goodnights {
 
@@ -34,7 +35,7 @@ public final class Goodnights {
     /** Владелец особый: доброе слово ему почти каждую ночь. */
     private static final double OWNER_CHANCE = 0.8;
 
-    /** С человеком, которому только что писала, слово держится паузу. */
+    /** С человеком, которому это слово только что сказала, пауза в две недели. */
     private static final Duration COOLDOWN = Duration.ofDays(14);
 
     /** Кому поставить порыв: id чата и имя, как она человека знает. */
@@ -45,7 +46,8 @@ public final class Goodnights {
     private final String ownerName;
     private final RandomGenerator random;
     private final Clock clock;
-    private final Map<Long, Instant> lastGreeted = new HashMap<>();
+    private final Map<Long, Instant> lastGoodnight = new HashMap<>();
+    private final Map<Long, Instant> lastMorning = new HashMap<>();
 
     public Goodnights(TrustLedger ledger, long ownerId, String ownerName, RandomGenerator random) {
         this(ledger, ownerId, ownerName, random, Clock.systemDefaultZone());
@@ -60,35 +62,45 @@ public final class Goodnights {
         this.clock = clock;
     }
 
+    /** Кому выпало «спокойной ночи» прямо сейчас. */
+    public List<Receiver> drawForNight() {
+        return draw(lastGoodnight);
+    }
+
+    /** Кому выпало «доброе утро» прямо сейчас — по своей книге пауз. */
+    public List<Receiver> drawForMorning() {
+        return draw(lastMorning);
+    }
+
     /**
-     * Кому выпало сказать слово прямо сейчас: и перед сном, и с утра.
-     * Владелец идёт первым, близкие из файла — за ним, каждый по уровню.
-     * Владельцу пауза не положена: он и есть человек, к которому она
-     * возвращается каждый вечер, — ради него и высокий шанс в кубике.
+     * Кому выпало сказать слово: владелец идёт первым, близкие из файла —
+     * за ним, каждый по уровню. Владельцу пауза не положена: он и есть
+     * человек, к которому она возвращается каждый вечер, — ради него и
+     * высокий шанс в кубике.
      */
-    public List<Receiver> draw() {
+    private List<Receiver> draw(Map<Long, Instant> book) {
         List<Receiver> picked = new ArrayList<>();
         Instant now = Instant.now(clock);
         if (ownerId > 0 && random.nextDouble() < OWNER_CHANCE) {
             picked.add(new Receiver(ownerId, ownerName));
-            lastGreeted.put(ownerId, now);
+            book.put(ownerId, now);
         }
         for (TrustLedger.Entry entry : ledger.entries()) {
-            if (entry.level() < MIN_LEVEL || !pauseIsOver(entry.id(), now)) {
+            if (entry.level() < MIN_LEVEL || !pauseIsOver(book, entry.id(), now)) {
                 continue;
             }
             double chance = Math.min(entry.level() * CHANCE_PER_LEVEL, MAX_CHANCE);
             if (random.nextDouble() < chance) {
                 picked.add(new Receiver(entry.id(), entry.name()));
-                lastGreeted.put(entry.id(), now);
+                book.put(entry.id(), now);
             }
         }
         return picked;
     }
 
-    /** Пауза между словами: после «спокойной ночи» молчание держится две недели. */
-    private boolean pauseIsOver(long id, Instant now) {
-        Instant last = lastGreeted.get(id);
+    /** Пауза между одинаковыми словами: сказала — и две недели молчит. */
+    private static boolean pauseIsOver(Map<Long, Instant> book, long id, Instant now) {
+        Instant last = book.get(id);
         return last == null || Duration.between(last, now).compareTo(COOLDOWN) >= 0;
     }
 }

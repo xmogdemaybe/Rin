@@ -175,18 +175,13 @@ public final class Recall {
         boolean skippedAsDuplicate = false;
 
         // смысловой канал: вектор запроса против векторов записей
-        double[] vector = null;
-        try {
-            vector = llm.embedding(cue);
-        } catch (RuntimeException e) {
-            // векторы — не вся память: слова в записях остаются доступны
-            log.warn("Эмбеддинг не получен, ищу по совпадению слов: {}", e.getMessage());
-        }
+        double[] vector = embeddingOf(cue);
         if (vector != null) {
             skippedAsDuplicate = collectByRelatedness(cue, vector, alreadyGiven, found);
         }
+        // слова — запасной ход: запись без вектора по смыслу не найдётся вовсе
         if (found.isEmpty()) {
-            skippedAsDuplicate = collectByWords(cue, alreadyGiven, found);
+            skippedAsDuplicate |= collectByWords(cue, alreadyGiven, found);
         }
 
         if (!found.isEmpty()) {
@@ -194,8 +189,23 @@ public final class Recall {
         }
         // подсказка про повтор запроса — она полезна ровно тогда, когда всё найденное уже выдано
         return skippedAsDuplicate
-                ? "All memory pieces conforming your query were provided already. Use other query."
+                ? "Everything matching this query was already given to you. Ask with different words."
                 : "No data was found";
+    }
+
+    /**
+     * Вектор запроса; null — когда эмбеддинга нет вовсе. Пустой массив от
+     * службы считается отсутствием: у query() он означает «покажи всё», и
+     * вместо памяти вернулся бы произвольный набор записей.
+     */
+    private double[] embeddingOf(String cue) {
+        try {
+            double[] vector = llm.embedding(cue);
+            return vector.length == 0 ? null : vector;
+        } catch (RuntimeException e) {
+            log.warn("Эмбеддинг не получен, ищу по совпадению слов: {}", e.getMessage());
+            return null;
+        }
     }
 
     /** Обычный канал поиска по смыслу. @return true, если всё выданное уже отдавалось */

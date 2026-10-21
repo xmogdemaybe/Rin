@@ -61,24 +61,8 @@ public final class NotificationLoop {
     private static final String BE_TOOL_CENTRIC = """
             Your previous answer was plain text, and plain text does nothing: it is visible only to you. \
             Instruments are called through the tool_calls field of the assistant message — never as text \
-            in the form 'tool call #name(...)'. That text is thrown away and the turn fails.
-
-            Wrong (plain text — rejected):
-            tool call #send_telegram_message({"text": "hi"})
-
-            Right (tool_calls object; arguments is a JSON string):
-            {
-              "tool_calls": [
-                {
-                  "id": "call1",
-                  "type": "function",
-                  "function": {
-                    "name": "send_telegram_message",
-                    "arguments": "{\\"text\\": \\"hi\\"}"
-                  }
-                }
-              ]
-            }
+            in the form 'tool call #send_telegram_message({"text": "hi"})'. That text is thrown away and \
+            the turn fails.
 
             Repeat this step now and actually call the tool. If you truly need nothing, call #wait.""";
 
@@ -100,7 +84,7 @@ public final class NotificationLoop {
         boolean recall = true;
         boolean asked;
         boolean prepared;
-            /** До первого текстового промаха шаги свободные, дальше до конца хода — только вызовы. */
+        /** До первого текстового промаха шаги свободные, дальше до конца хода — только вызовы. */
         boolean forceToolCall;
         Turn(Notification notification) { this.notification = notification; }
     }

@@ -77,7 +77,9 @@ public final class Toolbox {
 
     public ArrayNode asJson() {
         ArrayNode array = JsonNodeFactory.instance.arrayNode();
-        tools.values().forEach(tool -> array.add(tool.asJson()));
+        for (Tool tool : all()) {
+            array.add(tool.asJson());
+        }
         return array;
     }
 

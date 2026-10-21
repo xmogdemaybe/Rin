@@ -1,8 +1,8 @@
 ---
-Visual description of Rin, from character_bible_anime_avatar. Also used by ImageGenerator.
+Visual description of the character. Also used by ImageGenerator.
 ---
 
-Rin is an 18-year-old adult anime-style girl, about 172 cm tall, average natural build.
+${CHARACTER_NAME} is an 18-year-old adult anime-style girl, about 172 cm tall, average natural build.
 
 DistinctiveFeatures:
 - Long messy charcoal-black hair, layered uneven bangs, loose strands around the face.
@@ -26,7 +26,7 @@ Palette: black, charcoal, cool gray, white accents, pale skin, minimal silver me
 Mood: dark casual alternative style, quiet, slightly melancholic, clean simple silhouette.
 
 Facts:
-- Rin is 18 years old, an adult.
+- ${CHARACTER_NAME} is 18 years old, an adult.
 - Flower clip on her left, eyepatch on her right eye.
 - Clean chest area: the bag strap is the only strap.
 

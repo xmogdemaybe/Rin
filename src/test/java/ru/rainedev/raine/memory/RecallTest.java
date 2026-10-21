@@ -34,6 +34,7 @@ class RecallTest {
         /** Что подагент видел в диалоге, включая результаты инструментов. */
         final List<List<Message>> sessions = new ArrayList<>();
         boolean breaksEmbeddings;
+        boolean emptyEmbedding;
         int chatCalls;
 
         ScriptedLlm searches(String cue) {
@@ -50,6 +51,12 @@ class RecallTest {
         /** Эмбеддинги лежат: запасной канал должен спасать поиск по словам. */
         ScriptedLlm breaksEmbeddings() {
             breaksEmbeddings = true;
+            return this;
+        }
+
+        /** Служба ответила, но вектор пустой — это отсутствие, а не «покажи всё». */
+        ScriptedLlm emptiesEmbeddings() {
+            emptyEmbedding = true;
             return this;
         }
 
@@ -84,6 +91,9 @@ class RecallTest {
         public double[] embedding(String input) {
             if (breaksEmbeddings) {
                 throw new IllegalStateException("эндпоинт эмбеддингов недоступен");
+            }
+            if (emptyEmbedding) {
+                return new double[0];
             }
             return new double[] {1, 0, 0};
         }
@@ -209,6 +219,25 @@ class RecallTest {
         assertTrue(pieces.getFirst().contains("matched_by=\"words\""), "запасной канал помечается явно");
         assertTrue(pieces.getFirst().contains("Серёжа"), pieces.getFirst());
         assertFalse(pieces.getFirst().contains("Кот"), "не совпавшее по словам не выдаётся");
+    }
+
+    @Test
+    void emptyVectorDoesNotTurnIntoTheWholeDiary(@TempDir Path dir) {
+        // у дневника пустой вектор означает «покажи всё»: приняв его за ответ
+        // службы, поиск выдал бы первые попавшиеся записи вместо нужных
+        Diary diary = diaryWith(dir, "Серёжа ездил на Байкал в июле", "Кот всю неделю проспал на полу");
+        ScriptedLlm llm = new ScriptedLlm().emptiesEmbeddings().searches("Байкал").says("Он был на Байкале в июле.");
+
+        call(new Recall(diary, llm, "характер", NO_WEB).asTool(() -> ""), "что я знаю про поездки Серёжи?");
+
+        List<String> pieces = llm.sessions.stream()
+                .flatMap(List::stream)
+                .map(Message::content)
+                .filter(text -> text != null && text.contains("memory_piece"))
+                .toList();
+        assertEquals(1, pieces.size(), pieces.toString());
+        assertTrue(pieces.getFirst().contains("matched_by=\"words\""), pieces.getFirst());
+        assertFalse(pieces.getFirst().contains("Кот"), "чужая запись не выдаётся за найденную");
     }
 
     @Test

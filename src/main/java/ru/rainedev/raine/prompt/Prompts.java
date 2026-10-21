@@ -37,9 +37,9 @@ public final class Prompts {
     public String system(String suffix) {
         StringBuilder result = new StringBuilder()
                 .append(load("system.md"))
-                .append("\n\n")
+                .append("\n\n<character>\n")
                 .append(load("character_base.md"))
-                .append("\n\n<your_appearance>\n")
+                .append("\n</character>\n\n<your_appearance>\n")
                 .append(load("character_appearance.md"))
                 .append("\n</your_appearance>\n");
         String growth = optional("character_growth.md");

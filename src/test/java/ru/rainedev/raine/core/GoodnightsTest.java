@@ -1,6 +1,7 @@
 package ru.rainedev.raine.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
@@ -83,7 +84,7 @@ class GoodnightsTest {
         TrustLedger ledger = new TrustLedger(Path.of(ledger(dir)), 555, "Папик");
         Goodnights goodnights = new Goodnights(ledger, 555, "Папик", new FixedDice(0.0), clock);
 
-        List<Goodnights.Receiver> picked = goodnights.draw();
+        List<Goodnights.Receiver> picked = goodnights.drawForNight();
 
         assertEquals(List.of(new Goodnights.Receiver(555, "Папик"), new Goodnights.Receiver(42, "Вика")),
                 picked, "владелец почти всегда, Вика по уровню, Соня с двумя плюсами — ещё не близкая");
@@ -94,14 +95,14 @@ class GoodnightsTest {
         TrustLedger ledger = new TrustLedger(Path.of(ledger(dir)), 555, "Папик");
         Goodnights goodnights = new Goodnights(ledger, 555, "Папик", new FixedDice(0.0), clock);
 
-        assertTrue(goodnights.draw().size() >= 1);
+        assertTrue(goodnights.drawForNight().size() >= 1);
 
-        List<Goodnights.Receiver> second = goodnights.draw();
+        List<Goodnights.Receiver> second = goodnights.drawForNight();
         assertEquals(List.of(new Goodnights.Receiver(555, "Папик")), second,
                 "близкой с паузой не пишется, а своему человеку — можно");
 
         clock.advance(Duration.ofDays(15));
-        assertTrue(goodnights.draw().contains(new Goodnights.Receiver(42, "Вика")),
+        assertTrue(goodnights.drawForNight().contains(new Goodnights.Receiver(42, "Вика")),
                 "спустя две недели слово можно сказать снова");
     }
 
@@ -110,9 +111,22 @@ class GoodnightsTest {
         TrustLedger ledger = new TrustLedger(Path.of(ledger(dir)), 555, "Папик");
         Goodnights goodnights = new Goodnights(ledger, 555, "Папик", new FixedDice(0.99), clock);
 
-        List<Goodnights.Receiver> picked = goodnights.draw();
+        List<Goodnights.Receiver> picked = goodnights.drawForNight();
 
         assertTrue(picked.isEmpty(), "кость не выпала — никто не потревожен");
+    }
+
+    @Test
+    void goodnightDoesNotEatTheMorning(@TempDir Path dir) throws Exception {
+        TrustLedger ledger = new TrustLedger(Path.of(ledger(dir)), 555, "Папик");
+        Goodnights goodnights = new Goodnights(ledger, 555, "Папик", new FixedDice(0.0), clock);
+
+        assertTrue(goodnights.drawForNight().contains(new Goodnights.Receiver(42, "Вика")));
+        assertTrue(goodnights.drawForMorning().contains(new Goodnights.Receiver(42, "Вика")),
+                "ночное слово не отнимает утреннее");
+
+        assertFalse(goodnights.drawForMorning().contains(new Goodnights.Receiver(42, "Вика")),
+                "а второе утреннее подряд — уже навязчивость");
     }
 
     @Test
@@ -120,7 +134,7 @@ class GoodnightsTest {
         TrustLedger ledger = new TrustLedger(Path.of(ledger(dir)), 555, "");
         Goodnights goodnights = new Goodnights(ledger, 0, "", new FixedDice(0.0), clock);
 
-        List<Goodnights.Receiver> picked = goodnights.draw();
+        List<Goodnights.Receiver> picked = goodnights.drawForNight();
 
         assertEquals(List.of(new Goodnights.Receiver(42, "Вика")), picked, "владельца нет — только близкие из файла");
     }

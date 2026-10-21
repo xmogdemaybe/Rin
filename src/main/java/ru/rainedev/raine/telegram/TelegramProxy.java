@@ -25,22 +25,23 @@ public final class TelegramProxy {
         if (!proxy.enabled()) {
             return;
         }
+        client.send(request(proxy)).handle((added, error) -> {
+            if (error != null) {
+                log.error("Прокси не включился: {}", error.getMessage());
+            }
+            return null;
+        });
+        log.info("Прокси {}://{}:{} включается — до авторизации пойдёт через него",
+                proxy.type(), proxy.server(), proxy.port());
+    }
+
+    /** Запрос TDLib: адрес, порт и тип прокси ровно так, как заданы в настройках. */
+    static TdApi.AddProxy request(Config.TelegramProxy proxy) {
         TdApi.ProxyType type = switch (proxy.type()) {
             case "mtproto" -> new TdApi.ProxyTypeMtproto(proxy.secret());
             case "socks5" -> new TdApi.ProxyTypeSocks5(proxy.username(), proxy.password());
             default -> throw new IllegalStateException("неизвестный тип прокси: " + proxy.type());
         };
-        TdApi.AddProxy request = new TdApi.AddProxy(
-                new TdApi.Proxy(proxy.server(), proxy.port(), type), true, "");
-        client.send(request).handle((added, error) -> {
-            if (error != null) {
-                log.error("Прокси не включился: {}", error.getMessage());
-            } else {
-                log.info("Прокси включён: {}://{}:{}", proxy.type(), proxy.server(), proxy.port());
-            }
-            return null;
-        });
-        log.info("Прокси {}://{}:{} поставлен в очередь — до авторизации пойдёт через него",
-                proxy.type(), proxy.server(), proxy.port());
+        return new TdApi.AddProxy(new TdApi.Proxy(proxy.server(), proxy.port(), type), true, "");
     }
 }

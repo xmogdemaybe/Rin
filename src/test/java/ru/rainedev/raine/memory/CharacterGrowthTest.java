@@ -7,7 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -50,9 +54,18 @@ class CharacterGrowthTest {
 
     private final ScriptedLlm llm = new ScriptedLlm();
 
+    /** Часы стоят на той же ночи, что и заметки: иначе они состарятся вместе с календарём. */
+    private static final Clock NIGHT =
+            Clock.fixed(Instant.parse("2026-10-21T02:00:00Z"), ZoneOffset.UTC);
+
+    /** Сколько строк было в ответе, от которого файл отказался. */
+    private final List<Long> overflowAlerts = new ArrayList<>();
+
     private CharacterGrowth growth(Path dir, Path prompts, String instructions) {
-        return new CharacterGrowth(new Diary(dir), llm, () -> instructions,
-                prompts.resolve("character_growth.md"));
+        CharacterGrowth growth = new CharacterGrowth(new Diary(dir), llm, () -> instructions,
+                prompts.resolve("character_growth.md"), NIGHT);
+        growth.onOverflow(overflowAlerts::add);
+        return growth;
     }
 
     private void note(Diary diary, String trait, double intensity, String at) {
@@ -112,19 +125,45 @@ class CharacterGrowthTest {
     }
 
     @Test
-    void overflowingAnswerIsRefusedAndOldFileStays(@TempDir Path dir, @TempDir Path prompts) throws Exception {
+    void overflowingAnswerIsRefusedAndOwnerIsToldOnce(@TempDir Path dir, @TempDir Path prompts)
+            throws Exception {
         Path file = prompts.resolve("character_growth.md");
         Files.writeString(file, "- старая черта остаётся при всех отказ");
         Diary diary = new Diary(dir);
         note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
         note(diary, "огрызаюсь на колкости", 0.6, "2026-10-20T03:00:00Z");
-        llm.willAnswer(String.join("\n",
-                IntStream.rangeClosed(1, 41).mapToObj(i -> "- строчка " + i).toList()));
+        CharacterGrowth growth = growth(dir, prompts, "инструкции");
+        llm.willAnswer(rambling());
 
-        assertFalse(growth(dir, prompts, "инструкции").pass(() -> false),
-                "переполненный файл не переписывается — владельцу лучше глянуть");
+        assertFalse(growth.pass(() -> false), "переполненный файл не переписывается");
+        assertEquals(List.of(41L), overflowAlerts, "владелец слышит, сколько строк не влезло");
+
+        llm.willAnswer(rambling());
+        assertFalse(growth.pass(() -> false));
+        assertEquals(List.of(41L), overflowAlerts, "ночь за ночью одно и то же не повторяют");
 
         assertEquals("- старая черта остаётся при всех отказ", Files.readString(file).strip());
+    }
+
+    @Test
+    void ownerHearsAboutOverflowAgainAfterAGoodNight(@TempDir Path dir, @TempDir Path prompts) {
+        Diary diary = new Diary(dir);
+        note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
+        note(diary, "огрызаюсь на колкости", 0.6, "2026-10-20T03:00:00Z");
+        CharacterGrowth growth = growth(dir, prompts, "инструкции");
+        llm.willAnswer(rambling());
+        growth.pass(() -> false);
+
+        llm.willAnswer("- огрызаюсь на колкости");
+        assertTrue(growth.pass(() -> false), "нормальная ночь проходит");
+
+        llm.willAnswer(rambling());
+        growth.pass(() -> false);
+        assertEquals(List.of(41L, 41L), overflowAlerts, "после удачной ночи отказ снова слышно");
+    }
+
+    private static String rambling() {
+        return String.join("\n", IntStream.rangeClosed(1, 41).mapToObj(i -> "- строчка " + i).toList());
     }
 
     @Test

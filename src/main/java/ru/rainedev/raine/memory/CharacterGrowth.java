@@ -3,11 +3,13 @@ package ru.rainedev.raine.memory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,8 +24,9 @@ import ru.rainedev.raine.llm.Message;
  * <p>
  * Дневник проход не трогает вовсе: не пишет, не двигает, не удаляет. Ответ
  * пустой, похожий на вызовы инструментов или длиннее лимита — шаг пропускается
- * целиком: старый файл лучше свежей отсебятины. Бэкапов не делается — файл и так
- * переписывается целиком за одну ночь.
+ * целиком: старый файл лучше свежей отсебятины. О переполнении лимита слышит
+ * не только журнал, но и владелец: файл тогда пора разбирать руками. Бэкапов
+ * не делается — файл и так переписывается целиком за одну ночь.
  */
 public final class CharacterGrowth {
 
@@ -48,12 +51,33 @@ public final class CharacterGrowth {
     private final LlmClient llm;
     private final Supplier<String> prompt;
     private final Path file;
+    private final Clock clock;
+
+    /**
+     * Кому сказать, что файл упёрся в лимит, и сколько строк было в ответе.
+     * По умолчанию некому — отказ остаётся только в журнале.
+     */
+    private volatile LongConsumer overflowAlert = lines -> { };
+
+    /** Один отказ на случай: сказать раз, а не каждую ночь, пока файл не разберут. */
+    private volatile boolean overflowTold;
 
     public CharacterGrowth(Diary diary, LlmClient llm, Supplier<String> prompt, Path file) {
+        this(diary, llm, prompt, file, Clock.systemDefaultZone());
+    }
+
+    /** Часы отдельно — в тестах видно, как заметки стареют, не дожидаясь календаря. */
+    CharacterGrowth(Diary diary, LlmClient llm, Supplier<String> prompt, Path file, Clock clock) {
         this.diary = diary;
         this.llm = llm;
         this.prompt = prompt;
         this.file = file;
+        this.clock = clock;
+    }
+
+    /** Куда сообщить о переполнении: владелец должен знать, что файл пора разбирать руками. */
+    public void onOverflow(LongConsumer alert) {
+        this.overflowAlert = alert;
     }
 
     /**
@@ -70,7 +94,7 @@ public final class CharacterGrowth {
         List<TraitSignal> recent = recentSignals();
         List<Group> worthwhile = worthwhile(recent);
         if (worthwhile.isEmpty()) {
-            log.info("Рост личности: черт, заслуживающих файла, пока нет — заметки ждут повтора");
+            log.info("Рост личности: подтверждённых черт пока нет — заметки ждут повтора");
             return false;
         }
         String instructions = prompt.get();
@@ -91,7 +115,7 @@ public final class CharacterGrowth {
         return accept(content);
     }
 
-    /** Провалирует ответ, кривящийся слабее прежнего файла или разросшийся. */
+    /** Отсекает пустой ответ, разметку вызова инструмента и разросшийся файл. */
     private boolean accept(String content) {
         String answer = content == null ? "" : content.strip();
         if (answer.isEmpty() || ModelText.looksLikeToolCall(answer)) {
@@ -100,26 +124,37 @@ public final class CharacterGrowth {
         }
         long lines = answer.lines().count();
         if (lines > MAX_LINES) {
-            log.warn("Рост личности: в ответе {} строк при лимите {} — файл не перезаписан. "
-                    + "Стоит глянуть, что модель пыталась нарастить", lines, MAX_LINES);
+            log.warn("Рост личности: в ответе {} строк при лимите {} — файл не перезаписан",
+                    lines, MAX_LINES);
+            tellAboutOverflow(lines);
             return false;
         }
         try {
             ru.rainedev.raine.storage.AtomicFiles.writeString(file, answer + "\n");
         } catch (IOException e) {
-            // атомарная запись: старый файл либо цел, либо не пострадал;
-            // ошибка не вылетает в ночной сон и не кролится в цикл
+            // атомарная запись: старый файл либо цел, либо не пострадал. Ошибка
+            // остаётся здесь — ночной сон не должен падать из-за диска
             log.error("Рост личности: не перезаписать {} — {}", file, e.getMessage());
             return false;
         }
+        overflowTold = false;
         log.info("Рост личности: файл перезаписан, {} строк", lines);
         return true;
+    }
+
+    /** Владелец слышит о переполнении один раз: дальше его очередь, а не её. */
+    private void tellAboutOverflow(long lines) {
+        if (overflowTold) {
+            return;
+        }
+        overflowTold = true;
+        overflowAlert.accept(lines);
     }
 
     /** Свежая заметка: не просрочена и не потеряла метку времени. */
     private List<TraitSignal> recentSignals() {
         List<TraitSignal> recent = new ArrayList<>();
-        Instant horizon = Instant.now().minus(STALE);
+        Instant horizon = Instant.now(clock).minus(STALE);
         for (Diary.Match match : diary.query(new double[0])) {
             for (TraitSignal signal : match.entry().metadata().signals()) {
                 if (signal.at().isBlank()) {

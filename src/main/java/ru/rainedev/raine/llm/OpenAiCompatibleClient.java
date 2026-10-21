@@ -35,22 +35,27 @@ public final class OpenAiCompatibleClient implements LlmClient {
      */
     private static final int MAX_OUTPUT_TOKENS = 8192;
 
-    /**
-     * Признак разговора. Посредник держит по нему кэш подсказки: при двух
-     * десятках шагов на одно уведомление разница видна прямо в счёте.
-     */
-    private final String sessionId = java.util.UUID.randomUUID().toString();
-
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /** Предел кэша подписей: процесс живёт неделями, а подписи нужны на ход. */
+    private static final int SIGNATURE_CACHE = 256;
+
     /**
-     * Подписи размышлений Gemini 3 (BUG-04): модель отдаёт их в
+     * Подписи размышлений Gemini 3: модель отдаёт их в
      * extra_content.google.thought_signature каждого вызова инструмента и
      * требует обратно в следующем запросе. Обычные record-классы это поле
      * молча роняют, поэтому храним по id вызова и втыкаем в историю сам.
+     * Копится карта только до {@link #SIGNATURE_CACHE}: самое старое
+     * высаживается, а не лежит вечно.
      */
-    private final java.util.concurrent.ConcurrentHashMap<String, String> thoughtSignatures =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, String> thoughtSignatures =
+            java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(64, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, String> eldest) {
+                    return size() > SIGNATURE_CACHE;
+                }
+            });
+
     @FunctionalInterface
     interface Sender {
         HttpResponse<String> send(HttpRequest request) throws IOException, InterruptedException;
@@ -61,6 +66,13 @@ public final class OpenAiCompatibleClient implements LlmClient {
 
     private final Config.Llm config;
     private volatile LlmFailure blocked;
+
+    /**
+     * Шлюз однажды отверг «обязан вызвать инструмент» — значит, он его не
+     * знает, и платить вторым запросом на каждом ходе незачем.
+     */
+    private volatile boolean toolChoiceUnsupported;
+
     /** Предел модели эмбеддингов — 8192 токена; на кириллице это заметно меньше букв. */
     private static final int MAX_EMBEDDING_CHARS = 8_000;
 
@@ -132,18 +144,23 @@ public final class OpenAiCompatibleClient implements LlmClient {
         body.set("messages", mapper.valueToTree(messages));
         if (tools != null && tools.isArray() && !tools.isEmpty()) {
             body.set("tools", tools);
-            body.put("tool_choice", toolChoice);
+            if (!toolChoiceUnsupported) {
+                body.put("tool_choice", toolChoice);
+            }
         }
 
         applyThoughtSignatures(body);
         try {
             return complete(body);
         } catch (LlmFailure failure) {
-            if (failure.status() != 400 || !LlmClient.TOOL_CHOICE_REQUIRED.equals(toolChoice)) {
+            if (failure.status() != 400 || !body.has("tool_choice")
+                    || !LlmClient.TOOL_CHOICE_REQUIRED.equals(toolChoice)) {
                 throw failure;
             }
-            // «обязан вызвать инструмент» шлюз отверг — тот же запрос, но без запрета текста
-            log.warn("Шлюз отверг принудительный вызов инструментов, повторяю как обычно");
+            // «обязан вызвать инструмент» шлюз отверг — тот же запрос, но без запрета
+            // текста; впросак второй раз не лезем и на следующих ходах не переспрашиваем
+            log.warn("Шлюз отверг принудительный вызов инструментов — дальше хожу как обычно");
+            toolChoiceUnsupported = true;
             body.remove("tool_choice");
             return complete(body);
         }

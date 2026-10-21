@@ -1,4 +1,4 @@
-# Настройки Raine. Скопируй в config.properties и заполни первые семь строк —
+# Настройки Rin. Скопируй в config.properties и заполни первые семь строк —
 # остальное имеет разумные значения по умолчанию и дописывается само при первом
 # запуске. Файл читается на ходу: правки применяются без перезапуска.
 #
@@ -133,18 +133,18 @@ llm_temperature=0.2
 embedding_model=openai/text-embedding-3-large
 
 # имя
-character_name=Raine
+character_name=Rin
 
 # ник в Telegram
-character_nickname=@raine_tyan
+character_nickname=@rin
 
 # как она зовёт владельца
-papik_name=RaineDev
+papik_name=Папик
 
 # после какого объёма разговор сбрасывается в дневник
 context_token_limit=40000
 
-# круг общения: owner_only, contacts, everyone
+# круг общения: owner_only, contacts, none
 lockdown=owner_only
 
 # читать ли каналы при суженном круге общения
@@ -155,6 +155,9 @@ sleep_consolidation=false
 
 # расти ли характером: днём она оставляет о себе заметки, ночью заметки закрепляются
 character_growth_enabled=false
+
+# вести ли счёт доверия к людям: инструмент note_trust и её список в системном промпте
+trust_ledger_enabled=true
 
 # спит ли она ночью
 night_sleep=true

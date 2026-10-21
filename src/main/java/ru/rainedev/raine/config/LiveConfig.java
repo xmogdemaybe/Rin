@@ -43,7 +43,7 @@ public final class LiveConfig implements AutoCloseable {
         var changes = new java.util.ArrayList<String>();
         var hot = java.util.Set.of("lockdown", "lockdownAllowChannels", "behaviour", "repeat",
                 "diaryInjectionMaxLength", "diaryMinRelatedness", "llmTranscript", "sleepConsolidation",
-                "characterGrowthEnabled", "consolidation", "diaryConsolidationBudget");
+                "characterGrowthEnabled", "trustLedgerEnabled", "consolidation", "diaryConsolidationBudget");
         for (var component : Config.class.getRecordComponents()) {
             if (hot.contains(component.getName())) continue;
             try {

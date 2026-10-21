@@ -19,7 +19,15 @@ public final class TraitSignals {
         return taken;
     }
 
-    /** Запись дневника не случилась — заметки живут дальше, до следующему разу. */
+    /** Сколько таких же заметок уже лежит в копилке — по совпадению формулировки. */
+    public synchronized long countSame(String trait) {
+        String marker = trait.strip().toLowerCase();
+        return pending.stream()
+                .filter(signal -> signal.trait().strip().toLowerCase().equals(marker))
+                .count();
+    }
+
+    /** Запись дневника не случилась — заметки живут дальше, до следующего раза. */
     public synchronized void requeue(List<TraitSignal> signals) {
         pending.addAll(signals);
     }

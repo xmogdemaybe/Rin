@@ -1,6 +1,8 @@
 package ru.rainedev.raine.telegram;
 
 import it.tdlight.jni.TdApi;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.phone.ChatKind;
 
 /**
@@ -12,6 +14,8 @@ import ru.rainedev.raine.phone.ChatKind;
  */
 public final class Lockdown {
 
+    private static final Logger log = LoggerFactory.getLogger(Lockdown.class);
+
     public enum Mode {
         /** Разговаривает со всеми. */
         NONE,
@@ -21,10 +25,18 @@ public final class Lockdown {
         OWNER_ONLY;
 
         public static Mode of(String value) {
-            return switch (value == null ? "" : value.trim().toLowerCase()) {
+            String written = value == null ? "" : value.trim().toLowerCase();
+            return switch (written) {
                 case "none", "public" -> NONE;
                 case "contacts", "contacts_only" -> CONTACTS_ONLY;
-                default -> OWNER_ONLY;
+                case "owner_only" -> OWNER_ONLY;
+                // незнакомое слово сужает круг, а не расширяет: ошибиться тут
+                // безопаснее вовне. Но опечатку показываем — написавший
+                // «everyone» ждёт совсем не молчания
+                default -> {
+                    log.warn("Не знаю такого круга общения: «{}» — остаюсь только с владельцем", value);
+                    yield OWNER_ONLY;
+                }
             };
         }
     }

@@ -73,7 +73,23 @@ class RecordTraitSignalTest {
         String answer = tools.recordTraitSignal().call(MAPPER.readTree(
                 "{\"kind\":\"hurt\",\"trait\":\"огрызаюсь на колкости\"}"));
 
-        assertTrue(answer.contains("1 time"), "она уже раз это замечала — честно напоминаем");
+        assertTrue(answer.contains("once"), "она уже раз это замечала — честно напоминаем");
         assertEquals(1, pocket.drain().size());
+    }
+
+    @Test
+    void countsTheNotesStillWaitingForTheDiary(@TempDir Path dir) throws Exception {
+        TraitSignals pocket = new TraitSignals();
+        TelegramTools tools = new TelegramTools(null, null, null, null, null);
+        tools.traitSignals(pocket);
+        tools.traitDiary(new Diary(dir));
+        String note = "{\"kind\":\"hurt\",\"trait\":\"огрызаюсь на колкости\"}";
+
+        tools.recordTraitSignal().call(MAPPER.readTree(note));
+        String second = tools.recordTraitSignal().call(MAPPER.readTree(note));
+
+        assertTrue(second.contains("once"),
+                "первая заметка до дневника ещё не дошла, но повтором уже считается");
+        assertEquals(2, pocket.drain().size());
     }
 }
