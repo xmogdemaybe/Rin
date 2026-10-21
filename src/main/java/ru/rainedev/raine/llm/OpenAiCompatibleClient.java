@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
+import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -65,7 +67,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
     private final String embeddingModel;
 
     public OpenAiCompatibleClient(Config.Llm config, String embeddingModel) {
-        this(config, embeddingModel, defaultSender(), OpenAiCompatibleClient::sleep);
+        this(config, embeddingModel, defaultSender(config.proxy()), OpenAiCompatibleClient::sleep);
     }
 
     OpenAiCompatibleClient(Config.Llm config, String embeddingModel, Sender sender,
@@ -76,9 +78,40 @@ public final class OpenAiCompatibleClient implements LlmClient {
         this.pause = pause;
     }
 
-    private static Sender defaultSender() {
-        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build();
+    /** HTTP, при нужде — через прокси: туннель-клиенты дают для него и обычный порт. */
+    private static Sender defaultSender(String proxy) {
+        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30));
+        if (proxy != null && !proxy.isBlank()) {
+            builder.proxy(proxySelector(proxy));
+        }
+        HttpClient http = builder.build();
         return request -> http.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /**
+     * Прокси задаётся как host:port. https ходит через него CONNECT-ом,
+     * как и положено HTTP-прокси. Скобки IPv6-адреса снимаем.
+     */
+    private static ProxySelector proxySelector(String proxy) {
+        int colon = proxy.lastIndexOf(':');
+        if (colon <= 0) {
+            throw new IllegalArgumentException("llm_proxy: ожидается host:port, а задано \"" + proxy + '"');
+        }
+        String host = proxy.substring(0, colon).strip();
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        String digits = proxy.substring(colon + 1).strip();
+        int port;
+        try {
+            port = Integer.parseInt(digits);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("llm_proxy: порт \"" + digits + "\" — не число");
+        }
+        if (host.isEmpty() || port <= 0 || port > 65535) {
+            throw new IllegalArgumentException("llm_proxy: \"" + proxy + "\" — нет такого адреса");
+        }
+        return ProxySelector.of(new InetSocketAddress(host, port));
     }
 
     @Override

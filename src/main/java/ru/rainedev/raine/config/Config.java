@@ -38,6 +38,7 @@ public record Config(
         boolean characterGrowthEnabled,
         Consolidation consolidation,
         Night night,
+        TelegramProxy telegramProxy,
         Around around,
         int noticeDelaySeconds,
         boolean readOnly,
@@ -54,7 +55,12 @@ public record Config(
         }
     }
 
-    public record Llm(String baseUrl, String model, String apiKey, double temperature) {}
+    /**
+     * Параметры OpenAI-совместимого эндпоинта.
+     *
+     * @param proxy HTTP-прокси для запросов к ИИ: host:port; пусто — напрямую
+     */
+    public record Llm(String baseUrl, String model, String apiKey, double temperature, String proxy) {}
 
     /**
      * Модели зрения. Дешёвая для потокового — стикеры и аватарки, основная
@@ -74,6 +80,41 @@ public record Config(
      */
     public record Night(boolean enabled, java.time.LocalTime bedtimeFrom, java.time.LocalTime bedtimeTo,
                         java.time.LocalTime wakeFrom, java.time.LocalTime wakeTo) {}
+
+    /**
+     * Прокси для Telegram: mtproto — прямая запаска там, где Telegram
+     * заблокирован, socks5 — любой локальный туннель. Пустой тип — ходим
+     * напрямую, как раньше.
+     */
+    public record TelegramProxy(String type, String server, int port, String secret,
+                                String username, String password) {
+        public TelegramProxy {
+            type = type.strip().toLowerCase();
+            server = server.strip();
+            secret = secret.strip();
+            username = username.strip();
+            password = password.strip();
+            if (!type.isEmpty() && !type.equals("mtproto") && !type.equals("socks5")) {
+                throw new IllegalArgumentException(
+                        "telegram_proxy_type: ожидалось mtproto или socks5, а задано \"" + type + '"');
+            }
+            if (!type.isEmpty() && server.isEmpty()) {
+                throw new IllegalArgumentException("telegram_proxy_type задан, а telegram_proxy_server пуст");
+            }
+            if (type.equals("mtproto") && secret.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "для mtproto нужен telegram_proxy_secret — строка из ссылки t.me/proxy");
+            }
+            if (!type.isEmpty() && (port <= 0 || port > 65535)) {
+                throw new IllegalArgumentException("telegram_proxy_port должен быть от 1 до 65535");
+            }
+        }
+
+        /** Прокси настроен: весь трафик Telegram пойдёт через него. */
+        public boolean enabled() {
+            return !type.isEmpty();
+        }
+    }
 
     /** Знание об окружающем: время суток и погода. */
     public record Around(boolean enabled, double latitude, double longitude) {}
@@ -199,7 +240,9 @@ public record Config(
                         s.require("llm_base_url", "адрес модели"),
                         s.require("llm_model", "название модели"),
                         s.require("llm_api_key", "ключ модели"),
-                        s.fraction("llm_temperature", 0.2, "температура модели")),
+                        s.fraction("llm_temperature", 0.2, "температура модели"),
+                        s.get("llm_proxy", "",
+                                "HTTP-прокси для запросов к ИИ: host:port; пусто — напрямую")),
                 s.get("embedding_model", "openai/text-embedding-3-large", "модель для векторов памяти"),
                 new Character(
                         s.get("character_name", "Raine", "имя"),
@@ -221,6 +264,16 @@ public record Config(
                         s.time("night_bedtime_to", "01:00", "не позже этого времени ложится"),
                         s.time("night_wake_from", "06:00", "не раньше этого времени встаёт"),
                         s.time("night_wake_to", "09:00", "не позже этого времени встаёт")),
+                new TelegramProxy(
+                        s.get("telegram_proxy_type", "",
+                                "тип прокси для Telegram: mtproto или socks5; пусто — напрямую"),
+                        s.get("telegram_proxy_server", "",
+                                "адрес прокси из ссылки t.me/proxy?server=...&port=...&secret=..."),
+                        s.integer("telegram_proxy_port", 443, "порт прокси"),
+                        s.get("telegram_proxy_secret", "",
+                                "секрет mtproto из ссылки t.me/proxy; для socks5 не нужен"),
+                        s.get("telegram_proxy_username", "", "имя пользователя socks5; обычно пусто"),
+                        s.get("telegram_proxy_password", "", "пароль socks5; обычно пусто")),
                 new Around(
                         s.flag("around_enabled", true, "знает ли она время суток и погоду за окном"),
                         s.fraction("around_latitude", 55.75, "широта места, где она «живёт»"),
