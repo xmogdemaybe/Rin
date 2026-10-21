@@ -207,13 +207,21 @@ public final class RaineApp implements AutoCloseable {
             always.add(tools.recordTraitSignal());
         }
 
+        // доверие к людям: единственная бухгалтерия в data/trust.md, по строке на
+        // человека. Сама она решает только «заслужено или нет» — файл правит код
+        var trust = new ru.rainedev.raine.memory.TrustLedger(
+                config.diaryDir().resolveSibling("trust.md"),
+                config.ownerId(), config.character().papikName());
+        always.add(trust.tool());
+
         WorkingMemory workingMemory = new WorkingMemory(config.workingMemoryFile(), llm, config.character().name());
         around = new ru.rainedev.raine.core.Surroundings(
                 config.around().enabled(), config.around().latitude(), config.around().longitude());
 
         loop = new NotificationLoop(
                 llm,
-                () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix()),
+                () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix()
+                        + trust.asPromptSuffix()),
                 always, config.contextTokenLimit());
         DiaryMemory diaryMemory = new DiaryMemory(diary, llm,
                 config.diaryInjectionMaxLength(), config.diaryMinRelatedness());
