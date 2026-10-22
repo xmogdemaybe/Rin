@@ -81,6 +81,29 @@ public final class PendingConversations {
         }
     }
 
+    /**
+     * Уведомления, оставшиеся без ответа. В отличие от отложенных разговоров их
+     * никто сам не пересказывает: в Telegram такое сообщение уже прочитано, и
+     * при следующем запуске оно не всплывёт. Оно лежит здесь только для глаз
+     * человека.
+     *
+     * @return файлы неотвеченных, самый давний первым
+     */
+    public List<Path> unanswered() {
+        Path failures = dir.resolve("failed-notifications");
+        if (!Files.isDirectory(failures)) {
+            return List.of();
+        }
+        try (Stream<Path> files = Files.list(failures)) {
+            return files.filter(file -> file.getFileName().toString().endsWith(".json"))
+                    .sorted(Comparator.comparing(Path::getFileName))
+                    .toList();
+        } catch (IOException e) {
+            log.warn("Не удалось заглянуть в неотвеченные: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     public List<Message> read(Path file) {
         try {
             return MAPPER.readValue(file.toFile(), new TypeReference<List<Message>>() {});

@@ -35,6 +35,14 @@ public final class NotificationLoop {
     /** Пауза между такими возвращениями: сеть здесь пропадает на минуты, не на секунды. */
     private Duration retryPause = Duration.ofSeconds(60);
 
+    /**
+     * Дальше не ждать: занятая модель оттаивает десятками минут, а пять попыток
+     * по минуте покрывали только самый короткий сбой. В логе 22.10 сообщение
+     * владельца упёрлось в 503 и было брошено через двенадцать минут, хотя
+     * эндпоинт снова отвечал через девять после этого.
+     */
+    private static final Duration RETRY_PAUSE_CEILING = Duration.ofMinutes(10);
+
     /** Сигнал «пора заканчивать»: кладётся в очередь, чтобы разбудить ожидание. */
     private static final Notification STOP = new Notification("", new Toolbox());
 
@@ -73,6 +81,17 @@ public final class NotificationLoop {
     private int retries;
     private Turn active;
     private Notification retrying;
+
+    /**
+     * Уведомления, которым не досталось ответа: попытки кончились раньше, чем
+     * закончился сбой. Долбиться в отказавший эндпоинт бессмысленно, поэтому
+     * они ждут здесь и возвращаются в очередь, стоит модели ответить хоть чему.
+     */
+    private final java.util.Deque<Notification> stranded = new java.util.ArrayDeque<>();
+
+    /** Больше стольких не копить: ответить на все нечем, а разговор уже устарел. */
+    private static final int STRANDED_LIMIT = 20;
+
     private boolean suspended;
     private java.util.function.BiConsumer<Notification, RuntimeException> onFailure = (n, e) -> {};
 
@@ -195,12 +214,18 @@ public final class NotificationLoop {
         return queue.size();
     }
 
+    /** Сколько так и не дождались ответа — но ещё не забыты. */
+    int strandedCount() {
+        return stranded.size();
+    }
+
     /**
-     * Живой разговор, спать нельзя: в очереди непрочитанное, или последний
-     * ход кончился только что. Отсчитывает Rest перед уходом в ночь.
+     * Живой разговор, спать нельзя: в очереди непрочитанное, есть то, что не
+     * дождалось ответа, или последний ход кончился только что. Отсчитывает Rest
+     * перед уходом в ночь.
      */
     public boolean talkAlive() {
-        return !queue.isEmpty() || active != null
+        return !queue.isEmpty() || active != null || !stranded.isEmpty()
                 || Duration.between(lastTalk, Instant.now()).compareTo(TALK_GRACE) < 0;
     }
 
@@ -248,6 +273,7 @@ public final class NotificationLoop {
                 }
                 process(notification);
                 retries = 0;
+                releaseStranded();
                 notifyDone(notification);
                 onIdle.run();
                 // ход кончился — разговор только что был живым, ночь подождёт
@@ -278,6 +304,11 @@ public final class NotificationLoop {
                 recoverFrom(e);
             }
         }
+        // Поток прервали, не дожидаясь конца: пауза между попытками умеет
+        // просыпаться на остановку, но флаг прерывания всё равно может решить
+        // исход раньше. Остановившейся стороне об этом тоже надо знать, иначе
+        // выключение будет ждать свой двухминутный предел впустую.
+        stopped.countDown();
     }
 
     /** Обработка одного уведомления целиком — до wait/pause. */
@@ -488,47 +519,102 @@ public final class NotificationLoop {
         return tools;
     }
 
-    /** Повреждённый JSON означает испорченный контекст — его проще выбросить целиком. */
     /**
      * Пропавшая сеть не должна стоить ей сообщения.
      * <p>
-     * Клиент уже пробовал трижды подряд; если сеть так и не вернулась, дальше
-     * долбиться незачем — уведомление кладётся обратно в начало очереди и ждёт.
-     * Контекст и шаг сохраняются: повтор продолжает тот же ход, не открывает
-     * уведомление заново и не забывает уже выполненные действия.
+     * Клиент уже пробовал трижды подряд; здесь ожидания растут — минута, две,
+     * четыре, дальше с потолком в десять, — потому что занятая модель оттаивает
+     * десятками минут. Повтор продолжает тот же ход: контекст и шаг сохранены,
+     * выполненные действия не делаются второй раз.
      *
      * @return взяли ли уведомление на новую попытку
      */
     private boolean retryLater(Notification notification, RuntimeException failure) {
-        boolean transientFailure = failure instanceof UncheckedIOException
-                || failure instanceof ru.rainedev.raine.llm.LlmFailure endpoint && endpoint.retryable();
-        if (notification == null || !transientFailure || stopping) {
+        boolean network = failure instanceof UncheckedIOException;
+        boolean busy = failure instanceof ru.rainedev.raine.llm.LlmFailure endpoint && endpoint.retryable();
+        if (notification == null || !(network || busy) || stopping) {
             return false;
         }
         if (++retries > MAX_RETRIES) {
-            log.error("Сеть не вернулась за {} попыток — уведомление отложено насовсем", MAX_RETRIES);
+            log.error("Эндпоинт не отвечает за {} попыток — откладываю, пока не ожиет", MAX_RETRIES);
             retries = 0;
+            strand(notification);
             return false;
         }
         // Resume the existing turn and context: previous tool actions cannot be rolled back.
         retrying = notification;
-        log.warn("Сеть недоступна, вернусь к уведомлению через {} с (попытка {} из {})",
-                retryPause.toSeconds(), retries, MAX_RETRIES);
-        sleep(retryPause);
+        Duration pause = pauseBeforeAttempt(retryPause, retries);
+        log.warn("{}, вернусь к уведомлению через {} с (попытка {} из {})",
+                busy ? "модель занята" : "сеть недоступна", pause.toSeconds(), retries, MAX_RETRIES);
+        sleep(pause);
         return true;
     }
 
-    private static void sleep(Duration pause) {
+    /** Пауза перед попыткой: с каждой вдвое длиннее, но не больше потолка. */
+    static Duration pauseBeforeAttempt(Duration base, int attempt) {
+        Duration pause = base;
+        for (int doubling = 1; doubling < attempt && pause.compareTo(RETRY_PAUSE_CEILING) < 0;
+                doubling++) {
+            Duration longer = pause.multipliedBy(2);
+            pause = longer.compareTo(RETRY_PAUSE_CEILING) > 0 ? RETRY_PAUSE_CEILING : longer;
+        }
+        return pause;
+    }
+
+    /**
+     * Отложить без ответа: ждёт, пока модель снова ответит хоть чему-нибудь.
+     * В очереди такому не место — там оно сошло бы за новое и удвоило бы
+     * реплику в контексте.
+     */
+    private void strand(Notification notification) {
+        while (stranded.size() >= STRANDED_LIMIT) {
+            stranded.removeFirst();
+            log.warn("Неотвеченных уже накопилось {}, самое давнее забываю", STRANDED_LIMIT);
+        }
+        stranded.addLast(notification);
+    }
+
+    /** Эндпоинт ожил — возвращаем в очередь всё, что не досказали. */
+    private void releaseStranded() {
+        if (stranded.isEmpty()) {
+            return;
+        }
+        int count = stranded.size();
+        while (!stranded.isEmpty()) {
+            queue.addLast(stranded.removeFirst());
+        }
+        log.info("Модель снова отвечает — возвращаю к разговору {} уведомл.", count);
+    }
+
+    /**
+     * Ждёт паузу, но просыпается на остановку. Паузы растут, а время, отведённое
+     * на штатное выключение, нет: десять минут сна переживают его, и ход
+     * продолжился бы уже по закрывающемуся клиенту.
+     */
+    private void sleep(Duration pause) {
+        long deadline = System.currentTimeMillis() + pause.toMillis();
         try {
-            Thread.sleep(pause);
+            while (!stopping && !Thread.currentThread().isInterrupted()) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    return;
+                }
+                Thread.sleep(Math.min(1000, remaining));
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
 
+    /**
+     * Испорченный контекст проще выбросить, чем чинить: с ним не проходит ни
+     * один следующий запрос, и она молчала бы навсегда. Но «json» встречается
+     * и в отказах, которые касаются самого эндпоинта, — живой разговор из-за
+     * них терять незачем. Сбрасываем только когда отвергнут наш запрос.
+     */
     private void recoverFrom(RuntimeException e) {
-        String message = String.valueOf(e.getMessage()).toLowerCase();
-        if (message.contains("json")) {
+        if (e instanceof ru.rainedev.raine.llm.LlmFailure failure && failure.status() == 400
+                && String.valueOf(failure.getMessage()).toLowerCase().contains("json")) {
             log.warn("Контекст повреждён, сбрасываем");
             context.clear();
         }

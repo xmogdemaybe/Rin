@@ -360,6 +360,12 @@ public final class RaineApp implements AutoCloseable {
         brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
         Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
         Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(writer, prompts.system("")));
+        // неотвеченное само не переигрывается: сообщение уже прочитано и в
+        // непрочитанном при догоне не числится — пусть хотя бы будет видно
+        int owed = pending.unanswered().size();
+        if (owed > 0) {
+            log.warn("С прошлого сбоя без ответа осталось {} уведомл. — data/pending/failed-notifications", owed);
+        }
         log.info("Запущена от имени {} (id {})", config.character().name(), telegram.myId());
     }
 
