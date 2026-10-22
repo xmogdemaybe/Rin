@@ -198,7 +198,8 @@ public final class RaineApp implements AutoCloseable {
         // ask доступен всегда: заглянуть в память можно в любой момент хода
         Toolbox always = new Toolbox();
         WebSearch web = new WebSearch(config.webSearchUrl(), config.webSearchKey());
-        Recall recall = new Recall(diary, llm, prompts.lazy("character_base.md"), web);
+        Recall recall = new Recall(diary, llm, prompts.lazy("character_base.md"), web,
+                config.diaryMinRelatedness());
         always.add(recall.asTool(this::currentSituation));
         if (config.behaviour().stickers()) {
             always.add(tools.stickers().list());
@@ -302,6 +303,7 @@ public final class RaineApp implements AutoCloseable {
                     lockdown.allowChannels(fresh.lockdownAllowChannels());
                     antiRepeat.limits(fresh.repeat());
                     diaryMemory.limits(fresh.diaryInjectionMaxLength(), fresh.diaryMinRelatedness());
+                    recall.limits(fresh.diaryMinRelatedness());
                     ru.rainedev.raine.llm.Transcript.enabled(fresh.llmTranscript());
                     // тумблеры снимаются на ходу: инструмент появляется в наборе
                     // или исчезает из него, вместо просьбы «не пользуйся»

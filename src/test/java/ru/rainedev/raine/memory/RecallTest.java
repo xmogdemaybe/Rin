@@ -200,6 +200,28 @@ class RecallTest {
     }
 
     @Test
+    void distantEntriesAreNotHandedOver(@TempDir Path dir) {
+        // без порога подагент получал верх выдачи на любой вопрос: десять
+        // «воспоминаний» находились всегда, и о чужих он говорил как о фактах
+        Diary diary = new Diary(dir);
+        diary.save("Серёжа ездил на Байкал в июле", new double[] {1, 0, 0});
+        diary.save("Кот всю неделю проспал на полу", new double[] {0, 0, 1});
+        ScriptedLlm llm = new ScriptedLlm().searches("Байкал").says("Он был на Байкале в июле.");
+
+        call(new Recall(diary, llm, () -> "характер", NO_WEB, 0.8).asTool(() -> ""),
+                "что я знаю про поездки Серёжи?");
+
+        String given = llm.sessions.stream()
+                .flatMap(List::stream)
+                .map(Message::content)
+                .filter(text -> text != null && text.contains("memory_piece"))
+                .findFirst().orElseThrow();
+        assertEquals(1, given.split("<memory_piece", -1).length - 1, given);
+        assertTrue(given.contains("Байкал"), given);
+        assertFalse(given.contains("Кот"), "чужая запись не выдаётся за воспоминание");
+    }
+
+    @Test
     void brokenEmbedderFindsByWords(@TempDir Path dir) {
         // раньше сбой эмбеддингов отрубал поиск целиком («Search is temporarily
         // unavailable»), хотя тексты записей лежат рядом и доступны словам

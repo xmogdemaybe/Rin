@@ -49,21 +49,40 @@ public final class Recall {
     /** Ограничение шагов подагента: без него он способен крутиться бесконечно. */
     private static final int MAX_STEPS = 8;
 
+    /**
+     * Ниже этой близости запись подагенту не отдаётся; ноль — порога нет.
+     * Выдача отсортирована по убыванию, и верх находится всегда: без порога на
+     * любой вопрос возвращались десять «воспоминаний», которых по делу нет,
+     * и модель говорила о них как о фактах.
+     */
+    private volatile double minRelatedness;
+
     private final Diary diary;
     private final LlmClient llm;
     private final java.util.function.Supplier<String> characterPrompt;
     private final ru.rainedev.raine.tools.WebSearch web;
 
     public Recall(Diary diary, LlmClient llm, String characterPrompt, ru.rainedev.raine.tools.WebSearch web) {
-        this(diary, llm, () -> characterPrompt, web);
+        this(diary, llm, () -> characterPrompt, web, 0);
     }
 
     public Recall(Diary diary, LlmClient llm, java.util.function.Supplier<String> characterPrompt,
                   ru.rainedev.raine.tools.WebSearch web) {
+        this(diary, llm, characterPrompt, web, 0);
+    }
+
+    public Recall(Diary diary, LlmClient llm, java.util.function.Supplier<String> characterPrompt,
+                  ru.rainedev.raine.tools.WebSearch web, double minRelatedness) {
         this.diary = diary;
         this.llm = llm;
         this.characterPrompt = characterPrompt;
         this.web = web;
+        this.minRelatedness = minRelatedness;
+    }
+
+    /** Настройки правятся на ходу: порог здесь тот же, что у подмешивания в разговор. */
+    public void limits(double minRelatedness) {
+        this.minRelatedness = minRelatedness;
     }
 
     /**
@@ -217,6 +236,9 @@ public final class Recall {
         for (Diary.Match match : diary.query(vector)) {
             if (taken >= ENTRIES_PER_QUERY) {
                 break;
+            }
+            if (match.relatedness() < minRelatedness) {
+                break;   // выдача отсортирована: дальше пойдут только чужие
             }
             if (alreadyGiven.contains(match.entry().id())) {
                 skippedAsDuplicate = true;
