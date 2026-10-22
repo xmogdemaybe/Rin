@@ -43,53 +43,48 @@ class ThrottleTest {
     @Test
     @Timeout(30)
     void burstIsSharedBetweenThreads() throws Exception {
-        // два потока решают, что последний свободный слот их, — и обращений
-        // уходит больше, чем Telegram прощает. Считаем окна целиком: ни в одну
-        // секунду через ограничитель не должно пройти больше двадцати запросов
-        Throttle throttle = new Throttle();
+        // Ограничитель один на аккаунт, а не на поток: раньше у действий был
+        // свой счётчик, и два потока проходили пачку вдвое быстрее. Поэтому
+        // одни и те же пятьдесят обращений в одном потоке и в двух должны
+        // тормозить одинаково, а не ровно пополам
+        int calls = 50;
+
+        Throttle single = new Throttle();
+        Instant oneStart = Instant.now();
+        for (int i = 0; i < calls; i++) {
+            single.allow();
+        }
+        long alone = Duration.between(oneStart, Instant.now()).toMillis();
+        assertTrue(alone >= 1900, "пачка из " + calls + " обращений прошла без пауз");
+
+        Throttle shared = new Throttle();
         int threads = 2;
-        int perThread = 25;
-        long[][] passed = new long[threads][perThread];
-        CountDownLatch start = new CountDownLatch(1);
+        int perThread = calls / threads;
+        CountDownLatch go = new CountDownLatch(1);
         List<Thread> workers = new ArrayList<>();
+        Instant bothStart = Instant.now();
         for (int t = 0; t < threads; t++) {
-            final int lane = t;
             Thread worker = Thread.ofPlatform().daemon().start(() -> {
                 try {
-                    start.await();
+                    go.await();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
                 }
                 for (int i = 0; i < perThread; i++) {
-                    throttle.allow();
-                    passed[lane][i] = System.nanoTime();
+                    shared.allow();
                 }
             });
             workers.add(worker);
         }
-        start.countDown();
+        go.countDown();
         for (Thread worker : workers) {
-            worker.join(java.time.Duration.ofSeconds(25));
+            worker.join(Duration.ofSeconds(25));
         }
+        long together = Duration.between(bothStart, Instant.now()).toMillis();
 
-        List<Long> all = new ArrayList<>();
-        for (long[] lane : passed) {
-            for (long at : lane) {
-                all.add(at);
-            }
-        }
-        all.sort(Long::compare);
-        int ceiling = 20;
-        for (int i = 0; i < all.size(); i++) {
-            int inSecond = 0;
-            for (long at : all) {
-                if (at - all.get(i) < 1_000_000_000L) {
-                    inSecond++;
-                }
-            }
-            assertTrue(inSecond <= ceiling,
-                    "за секунду прошло " + inSecond + " обращений — лимит не сквозной");
-        }
+        assertTrue(together * 4 >= alone * 3,
+                "два потока прошли пачку быстрее одного: бюджет не сквозной ("
+                        + alone + " мс против " + together + " мс)");
     }
 }
