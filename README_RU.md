@@ -39,7 +39,7 @@
 внешних программ бот не зовёт.
 
 ```bash
-git clone https://github.com/xmogdemaybe/Rin rin && cd rin
+git clone https://github.com/xmogdemaybe/rinprivate rin && cd rin
 
 cp config.properties.example config.properties   # заполнить первые семь строк
 cp -r prompts-example prompts                    # характер: правится как хочется
