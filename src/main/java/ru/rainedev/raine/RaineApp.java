@@ -236,6 +236,8 @@ public final class RaineApp implements AutoCloseable {
         }
 
         WorkingMemory workingMemory = new WorkingMemory(config.workingMemoryFile(), llm, config.character().name());
+        // файл уходит в каждый системный промпт: об обрезке владелец должен слышать
+        workingMemory.onOverflow(this::tellOwnerAboutWorkingMemory);
         around = new ru.rainedev.raine.core.Surroundings(
                 config.around().enabled(), config.around().latitude(), config.around().longitude());
 
@@ -457,6 +459,24 @@ public final class RaineApp implements AutoCloseable {
                 + "person (id %d) and say plainly, in one short message, that the file is full and needs "
                 + "trimming by hand. Then call #wait.").formatted(
                         CharacterGrowth.MAX_LINES, lines, ownerId), available, true));
+    }
+
+    /**
+     * Средняя память не влезла в отведённый размер и обрезана: часть её пунктов
+     * больше не доходит до системного промпта. Слышит владелец — один раз на случай.
+     */
+    private void tellOwnerAboutWorkingMemory(long chars) {
+        long ownerId = config.ownerId();
+        if (ownerId <= 0) {
+            return;
+        }
+        Toolbox available = new Toolbox();
+        available.add(tools.open(ownerId));
+        loop.submit(new Notification(("Your working memory file %s reached its %d-character limit and had to be "
+                + "cut short: the text was %d characters, so some of your own notes no longer reach your system "
+                + "prompt. Open the chat with your person (id %d) and say plainly, in one short message, that the "
+                + "file is too long and needs trimming by hand. Then call #wait.").formatted(
+                        config.workingMemoryFile(), WorkingMemory.MAX_LENGTH, chars, ownerId), available, true));
     }
 
     private static String goodnightPrompt(Goodnights.Receiver receiver) {

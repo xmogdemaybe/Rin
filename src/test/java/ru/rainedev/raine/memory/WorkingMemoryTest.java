@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -136,5 +137,51 @@ class WorkingMemoryTest {
         new WorkingMemory(dir.resolve("working_memory.md"), llm, "Raine").update("промпт", List.of());
 
         assertEquals(0, llm.chatCalls);
+    }
+
+    /** Строки по ~20 символов: 400 штук заведомо больше предела. */
+    private static String overlong(int items) {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < items; i++) {
+            text.append("- пункт ").append(i).append(" (Jul 21)\n");
+        }
+        return text.toString();
+    }
+
+    @Test
+    void oversizedFileDoesNotGrowThePrompt(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("working_memory.md");
+        String text = overlong(400);
+        Files.writeString(file, text);
+        WorkingMemory memory = new WorkingMemory(file, new ScriptedLlm(), "Raine");
+        List<Long> alerts = new ArrayList<>();
+        memory.onOverflow(alerts::add);
+
+        memory.asPromptSuffix();
+        String remembered = memory.read();
+        memory.asPromptSuffix();
+
+        assertTrue(remembered.length() <= WorkingMemory.MAX_LENGTH, "длина " + remembered.length());
+        assertTrue(remembered.contains("пункт 0"), "начало терять нельзя");
+        assertFalse(remembered.contains("пункт 399"), "хвост должен остаться за пределом");
+        assertTrue(remembered.lines().allMatch(line -> line.matches("- пункт \\d+ \\(Jul 21\\)")),
+                "резать нужно по границе строки: " + remembered.lines().toList().getLast());
+        assertEquals(1, alerts.size(), "слышать один раз, а не на каждом запросе");
+        assertTrue(alerts.getFirst() > WorkingMemory.MAX_LENGTH, alerts.toString());
+    }
+
+    @Test
+    void oversizedAnswerIsTrimmedBeforeSaving(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("working_memory.md");
+        ScriptedLlm llm = new ScriptedLlm().willAnswer(overlong(400));
+
+        new WorkingMemory(file, llm, "Raine").update("промпт", CONTEXT);
+
+        String saved = Files.readString(file);
+        assertTrue(saved.length() <= WorkingMemory.MAX_LENGTH + 1, "длина " + saved.length());
+        assertTrue(saved.contains("пункт 0"), saved.substring(0, Math.min(80, saved.length())));
+        assertFalse(saved.contains("пункт 399"), "ответ целиком на диск уходить не должен");
+        assertTrue(llm.lastPrompt.contains("Hard limit: " + WorkingMemory.MAX_LENGTH),
+                "иначе модель не знает, куда ей уложиться");
     }
 }

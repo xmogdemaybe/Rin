@@ -9,6 +9,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
@@ -21,6 +22,10 @@ import ru.rainedev.raine.llm.Message;
  * Дневник помнит события, но не помнит, что она обещала перезвонить и что
  * весь день сегодня раздражена. Эта часть дописывается в системный промпт
  * и потому влияет на тон каждого ответа.
+ * <p>
+ * Размер ограничен: модель обязана переносить прежние пункты дословно, так что
+ * без предела файл рос бы каждый пересказ, утяжеляя каждый запрос и приближая
+ * переполнение контекста. Обрезанное не молчит — о переполнении слышит владелец.
  */
 public final class WorkingMemory {
 
@@ -29,6 +34,13 @@ public final class WorkingMemory {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMMM", Locale.forLanguageTag("ru"));
 
     private static final int MAX_ATTEMPTS = 3;
+
+    /**
+     * Сколько символов памяти уходит в системный промпт. Вопрос модели просит
+     * 100—500 слов: это примерно столько и есть, с запасом на даты и разметку
+     * списка. Файл каждый ход уходит в контекст, поэтому длиннее — дорого.
+     */
+    public static final int MAX_LENGTH = 4000;
 
     private static final String EMOTIONS = "sad, arousal, betrayed, grief, sorrow, pensiveness, anger, annoyed, "
             + "fear, amazement, surprise, distracted, love, trust, accepted, joy, serenity, embarrassed, proud, "
@@ -42,23 +54,38 @@ public final class WorkingMemory {
     private final LlmClient llm;
     private final String characterName;
 
+    /**
+     * Кому сказать, что память не влезла в отведённый размер, и сколько символов
+     * было. По умолчанию некому — обрезка остаётся только в журнале.
+     */
+    private volatile LongConsumer overflowAlert = chars -> { };
+
+    /** Один отказ на случай: сказать раз, а не на каждом запросе к модели. */
+    private volatile boolean overflowTold;
+
     public WorkingMemory(Path file, LlmClient llm, String characterName) {
         this.file = file;
         this.llm = llm;
         this.characterName = characterName;
     }
 
+    /** Куда сообщить о переполнении: владелец должен знать, что файл пора разбирать руками. */
+    public void onOverflow(LongConsumer alert) {
+        this.overflowAlert = alert;
+    }
+
     /**
      * Файл чистится и при чтении тоже, а не только при записи: его правят руками,
      * переносят с прежней машины, а иногда там оседает разметка чужой модели —
      * и всё это уходит прямо в системный промпт, где ему совсем не место.
+     * Там же память обрезается до {@link #MAX_LENGTH}, если разрослась.
      */
     public String read() {
         try {
             if (!Files.exists(file)) {
                 return "";
             }
-            return ModelText.unwrap(Files.readString(file), "things_to_remember");
+            return bounded(ModelText.unwrap(Files.readString(file), "things_to_remember"), "в файле");
         } catch (IOException e) {
             log.warn("Не удалось прочитать рабочую память: {}", e.getMessage());
             return "";
@@ -120,7 +147,13 @@ public final class WorkingMemory {
             if (cleaned.isBlank()) {
                 continue;
             }
-            write(cleaned);
+            String trimmed = bounded(cleaned, "в ответе модели");
+            if (trimmed.isBlank()) {
+                continue;
+            }
+            write(trimmed);
+            // память снова влезает целиком: прошлое переполнение разобрано
+            overflowTold = false;
             return;
         }
         log.warn("Рабочая память не обновлена — оставляю прежнюю");
@@ -136,6 +169,35 @@ public final class WorkingMemory {
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось сохранить рабочую память", e);
         }
+    }
+
+    /**
+     * Обрезает разросшуюся память по границе строки: в промпт уходит начало,
+     * но целыми строками, а не обрывком последней.
+     *
+     * @param where откуда текст — для журнала
+     */
+    private String bounded(String content, String where) {
+        if (content.length() <= MAX_LENGTH) {
+            return content;
+        }
+        String kept = content.substring(0, MAX_LENGTH);
+        int cut = kept.lastIndexOf('\n');
+        if (cut > 0) {
+            kept = kept.substring(0, cut);
+        }
+        log.warn("Рабочая память {} длиннее {} символов — в промпт уходит только начало", where, MAX_LENGTH);
+        tellAboutOverflow(content.length());
+        return kept.strip();
+    }
+
+    /** Владелец слышит о переполнении один раз: дальше его очередь, а не её. */
+    private void tellAboutOverflow(long chars) {
+        if (overflowTold) {
+            return;
+        }
+        overflowTold = true;
+        overflowAlert.accept(chars);
     }
 
     private String buildPrompt() {
@@ -178,10 +240,12 @@ public final class WorkingMemory {
                 - other important details
 
                 You must write briefly (100-500 words), structurize output, INCLUDE DATES.
+                Hard limit: %d characters for the whole answer. If the list does not fit, drop the \
+                oldest items instead of exceeding it — everything past the limit is cut off and lost.
                 Each item MUST have a "last updated" date. Example format:
                 - Напомнить Алексею про оплату хостинга до 15 мая — последнее обновление: Apr 28
                 - Жду ответ от Марии по поводу встречи в пятницу — последнее обновление: Apr 29
-                """.formatted(characterName, EMOTIONS, characterName, PHYSICAL));
+                """.formatted(characterName, EMOTIONS, characterName, PHYSICAL, MAX_LENGTH));
 
         return prompt.toString();
     }
