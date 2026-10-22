@@ -10,6 +10,8 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.ErrorNote;
+import ru.rainedev.raine.phone.Markup;
 
 /** Поиск в интернете — для того, чего в дневнике быть не может: погода, новости, факты. */
 public final class WebSearch {
@@ -52,10 +54,11 @@ public final class WebSearch {
 
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
-                log.warn("Веб-поиск вернул {}: {}", response.statusCode(), response.body());
+                String note = ErrorNote.of(response.body());
+                log.warn("Веб-поиск вернул {}: {}", response.statusCode(), note);
                 // причина передаётся как есть: «кончилась квота» и «нет сети» —
                 // это разные вещи, и решать, что делать дальше, ей
-                return "Web search failed (%d): %s".formatted(response.statusCode(), shorten(response.body()));
+                return "Web search failed (%d): %s".formatted(response.statusCode(), note);
             }
             return render(mapper.readTree(response.body()).path("results"), query);
         } catch (InterruptedException e) {
@@ -67,12 +70,10 @@ public final class WebSearch {
         }
     }
 
-    /** Ответ службы бывает многословным, а в контексте нужна суть. */
-    private static String shorten(String body) {
-        String text = body == null ? "" : body.strip().replace("\n", " ");
-        return text.length() > 300 ? text.substring(0, 300) + "..." : text;
-    }
-
+    /**
+     * Заголовки и текст приходят с чужого сайта: без оглядки они закрывают
+     * блок результата и продолжают разбор уже своей фразой.
+     */
     private static String render(JsonNode results, String query) {
         if (!results.isArray() || results.isEmpty()) {
             return "Nothing found on the web for: " + query;
@@ -80,9 +81,9 @@ public final class WebSearch {
         StringBuilder out = new StringBuilder();
         for (JsonNode result : results) {
             out.append("<web_search_result title=\"%s\" url=\"%s\">\n%s\n</web_search_result>\n".formatted(
-                    result.path("title").asText(""),
-                    result.path("url").asText(""),
-                    result.path("content").asText("")));
+                    Markup.attribute(result.path("title").asText("")),
+                    Markup.attribute(result.path("url").asText("")),
+                    Markup.body(result.path("content").asText(""))));
         }
         return out.toString();
     }

@@ -15,6 +15,7 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.config.Config;
+import ru.rainedev.raine.core.ErrorNote;
 
 /**
  * Распознавание речи из файла.
@@ -59,7 +60,8 @@ public final class SpeechToText {
 
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
-                log.warn("Распознавание речи вернуло {}: {}", response.statusCode(), response.body());
+                log.warn("Распознавание речи вернуло {}: {}",
+                        response.statusCode(), ErrorNote.of(response.body()));
                 return Optional.empty();
             }
             String heard = mapper.readTree(response.body()).path("text").asText("").strip();
@@ -78,7 +80,7 @@ public final class SpeechToText {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(field("model", config.model()));
         out.write(("--" + BOUNDARY + "\r\n"
-                + "Content-Disposition: form-data; name=\"file\"; filename=\"" + audio.getFileName() + "\"\r\n"
+                + "Content-Disposition: form-data; name=\"file\"; filename=\"" + headerSafe(audio) + "\"\r\n"
                 + "Content-Type: audio/ogg\r\n\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(Files.readAllBytes(audio));
         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
@@ -87,6 +89,16 @@ public final class SpeechToText {
         }
         out.write(("--" + BOUNDARY + "--\r\n").getBytes(StandardCharsets.UTF_8));
         return out.toByteArray();
+    }
+
+    /**
+     * Имя файла пришло из чужого сообщения: кавычка или перевод строки в нём
+     * иначе допишут заголовок формы, а границы разделителя хватит, чтобы
+     * подложить в запрос ещё одно поле. Для распознавания важны только
+     * буквы, цифры и расширение — остальное заменяется подчёркиванием.
+     */
+    private static String headerSafe(Path audio) {
+        return audio.getFileName().toString().replaceAll("[^A-Za-z0-9._\\p{L}]", "_");
     }
 
     private static byte[] field(String name, String value) {

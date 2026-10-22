@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.prompt.Prompts;
 
 /**
@@ -138,7 +139,7 @@ public final class Vision {
         if (frames.isEmpty()) {
             // картинку разобрать не вышло, но в звуке может быть всё главное
             String onlySound = heard(file)
-                    .map(speech -> "<video transcription>\n<f track=\"audio\">\n" + speech
+                    .map(speech -> "<video transcription>\n<f track=\"audio\">\n" + Markup.body(speech)
                             + "\n</f>\n</video transcription>\n")
                     .orElse("");
             if (!onlySound.isEmpty() && file != null) {
@@ -169,13 +170,13 @@ public final class Vision {
             VideoFrames.Frame frame = frames.get(i);
             timeline.append("<f from=\"").append(VideoFrames.timestamp(frame.from()))
                     .append("\" to=\"").append(VideoFrames.timestamp(frame.to())).append("\">\n")
-                    .append(captions.get(i)).append("\n</f>\n");
+                    .append(Markup.body(captions.get(i))).append("\n</f>\n");
         }
         if (timeline.isEmpty()) {
             return "";
         }
         heard(file).ifPresent(speech ->
-                timeline.append("<f track=\"audio\">\n").append(speech).append("\n</f>\n"));
+                timeline.append("<f track=\"audio\">\n").append(Markup.body(speech)).append("\n</f>\n"));
         log.info("Просмотрено кадров: {}", frames.size());
         String described = "<video transcription>\n" + timeline
                 + "</video transcription instructions=\"You finished watching this video and should "
@@ -326,8 +327,9 @@ public final class Vision {
         return answer != null && REFUSAL.matcher(answer.strip()).find();
     }
 
+    /** Описание рисует модель по чужому вложению: границы блоков оно ломать не должно. */
     private static String wrap(Kind kind, String description) {
-        return "<%s description>\n%s\n</%s>\n".formatted(kind.tag, description, kind.tag);
+        return "<%s description>\n%s\n</%s>\n".formatted(kind.tag, Markup.body(description), kind.tag);
     }
 
     private String fromCache(Path file) {

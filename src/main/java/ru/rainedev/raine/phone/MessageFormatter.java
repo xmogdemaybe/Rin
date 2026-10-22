@@ -95,7 +95,7 @@ public final class MessageFormatter {
         }
 
         if (message.authorSignature != null && !message.authorSignature.isEmpty()) {
-            attributes.append(" author_signature=\"").append(message.authorSignature).append('"');
+            attributes.append(" author_signature=\"").append(Markup.attribute(message.authorSignature)).append('"');
         }
 
         appendSender(attributes, message, senderId);
@@ -155,7 +155,7 @@ public final class MessageFormatter {
             reactions.append(')');
         }
         if (!reactions.isEmpty()) {
-            attributes.append(" reactions=\"").append(reactions).append('"');
+            attributes.append(" reactions=\"").append(Markup.attribute(reactions.toString())).append('"');
         }
     }
 
@@ -165,20 +165,20 @@ public final class MessageFormatter {
      * настоящий автор, {@code forwarded_by} — тот, кто поделился.
      */
     private void appendSender(StringBuilder attributes, TdApi.Message message, long senderId) {
-        String senderName = names.nameOf(senderId);
+        String senderName = Markup.attribute(names.nameOf(senderId));
 
         if (message.forwardInfo != null) {
             long originId = originId(message.forwardInfo.origin);
             if (originId != 0) {
-                attributes.append(" sender=\"").append(names.nameOf(originId)).append('"');
+                attributes.append(" sender=\"").append(Markup.attribute(names.nameOf(originId))).append('"');
             }
-            if (senderName != null && !senderName.isBlank()) {
+            if (!senderName.isBlank()) {
                 attributes.append(" forwarded_by=\"").append(senderName).append('"');
             }
             return;
         }
 
-        if (senderName != null && !senderName.isBlank()) {
+        if (!senderName.isBlank()) {
             attributes.append(" sender=\"").append(senderName).append('"');
         }
     }

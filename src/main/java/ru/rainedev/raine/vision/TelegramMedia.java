@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.ChatKind;
+import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MediaDescriber;
 import ru.rainedev.raine.telegram.Telegram;
 
@@ -156,7 +157,7 @@ public final class TelegramMedia implements MediaDescriber {
         StringBuilder out = new StringBuilder("<gift cost=\"")
                 .append(message.gift == null ? 0 : message.gift.starCount).append(" stars\"");
         if (message.text != null && !message.text.text.isBlank()) {
-            out.append(" text=\"").append(message.text.text).append('"');
+            out.append(" text=\"").append(Markup.attribute(message.text.text)).append('"');
         }
         String looks = message.gift == null ? "" : describeSticker(message.gift.sticker);
         return looks.isBlank()

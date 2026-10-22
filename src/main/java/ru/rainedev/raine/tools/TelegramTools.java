@@ -10,6 +10,7 @@ import ru.rainedev.raine.core.Tool;
 import ru.rainedev.raine.core.Toolbox;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.ChatScreen;
+import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MessageFormatter;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
@@ -54,6 +55,14 @@ public final class TelegramTools {
 
     /** Длинное голосовое никто не слушает. */
     private static final int MAX_VOICE_LENGTH = 400;
+
+    /**
+     * Заметка о себе уходит в метаданные дневника, а ночью — в промпт роста
+     * одной строкой: без разметки и без простыни в ней смысла нет.
+     */
+    private static final int TRAIT_KIND_LIMIT = 40;
+    private static final int TRAIT_LIMIT = 160;
+    private static final int TRAIT_SUBJECT_LIMIT = 40;
 
     /** Слова, выдающие ремарку вместо самой речи. */
     private static final List<String> NARRATION_WORDS =
@@ -673,7 +682,8 @@ public final class TelegramTools {
             StringBuilder out = new StringBuilder(
                     "You are looking at your Telegram main screen. You see these chats:\n<chats>\n");
             for (TdApi.Chat chat : chats) {
-                out.append("<chat id=\"").append(chat.id).append("\" title=\"").append(chat.title)
+                out.append("<chat id=\"").append(chat.id).append("\" title=\"")
+                        .append(Markup.attribute(chat.title))
                         .append("\" kind=\"").append(kindOf(chat)).append('"');
                 if (chat.unreadCount > 0) {
                     out.append(" unread_count=\"").append(chat.unreadCount).append('"');
@@ -723,7 +733,7 @@ public final class TelegramTools {
         out.append('<').append(tag).append(">\n");
         for (TdApi.Chat chat : chats) {
             out.append("<chat id=\"").append(chat.id)
-                    .append("\" title=\"").append(chat.title)
+                    .append("\" title=\"").append(Markup.attribute(chat.title))
                     .append("\" kind=\"").append(kindOf(chat))
                     .append("\"/>\n");
         }
@@ -750,7 +760,7 @@ public final class TelegramTools {
         if (preview.length() > PREVIEW_LENGTH) {
             preview = preview.substring(0, 30) + "..." + preview.substring(preview.length() - 30);
         }
-        return preview + " (" + ru.rainedev.raine.phone.TimeAgo.of(chat.lastMessage.date) + ")";
+        return Markup.body(preview) + " (" + ru.rainedev.raine.phone.TimeAgo.of(chat.lastMessage.date) + ")";
     }
 
     /** Свои контакты — список людей, которых она знает по именам. */
@@ -763,7 +773,7 @@ public final class TelegramTools {
             StringBuilder out = new StringBuilder("<contacts>\n");
             for (TdApi.User user : contacts) {
                 out.append("<contact user_id=\"").append(user.id).append("\" name=\"")
-                        .append((user.firstName + " " + user.lastName).strip()).append("\"/>\n");
+                        .append(Markup.attribute((user.firstName + " " + user.lastName).strip())).append("\"/>\n");
             }
             return out.append("</contacts>").toString();
         });
@@ -974,14 +984,15 @@ public final class TelegramTools {
                     if (traitSignals == null) {
                         return "Noting is disabled right now. Continue as usual.";
                     }
-                    String kind = arguments.path("kind").asText("").strip();
-                    String trait = arguments.path("trait").asText("").strip();
+                    String kind = clipped(Markup.attribute(arguments.path("kind").asText("")), TRAIT_KIND_LIMIT);
+                    String trait = clipped(Markup.attribute(arguments.path("trait").asText("")), TRAIT_LIMIT);
                     if (kind.isEmpty() || trait.isEmpty()) {
                         throw new LowQualityException("Нужны и что за событие, и какая черта.");
                     }
                     double valence = Math.max(-1, Math.min(1, arguments.path("valence").asDouble(0)));
                     double intensity = Math.max(0, Math.min(1, arguments.path("intensity").asDouble(0.5)));
-                    String subject = arguments.path("subject").asText("").strip();
+                    String subject = clipped(
+                            Markup.attribute(arguments.path("subject").asText("")), TRAIT_SUBJECT_LIMIT);
                     long before = sameTraitCount(trait);
                     traitSignals.add(new ru.rainedev.raine.memory.TraitSignal(
                             kind, trait, valence, intensity, subject, java.time.Instant.now().toString()));
@@ -996,12 +1007,16 @@ public final class TelegramTools {
                 });
     }
 
+    /** Заметка уходит в промпт ночного роста одной строкой — длинная там нечитаема. */
+    private static String clipped(String text, int limit) {
+        return text.length() > limit ? text.substring(0, limit).strip() : text;
+    }
+
     /**
      * Сколько раз эта же черта уже записана — по совпадению формулировки, без
      * сети. Копилка считается вместе с дневником: заметка, сделанная час
      * назад, в дневник ещё не дошла, а повтором уже считается.
-     */
-    private long sameTraitCount(String trait) {
+     */    private long sameTraitCount(String trait) {
         long pending = traitSignals.countSame(trait);
         if (traitDiary == null) {
             return pending;
@@ -1088,7 +1103,8 @@ public final class TelegramTools {
                         // при поиске по всем чатам иначе непонятно, где это было сказано
                         if (everywhere) {
                             out.append("<in chat_id=\"").append(message.chatId).append("\" title=\"")
-                                    .append(telegram.chatCached(message.chatId).title).append("\">\n");
+                                    .append(Markup.attribute(telegram.chatCached(message.chatId).title))
+                                    .append("\">\n");
                         }
                         out.append(screen.formatter().format(message, view));
                         if (everywhere) {

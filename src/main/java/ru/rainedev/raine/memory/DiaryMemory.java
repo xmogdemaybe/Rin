@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.phone.Markup;
 
 /**
  * Достаёт из дневника то, что относится к текущему разговору.
@@ -114,7 +115,7 @@ public final class DiaryMemory implements Memory {
             DiaryEntry entry = diary.take(match);
             injected.add(Fingerprint.of(entry.body()));
             recalled.append("<").append(TAG).append(">\n")
-                    .append(entry.body()).append("\n")
+                    .append(Markup.body(entry.body())).append("\n")
                     .append("</").append(TAG).append(">\n");
             log.info("Вспомнилось (близость {}): {}", String.format("%.3f", match.relatedness()),
                     entry.body().lines().findFirst().orElse("").strip());

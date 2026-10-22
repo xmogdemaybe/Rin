@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.memory.Diary;
 import ru.rainedev.raine.memory.DiaryEntry;
+import ru.rainedev.raine.phone.Markup;
 
 /**
  * Позывы написать первой. Человек не ждёт, пока к нему обратятся: он вспоминает
@@ -133,7 +134,7 @@ public final class Spontaneity implements AutoCloseable {
      */
     private String buildPrompt() {
         StringBuilder prompt = new StringBuilder("<your_diary_page just_for_reasoning no_plagiarism no_copy>\n");
-        randomEntry().ifPresent(entry -> prompt.append(entry.body()).append('\n'));
+        randomEntry().ifPresent(entry -> prompt.append(Markup.body(entry.body())).append('\n'));
         return prompt.append(PROMPT).toString();
     }
 

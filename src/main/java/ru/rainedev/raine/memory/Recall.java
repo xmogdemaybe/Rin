@@ -13,6 +13,7 @@ import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
+import ru.rainedev.raine.phone.Markup;
 
 /**
  * Осознанное обращение к памяти — подагент за инструментом {@code ask}.
@@ -225,7 +226,7 @@ public final class Recall {
             alreadyGiven.add(entry.id());
             taken++;
             found.append("<memory_piece relatedness=\"%.3f\">\n%s\n</memory_piece>\n"
-                    .formatted(match.relatedness(), entry.body()));
+                    .formatted(match.relatedness(), Markup.body(entry.body())));
         }
         if (taken > 0) {
             log.info("По запросу «{}» вспомнилось записей: {}", cue, taken);

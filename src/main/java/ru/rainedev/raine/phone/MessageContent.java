@@ -14,12 +14,14 @@ public final class MessageContent {
     private MessageContent() {}
 
     public static String describe(TdApi.MessageContent content) {
+        // свободный текст сообщений проходит через Markup: он приходит от
+        // посторонних людей и не должен закрывать блоки переписки
         return switch (content) {
             // то, из чего состоит обычная переписка
             case TdApi.MessageText text -> text.linkPreview == null
-                    ? text.text.text
+                    ? Markup.body(text.text.text)
                     // в превью часто весь смысл: без него остаётся голый адрес
-                    : text.text.text + "\n" + linkPreview(text.linkPreview);
+                    : Markup.body(text.text.text) + "\n" + linkPreview(text.linkPreview);
             case TdApi.MessagePhoto photo -> withCaption("[фото]", photo.caption);
             case TdApi.MessageVideo video -> withCaption("[видео]", video.caption);
             case TdApi.MessageAnimation animation -> withCaption("[гифка]", animation.caption);
@@ -28,37 +30,41 @@ public final class MessageContent {
             // id обязателен: без него стикер не забрать себе и не отправить потом,
             // а взять его больше неоткуда — эмодзи стикер не опознаёт
             case TdApi.MessageSticker sticker ->
-                    "[стикер sticker_id=%d] %s".formatted(sticker.sticker.id, sticker.sticker.emoji);
-            case TdApi.MessageAudio audio -> withCaption("[аудио] " + audio.audio.title, audio.caption);
+                    "[стикер sticker_id=%d] %s".formatted(sticker.sticker.id, Markup.body(sticker.sticker.emoji));
+            case TdApi.MessageAudio audio ->
+                    withCaption("[аудио] " + Markup.body(audio.audio.title), audio.caption);
             case TdApi.MessageDocument document -> withCaption(
-                    "[файл] " + (document.document.fileName.isEmpty() ? "без имени" : document.document.fileName),
+                    "[файл] " + (document.document.fileName.isEmpty()
+                            ? "без имени" : Markup.body(document.document.fileName)),
                     document.caption);
-            case TdApi.MessageAnimatedEmoji emoji -> "[анимированное эмодзи] " + emoji.emoji;
+            case TdApi.MessageAnimatedEmoji emoji -> "[анимированное эмодзи] " + Markup.body(emoji.emoji);
 
             // «я тут», «давай встретимся здесь»
             case TdApi.MessageLocation location -> "[геопозиция] %.4f, %.4f"
                     .formatted(location.location.latitude, location.location.longitude);
             case TdApi.MessageLiveLocation live -> "[геопозиция в реальном времени]";
-            case TdApi.MessageVenue venue -> "[место] " + venue.venue.title + " — " + venue.venue.address;
+            case TdApi.MessageVenue venue -> "[место] " + Markup.body(venue.venue.title)
+                    + " — " + Markup.body(venue.venue.address);
             case TdApi.MessageProximityAlertTriggered ignored -> "[оказались рядом]";
 
             // номер телефона — это половина смысла присланного контакта:
             // без него непонятно, чем этим контактом вообще пользоваться
             case TdApi.MessageContact contact ->
-                    "[контакт] " + (contact.contact.firstName + " " + contact.contact.lastName).strip()
+                    "[контакт] " + Markup.body((contact.contact.firstName + " " + contact.contact.lastName).strip())
                             + (contact.contact.phoneNumber == null || contact.contact.phoneNumber.isBlank()
-                                    ? "" : ", " + contact.contact.phoneNumber);
+                                    ? "" : ", " + Markup.body(contact.contact.phoneNumber));
             case TdApi.MessageContactRegistered ignored -> "[этот человек только что появился в Telegram]";
             case TdApi.MessageUsersShared ignored -> "[поделились контактами]";
             case TdApi.MessageChatShared ignored -> "[поделились чатом]";
 
             // забавы
-            case TdApi.MessageDice dice -> "[" + dice.emoji + " выпало " + dice.value + "]";
+            case TdApi.MessageDice dice -> "[" + Markup.body(dice.emoji) + " выпало " + dice.value + "]";
             case TdApi.MessageStakeDice ignored -> "[кубик на ставку]";
             case TdApi.MessagePoll poll -> poll(poll);
             case TdApi.MessagePollOptionAdded ignored -> "[в опрос добавили вариант]";
             case TdApi.MessagePollOptionDeleted ignored -> "[из опроса убрали вариант]";
-            case TdApi.MessageGame game -> "[игра] " + game.game.title + " — " + game.game.description;
+            case TdApi.MessageGame game -> "[игра] " + Markup.body(game.game.title)
+                    + " — " + Markup.body(game.game.description);
             case TdApi.MessageGameScore score -> "[результат в игре] " + score.score;
             case TdApi.MessageStory ignored -> "[история]";
             case TdApi.MessageChecklist ignored -> "[список дел]";
@@ -121,11 +127,12 @@ public final class MessageContent {
             case TdApi.MessageChatJoinByLink ignored -> "[присоединился по ссылке]";
             case TdApi.MessageChatJoinByRequest ignored -> "[приняли заявку в чат]";
             case TdApi.MessageChatDeleteMember left -> "[участник вышел] user_id=" + left.userId;
-            case TdApi.MessageChatChangeTitle title -> "[чат переименован] " + title.title;
+            case TdApi.MessageChatChangeTitle title -> "[чат переименован] " + Markup.body(title.title);
             case TdApi.MessageChatChangePhoto ignored -> "[сменили фото чата]";
             case TdApi.MessageChatDeletePhoto ignored -> "[убрали фото чата]";
-            case TdApi.MessageBasicGroupChatCreate created -> "[создана группа] " + created.title;
-            case TdApi.MessageSupergroupChatCreate created -> "[создана супергруппа] " + created.title;
+            case TdApi.MessageBasicGroupChatCreate created -> "[создана группа] " + Markup.body(created.title);
+            case TdApi.MessageSupergroupChatCreate created -> "[создана супергруппа] "
+                    + Markup.body(created.title);
             case TdApi.MessageChatUpgradeTo ignored -> "[группа стала супергруппой]";
             case TdApi.MessageChatUpgradeFrom ignored -> "[выросла из обычной группы]";
             case TdApi.MessageChatOwnerLeft ignored -> "[владелец покинул чат]";
@@ -158,7 +165,7 @@ public final class MessageContent {
             case TdApi.MessageWebAppDataReceived ignored -> "[получены данные приложения]";
             case TdApi.MessagePassportDataSent ignored -> "[отправлены документы]";
             case TdApi.MessagePassportDataReceived ignored -> "[получены документы]";
-            case TdApi.MessageCustomServiceAction action -> "[служебное] " + action.text;
+            case TdApi.MessageCustomServiceAction action -> "[служебное] " + Markup.body(action.text);
 
             case TdApi.MessageUnsupported ignored -> "[сообщение, которое здесь не показать]";
             case null -> "";
@@ -169,10 +176,10 @@ public final class MessageContent {
     }
 
     private static String poll(TdApi.MessagePoll message) {
-        StringBuilder out = new StringBuilder("[опрос] ").append(message.poll.question.text);
+        StringBuilder out = new StringBuilder("[опрос] ").append(Markup.body(message.poll.question.text));
         if (message.poll.options != null) {
             for (TdApi.PollOption option : message.poll.options) {
-                out.append("\n- ").append(option.text.text);
+                out.append("\n- ").append(Markup.body(option.text.text));
             }
         }
         return out.toString();
@@ -191,19 +198,22 @@ public final class MessageContent {
         attribute(out, "site", preview.siteName);
         attribute(out, "title", preview.title);
         attribute(out, "author", preview.author);
-        String description = preview.description == null ? "" : preview.description.text;
+        String description = preview.description == null ? "" : Markup.body(preview.description.text);
         return description.isEmpty()
                 ? out.append(" />").toString()
                 : out.append(">\n").append(description).append("\n</link_preview>").toString();
     }
 
+    /** Превью рисует сам сайт: его тексты приходят в разметку извне. */
     private static void attribute(StringBuilder out, String name, String value) {
-        if (value != null && !value.isEmpty()) {
-            out.append(' ').append(name).append("=\"").append(value).append('"');
+        String safe = Markup.attribute(value);
+        if (!safe.isEmpty()) {
+            out.append(' ').append(name).append("=\"").append(safe).append('"');
         }
     }
 
     private static String withCaption(String prefix, TdApi.FormattedText caption) {
-        return caption == null || caption.text.isEmpty() ? prefix : prefix + "\n" + caption.text;
+        return caption == null || caption.text.isEmpty()
+                ? prefix : prefix + "\n" + Markup.body(caption.text);
     }
 }

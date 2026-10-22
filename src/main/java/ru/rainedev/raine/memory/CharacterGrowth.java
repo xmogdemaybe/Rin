@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.phone.Markup;
 
 /**
  * Рост личности. Характер задаётся фундаментом, а поверх него ночами наживается
@@ -223,19 +224,21 @@ public final class CharacterGrowth {
 
     /** Вопрос модели: что нажито и что показалось заново. */
     private String request(List<Group> groups) {
+        // заметки лек в разное время и разными словами: чужая разметка в них
+        // не должна закрывать секции вопроса
         StringBuilder text = new StringBuilder();
         text.append("<current_growth>\n");
-        String current = current();
-        text.append(current.isBlank() ? "(пусто — ничего нажитого ещё нет)" : current.strip());
+        String current = Markup.body(current().strip());
+        text.append(current.isBlank() ? "(пусто — ничего нажитого ещё нет)" : current);
         text.append("\n</current_growth>\n\n<signals>\n");
         for (Group group : groups) {
             TraitSignal last = group.signals().getLast();
-            text.append("- ").append(group.first().trait().strip())
-                    .append("; kind: ").append(group.first().kind().strip())
+            text.append("- ").append(Markup.attribute(group.first().trait()))
+                    .append("; kind: ").append(Markup.attribute(group.first().kind()))
                     .append("; valence: ").append(String.format("%+.1f", group.first().valence()))
                     .append("; intensity: ").append(String.format("%.1f", group.intensity()))
                     .append("; subject: ")
-                    .append(group.first().subject().strip())
+                    .append(Markup.attribute(group.first().subject()))
                     .append("; noted: ").append(group.signals().size()).append(" раз")
                     .append("; first: ").append(group.first().at())
                     .append("; last: ").append(last.at())

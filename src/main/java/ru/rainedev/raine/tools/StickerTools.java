@@ -5,6 +5,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.Tool;
+import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
 import ru.rainedev.raine.vision.TelegramMedia;
@@ -100,7 +101,7 @@ public final class StickerTools {
         StringBuilder out = new StringBuilder("<stickers>\n");
         for (TdApi.Sticker sticker : stickers) {
             out.append("<sticker sticker_id=\"").append(sticker.id)
-                    .append("\" emoji=\"").append(sticker.emoji == null ? "" : sticker.emoji)
+                    .append("\" emoji=\"").append(Markup.attribute(sticker.emoji))
                     .append("\">");
             if (media != null) {
                 out.append('\n').append(media.describeSticker(sticker).strip()).append('\n');
@@ -122,7 +123,8 @@ public final class StickerTools {
         }
         StringBuilder out = new StringBuilder("\n<sticker_packs>\n");
         for (TdApi.StickerSetInfo set : sets) {
-            out.append("<pack name=\"").append(set.name).append("\" title=\"").append(set.title)
+            out.append("<pack name=\"").append(Markup.attribute(set.name))
+                    .append("\" title=\"").append(Markup.attribute(set.title))
                     .append("\" stickers=\"").append(set.size).append("\" />\n");
         }
         return out.append("</sticker_packs>\nOpen any of them with #sticker_pack.").toString();
