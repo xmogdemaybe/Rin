@@ -127,6 +127,10 @@ public final class DiaryMemory implements Memory {
      * Запрос к памяти строится и по рассуждениям тоже, а не только по сказанному:
      * то, о чём она сейчас думает, точнее задаёт, что стоит вспомнить.
      * <p>
+     * Подмешанные прежде воспоминания из запроса вырезаются: они лежат в тех же
+     * сообщениях, и без этого она вспоминала бы то, что относится к уже
+     * вспомненному, а не к разговору, — с каждым шагом всё дальше от темы.
+     * <p>
      * Длина ограничена, и обрезается начало: у модели эмбеддингов свой предел,
      * а одно подробное описание фото или видео способно занять его целиком —
      * тогда вектор не считается вовсе и не вспоминается ничего. Ближе к концу
@@ -144,9 +148,31 @@ public final class DiaryMemory implements Memory {
     }
 
     private static void append(StringBuilder topic, String text) {
-        if (text != null && !text.isBlank()) {
-            topic.append(text).append("\n\n---\n\n");
+        if (text == null) {
+            return;
         }
+        String own = withoutRecalled(text);
+        if (own.isBlank()) {
+            return;
+        }
+        topic.append(own).append("\n\n---\n\n");
+    }
+
+    /** Убирает из сообщения блоки воспоминаний — вместе с их разметкой. */
+    private static String withoutRecalled(String text) {
+        String open = "<" + TAG + ">";
+        String close = "</" + TAG + ">";
+        StringBuilder own = new StringBuilder();
+        int from = 0;
+        for (int start = text.indexOf(open); start >= 0; start = text.indexOf(open, from)) {
+            own.append(text, from, start);
+            int end = text.indexOf(close, start);
+            if (end < 0) {
+                return own.toString();   // блок не закрыт — дальше одна разметка
+            }
+            from = end + close.length();
+        }
+        return own.append(text, from, text.length()).toString();
     }
 
     /** Разговор начался заново — прежние воспоминания снова можно вспомнить. */

@@ -66,6 +66,45 @@ class DiaryMemoryTest {
                 "запись уже в контексте — второй раз её тянуть некуда");
     }
 
+    /** Записывает, о чём её спросили, — так видно, из чего построен запрос к памяти. */
+    private static final class RecordingEmbedding implements LlmClient {
+        private final double[] vector;
+        final List<String> topics = new java.util.ArrayList<>();
+
+        RecordingEmbedding(double[] vector) {
+            this.vector = vector;
+        }
+
+        @Override
+        public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public double[] embedding(String input) {
+            topics.add(input);
+            return vector;
+        }
+    }
+
+    @Test
+    void nextRecallIsNotBuiltFromThePreviousOne(@TempDir Path dir) {
+        Diary diary = diaryWith(dir, "мы ездили на Байкал");
+        RecordingEmbedding embedding = new RecordingEmbedding(new double[] {1, 0, 0});
+        DiaryMemory memory = new DiaryMemory(diary, embedding, 4000);
+
+        String recalled = memory.recall(context("помнишь поездку?"));
+        assertFalse(recalled.isEmpty());
+
+        // так воспоминания встают в контекст: перед последним сообщением
+        memory.recall(List.of(Message.user(recalled + "помнишь поездку?")));
+
+        assertEquals(2, embedding.topics.size(), embedding.topics.toString());
+        assertFalse(embedding.topics.getLast().contains("Байкал"),
+                "иначе она вспоминает то, что относится к уже вспомненному: " + embedding.topics.getLast());
+        assertTrue(embedding.topics.getLast().contains("помнишь поездку?"), embedding.topics.getLast());
+    }
+
     @Test
     void recalledEntryStaysInTheDiary(@TempDir Path dir) {
         // подмешанная запись не исчезает из памяти: новый разговор вспомнит её
