@@ -268,7 +268,7 @@ public final class NotificationLoop {
         try {
             runUntilStopped();
         } finally {
-            // Неотвеченное на стороне умирает вместе с процессом: без этого его
+            // Отложенное без ответа умирает вместе с процессом: без этого его
             // чат остался бы прочитанным, и при следующем запуске догон его не
             // найдёт — ровно так потерялось сообщение владельца 22.10
             for (Notification parked : stranded) {
@@ -575,7 +575,7 @@ public final class NotificationLoop {
      * десятками минут. Повтор продолжает тот же ход: контекст и шаг сохранены,
      * выполненные действия не делаются второй раз.
      *
-     * @return чем обернулся отказ — новая попытка, сторона или потеря
+     * @return чем обернулся отказ — новая попытка, отложение или потеря
      */
     private Loss retryLater(Notification notification, RuntimeException failure) {
         boolean network = failure instanceof UncheckedIOException;
@@ -584,7 +584,7 @@ public final class NotificationLoop {
             return Loss.LOST;
         }
         if (++retries > MAX_RETRIES) {
-            log.error("Эндпоинт не отвечает за {} попыток — откладываю, пока не ожиет", MAX_RETRIES);
+            log.error("Эндпоинт не отвечает за {} попыток — откладываю, пока не оживёт", MAX_RETRIES);
             retries = 0;
             strand(notification);
             return Loss.PARKED;
