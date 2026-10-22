@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -74,6 +75,10 @@ public final class TrustLedger {
     private final String ownerName;
     private final Clock clock;
     private final Map<Long, Instant> lastChange = new HashMap<>();
+
+    /** Файл уходит в каждый системный промпт: о обрезке должен слышать владелец. */
+    private volatile LongConsumer overflowAlert = lines -> { };
+    private volatile boolean overflowTold;
 
     public TrustLedger(Path file, long ownerId, String ownerName) {
         this(file, ownerId, ownerName, Clock.systemDefaultZone());
@@ -202,6 +207,9 @@ public final class TrustLedger {
      * Хвост системного промпта: кому она доверяет и насколько. Строка владельца
      * тут навсегда — она не из файла, потому что файл правит и рука, и вызов
      * note_trust, а владельца это не касается.
+     * <p>
+     * Лимит строк держит запись, но файл правит и рука человека: суффикс
+     * ограничивает себя сам, иначе промпт рос бы вместе с файлом.
      */
     public String asPromptSuffix() {
         StringBuilder out = new StringBuilder("""
@@ -213,12 +221,36 @@ public final class TrustLedger {
         out.append(ownerLine());
         List<String> lines = readLines();
         if (lines != null) {
+            if (lines.size() > MAX_LINES) {
+                tellAboutOverflow(lines.size());
+                // новые записи файл принимает в хвост — значит лишние уходят сверху
+                lines = lines.subList(lines.size() - MAX_LINES, lines.size());
+            } else {
+                // файл снова влезает целиком: прошлая обрезка разобрана, можно тревожить снова
+                overflowTold = false;
+            }
             for (String line : lines) {
                 out.append('\n').append(line);
             }
         }
         out.append("\n</your_trust>\n");
         return out.toString();
+    }
+
+    /** Куда сказать, что файл не влез и был обрезан. */
+    public void onOverflow(LongConsumer alert) {
+        this.overflowAlert = alert;
+    }
+
+    /** Обрезка видна владельцу, но не каждый ход: одно предупреждение на случай. */
+    private void tellAboutOverflow(long lines) {
+        log.warn("Доверие: в файле {} строк, в промпт уходит только последние {} — остальные она не видит",
+                lines, MAX_LINES);
+        if (overflowTold) {
+            return;
+        }
+        overflowTold = true;
+        overflowAlert.accept(lines);
     }
 
     /**

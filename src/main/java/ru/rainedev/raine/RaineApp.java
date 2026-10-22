@@ -21,6 +21,7 @@ import ru.rainedev.raine.memory.Diary;
 import ru.rainedev.raine.memory.DiaryMemory;
 import ru.rainedev.raine.memory.DiaryWriter;
 import ru.rainedev.raine.memory.Recall;
+import ru.rainedev.raine.memory.TrustLedger;
 import ru.rainedev.raine.memory.WorkingMemory;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.ChatScreen;
@@ -228,12 +229,14 @@ public final class RaineApp implements AutoCloseable {
 
         // доверие к людям: единственная бухгалтерия в data/trust.md, по строке на
         // человека. Сама она решает только «заслужено или нет» — файл правит код
-        var trust = new ru.rainedev.raine.memory.TrustLedger(
+        var trust = new TrustLedger(
                 config.diaryDir().resolveSibling("trust.md"),
                 config.ownerId(), config.character().papikName());
         if (config.trustLedgerEnabled()) {
             always.add(trust.tool());
         }
+        // файл доверия тоже уходит в системный промпт: об обрезке слышит владелец
+        trust.onOverflow(this::tellOwnerAboutTrustLedger);
 
         WorkingMemory workingMemory = new WorkingMemory(config.workingMemoryFile(), llm, config.character().name());
         // файл уходит в каждый системный промпт: об обрезке владелец должен слышать
@@ -480,6 +483,24 @@ public final class RaineApp implements AutoCloseable {
                 + "prompt. Open the chat with your person (id %d) and say plainly, in one short message, that the "
                 + "file is too long and needs trimming by hand. Then call #wait.").formatted(
                         config.workingMemoryFile(), WorkingMemory.MAX_LENGTH, chars, ownerId), available, true));
+    }
+
+    /**
+     * Файл доверия вырос дольше отведённых строк и обрезан: часть записей больше
+     * не доходит до системного промпта. Слышит владелец — один раз на случай.
+     */
+    private void tellOwnerAboutTrustLedger(long lines) {
+        long ownerId = config.ownerId();
+        if (ownerId <= 0) {
+            return;
+        }
+        Toolbox available = new Toolbox();
+        available.add(tools.open(ownerId));
+        loop.submit(new Notification(("Your trust file holds %d lines while only the last %d reach your system "
+                + "prompt, so the people above them are invisible to you right now. Open the chat with your "
+                + "person (id %d) and say plainly, in one short message, that the file is too long and needs "
+                + "trimming by hand. Then call #wait.").formatted(
+                        lines, TrustLedger.MAX_LINES, ownerId), available, true));
     }
 
     private static String goodnightPrompt(Goodnights.Receiver receiver) {

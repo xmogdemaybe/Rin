@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -172,6 +173,46 @@ class TrustLedgerTest {
                 "двоеточие — разделитель формата строки; в имени оно сломало бы чтение");
         assertTrue(ledger.aboutPerson(4567).contains("<person_right_now>"),
                 "непрочитанная запись означала бы, что о человеке она не знает вовсе");
+    }
+
+    @Test
+    void handGrownFileDoesNotGrowThePrompt(@TempDir Path dir) throws Exception {
+        // лимит строк держит запись, а файл правит и рука: суффикс обязан
+        // ограничить себя сам, иначе промпт растёт вместе с файлом
+        Path file = dir.resolve("trust.md");
+        String grown = ledgerOf(TrustLedger.MAX_LINES + 60);
+        Files.writeString(file, grown);
+        List<Long> alerts = new ArrayList<>();
+        TrustLedger ledger = new TrustLedger(file, 111, "", clock);
+        ledger.onOverflow(alerts::add);
+
+        String suffix = ledger.asPromptSuffix();
+
+        assertTrue(suffix.contains("- id %d:".formatted(TrustLedger.MAX_LINES + 60)),
+                "свежие записи уцелели: " + suffix);
+        assertFalse(suffix.contains("- id 1:"), "старше лимита в промпт не уходит");
+        assertEquals(TrustLedger.MAX_LINES + 6, suffix.lines().count(),
+                "размер суффикса не зависит от размера файла");
+        assertEquals(List.of((long) (TrustLedger.MAX_LINES + 60)), alerts,
+                "владелец слышит один раз, а не каждый ход");
+
+        ledger.asPromptSuffix();
+        assertEquals(1, alerts.size());
+
+        Files.writeString(file, ledgerOf(TrustLedger.MAX_LINES));   // файл разобран
+        ledger.asPromptSuffix();
+        Files.writeString(file, grown);                              // и снова переполнен
+        ledger.asPromptSuffix();
+        assertEquals(2, alerts.size(), "разобранная обрезка тревожит заново");
+    }
+
+    /** Файл доверия на столько строк, сколько попросили. */
+    private static String ledgerOf(int lines) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 1; i <= lines; i++) {
+            out.append("- id %d: +2 — entry %d (2026-10-21)\n".formatted(i, i));
+        }
+        return out.toString();
     }
 
     @Test
