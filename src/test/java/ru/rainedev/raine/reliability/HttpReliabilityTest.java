@@ -9,4 +9,5 @@ class HttpReliabilityTest {
     @Test void limitsServerErrorRetries() throws Exception { HttpClientChecks.serverFailureRemainsRetryableAfterExhaustion(); }
     @Test void distinguishesNetworkFromPermanentErrors() { HttpClientChecks.networkAndPermanentErrorsHaveDifferentPolicies(); }
     @Test void handlesMalformedRetryHeader() { HttpClientChecks.malformedRetryAfterUsesBackoff(); }
+    @Test void hidesKeyEchoedInTheErrorResponse() { HttpClientChecks.gatewayEchoOfTheKeyIsNotRepeatedAnywhere(); }
 }

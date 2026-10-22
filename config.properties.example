@@ -57,11 +57,12 @@ vision_video_in_channels=false
 # может ли записывать голосовые
 voice_enabled=true
 
-# адрес синтеза речи
-voice_base_url=https://example/api/v1/
+# адрес синтеза речи; пусто — тот же адрес, что у модели (llm_base_url)
+voice_base_url=
 
-# ключ синтеза речи
-voice_api_key=ключ
+# ключ синтеза речи; пусто — тот же ключ, что у модели (llm_api_key).
+# Не оставляй здесь образец: запрос уйдёт с ним вместо ключа и откажет.
+voice_api_key=
 
 # модель синтеза речи
 voice_model=google/gemini-3.1-flash-tts-preview
@@ -87,11 +88,11 @@ voice_dir=data/voice_messages
 # расшифровывать ли звук из присланных видео
 hearing_enabled=true
 
-# адрес распознавания речи
-hearing_base_url=https://example/api/v1/
+# адрес распознавания речи; пусто — тот же адрес, что у модели (llm_base_url)
+hearing_base_url=
 
-# ключ распознавания речи
-hearing_api_key=ключ
+# ключ распознавания речи; пусто — тот же ключ, что у модели (llm_api_key)
+hearing_api_key=
 
 # модель распознавания речи
 hearing_model=openai/whisper-1

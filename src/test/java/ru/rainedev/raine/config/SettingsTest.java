@@ -89,4 +89,36 @@ class SettingsTest {
 
         assertEquals("known=1\n", Files.readString(file));
     }
+
+    @Test
+    void valueInheritedFromASecretIsNeverAppended(@TempDir Path dir) throws IOException {
+        // ключ модели может прийти из переменной среды; дописать его в файл
+        // под другим именем — значит оставить секрет на диске молча
+        Path file = fileWith(dir, "llm_api_key=sekret-kluch\n");
+        Settings settings = Settings.read(file);
+        String voiceKey = settings.inherit("voice_api_key",
+                settings.require("llm_api_key", "ключ модели"), "ключ синтеза речи");
+
+        settings.sync();
+
+        assertEquals("sekret-kluch", voiceKey);
+        String written = Files.readString(file);
+        assertFalse(written.contains("voice_api_key"), "унаследованное не дописывается: " + written);
+    }
+
+    @Test
+    void ownValueWinsOverInheritedOne(@TempDir Path dir) throws IOException {
+        Settings settings = Settings.read(fileWith(dir, "voice_api_key=свой\n"));
+
+        assertEquals("свой", settings.inherit("voice_api_key", "общий", "ключ синтеза речи"));
+    }
+
+    @Test
+    void blankValueMeansTakeTheOneFromTheOtherSetting(@TempDir Path dir) throws IOException {
+        // образец в примере конфига легко оставить незакрытым: пустая строка
+        // должна означать «как у модели», а не «иди запроси с пустым ключом»
+        Settings settings = Settings.read(fileWith(dir, "voice_api_key=\n"));
+
+        assertEquals("общий", settings.inherit("voice_api_key", "общий", "ключ синтеза речи"));
+    }
 }

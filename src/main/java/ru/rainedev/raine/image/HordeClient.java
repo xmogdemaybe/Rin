@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.ErrorNote;
 
 /**
  * Генерация картинок на общей сети добровольцев: работа ставится в очередь,
@@ -222,7 +223,7 @@ public final class HordeClient {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
                 throw new IllegalStateException("Очередь отказала (%d): %s"
-                        .formatted(response.statusCode(), response.body()));
+                        .formatted(response.statusCode(), ErrorNote.of(response.body())));
             }
             return mapper.readTree(response.body());
         } catch (InterruptedException e) {

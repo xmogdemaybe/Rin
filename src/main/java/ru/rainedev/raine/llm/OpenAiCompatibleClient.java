@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.ErrorNote;
 import ru.rainedev.raine.config.Config;
 
 /**
@@ -304,7 +305,8 @@ public final class OpenAiCompatibleClient implements LlmClient {
                     return response.body();
                 }
                 LlmFailure failure = new LlmFailure(response.statusCode(),
-                        "Ошибка эндпоинта (%d): %s".formatted(response.statusCode(), response.body()));
+                        "Ошибка эндпоинта (%d): %s".formatted(
+                                response.statusCode(), ErrorNote.of(response.body())));
                 if (!failure.retryable()) {
                     if (failure.requiresOperator()) blocked = failure;
                     throw failure;

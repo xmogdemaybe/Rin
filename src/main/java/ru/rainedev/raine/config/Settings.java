@@ -67,6 +67,22 @@ public final class Settings {
         return props.getProperty(key, fallback);
     }
 
+    /**
+     * Настройка, значение которой по умолчанию берётся из другой настройки.
+     * В файл она не дописывается: значение чужой настройки может оказаться
+     * ключом, а ключ из переменной среды не должен переезжать в config.properties.
+     * Пустая строка в файле означает «как у настройки, от которой зависим».
+     */
+    public String inherit(String key, String fallback, String comment) {
+        known.put(key, new Known(comment, null));
+        String env = System.getenv("RAINE_" + key.toUpperCase());
+        if (env != null && !env.isBlank()) {
+            return env;
+        }
+        String own = props.getProperty(key);
+        return own == null || own.isBlank() ? fallback : own;
+    }
+
     public int integer(String key, int fallback, String comment) {
         return Integer.parseInt(number(key, String.valueOf(fallback), comment));
     }

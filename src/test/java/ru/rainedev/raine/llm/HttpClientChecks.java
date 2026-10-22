@@ -23,11 +23,12 @@ public final class HttpClientChecks {
         final List<Duration> delays = new ArrayList<>();
         String retryAfter = "0";
         boolean offline;
+        String errorBody = "endpoint error";
         @Override public HttpResponse<String> send(HttpRequest request) throws IOException {
             sent++;
             if (offline) throw new IOException("offline");
             int status = codes.isEmpty() ? 200 : codes.remove();
-            String body = status == 200 ? "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}" : "endpoint error";
+            String body = status == 200 ? "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}" : errorBody;
             check(request.method().equals("POST") && request.headers().firstValue("Authorization").orElse("").equals("Bearer fake-key"), "request changed");
             return new Reply(status, body, request, HttpHeaders.of(Map.of("Retry-After", List.of(retryAfter)), (a, b) -> true));
         }
@@ -72,9 +73,24 @@ public final class HttpClientChecks {
         check(OpenAiCompatibleClient.retryDelay("garbage", 2).equals(Duration.ofSeconds(4)), "invalid header broke backoff");
         check(OpenAiCompatibleClient.retryDelay("-1", 1).equals(Duration.ofSeconds(2)), "negative header broke backoff");
     }
+    public static void gatewayEchoOfTheKeyIsNotRepeatedAnywhere() {
+        // текст ошибки уходит в журнал, в data/pending и в контекст модели:
+        // эхо ключа из тела ответа не должно проехать ни в один из трёх
+        Transport transport = new Transport();
+        transport.codes.add(400);
+        transport.errorBody = "{\"detail\":\"Invalid api_key: sk-or-v1-abcdefghijklmnop0123456789ABCDEF\"}";
+        try {
+            transport.client().chat("test", List.of(), null);
+            throw new AssertionError("400 swallowed");
+        } catch (LlmFailure error) {
+            check(!error.getMessage().contains("sk-or-v1"), "ключ из тела ответа уехал в текст ошибки");
+            check(error.getMessage().contains("api_key"), "причину ошибки вырезать нельзя: " + error.getMessage());
+        }
+    }
     public static void main(String[] args) {
         rateLimitRetriesRequest(); paymentStopsSharedClientIncludingEmbeddings(); serverFailureRemainsRetryableAfterExhaustion();
         networkAndPermanentErrorsHaveDifferentPolicies(); malformedRetryAfterUsesBackoff();
-        System.out.println("HTTP client checks passed: 5");
+        gatewayEchoOfTheKeyIsNotRepeatedAnywhere();
+        System.out.println("HTTP client checks passed: 6");
     }
 }
