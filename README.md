@@ -18,10 +18,6 @@
   Русская версия: <a href="README_RU.md">README_RU.md</a>
 </p>
 
-<!-- TODO(owner): a recording of her actually working goes here — link or file. -->
-
-> (Demo recording lands here.)
-
 ---
 
 > [!WARNING]
@@ -133,9 +129,7 @@ Ideas rather than lines of code:
 - moeru-ai/airi, plast-mem and the other companion-and-memory projects — ideas
   and docs.
 
-<!-- TODO(owner): write in your own words which models and tools wrote the fork's
-     code, and that he stayed the director and the tester. He asked to keep this
-     wording for himself (R4), so the slot is empty. -->
+> **TODO(owner):** in his own words — which models and tools wrote this fork's code.
 
 ---
 
