@@ -18,7 +18,10 @@ public final class WebSearch {
 
     private static final Logger log = LoggerFactory.getLogger(WebSearch.class);
 
-    private static final int MAX_RESULTS = 5;
+    static final int MAX_RESULTS = 5;
+
+    /** Сколько чужого текста уходит в контекст на один результат. */
+    static final int MAX_SNIPPET = 2000;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
@@ -73,18 +76,41 @@ public final class WebSearch {
     /**
      * Заголовки и текст приходят с чужого сайта: без оглядки они закрывают
      * блок результата и продолжают разбор уже своей фразой.
+     * <p>
+     * Ограничен и размер: эндпоинт может вернуть не пять строк, а пять полных
+     * страниц, а инструментный ответ уходит в контекст как есть. Простыня
+     * посреди хода стоит ей всего разговора — контекст переполнится, и он
+     * свалится в дневник.
+     * <p>
+     * Видна пакету: мерить размер чужого ответа можно и без поднятой сети.
      */
-    private static String render(JsonNode results, String query) {
+    static String render(JsonNode results, String query) {
         if (!results.isArray() || results.isEmpty()) {
             return "Nothing found on the web for: " + query;
         }
         StringBuilder out = new StringBuilder();
+        int kept = 0;
         for (JsonNode result : results) {
+            if (kept == MAX_RESULTS) {
+                log.warn("Веб-поиск вернул больше {} результатов — остальные отброшены", MAX_RESULTS);
+                break;
+            }
             out.append("<web_search_result title=\"%s\" url=\"%s\">\n%s\n</web_search_result>\n".formatted(
                     Markup.attribute(result.path("title").asText("")),
                     Markup.attribute(result.path("url").asText("")),
-                    Markup.body(result.path("content").asText(""))));
+                    Markup.body(snippet(result.path("content").asText("")))));
+            kept++;
         }
         return out.toString();
+    }
+
+    /** Кусок чужой страницы: дальше смыслов уже нет, а токены есть. */
+    private static String snippet(String content) {
+        String text = content.strip();
+        if (text.length() <= MAX_SNIPPET) {
+            return text;
+        }
+        int cut = text.lastIndexOf(' ', MAX_SNIPPET);
+        return (cut > 0 ? text.substring(0, cut) : text.substring(0, MAX_SNIPPET)) + "…";
     }
 }
