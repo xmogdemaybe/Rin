@@ -290,7 +290,7 @@ public final class Recall {
             alreadyGiven.add(candidate.entry().id());
             taken++;
             found.append("<memory_piece matched_by=\"words\">\n%s\n</memory_piece>\n"
-                    .formatted(candidate.entry().body()));
+                    .formatted(Markup.body(candidate.entry().body())));
         }
         if (taken > 0) {
             log.info("По запросу «{}» по совпадению слов вспомнилось записей: {}", cue, taken);
