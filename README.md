@@ -1,236 +1,151 @@
-# Rin
-
-Телеграм-компаньон, который живёт в обычном аккаунте, а не в боте.
-
-Она не ждёт команд. У неё есть память о том, что было неделю назад, время суток
-и погода за окном, свой сон по ночам, привычка иногда написать первой и —
-при желании — голос, зрение и фотоаппарат.
-
-## Видео с работой
-
-<!-- TODO(владелец): вставить сюда запись с работой — ссылку или файл. -->
-
-> (Запись с работой появится здесь.)
-
-## Откуда это взялось
-
-Это переписанная на Java версия [**Alex2772/kuni**](https://github.com/Alex2772/kuni) —
-проекта, где всё это придумано и доказано на C++20. Идея, устройство памяти,
-разговор с моделью через «телефон» вместо API, ночная пересборка воспоминаний —
-всё оттуда, и автору за это спасибо.
-
-Переписано не потому, что с оригиналом что-то не так. Просто Java мне ближе:
-я на ней читаю и правлю код быстрее, а вещь, с которой живёшь каждый день,
-хочется понимать целиком.
-
-Код здесь написан заново, но промпты и решения выросли из оригинала — считайте
-это его продолжением на другом языке.
+<div align="center">
+  <img src="assets/rin-icon.jpg" width="220" alt="Rin">
+  <h1>Rin (りん)</h1>
+</div>
 
 ---
 
-## Как это устроено
+<p align="center">
+  A Telegram companion that lives next to you and keeps passing as a human.
+</p>
 
-Всё вращается вокруг одного цикла: **уведомление → мысли → действия → wait**.
+<p align="center">
+  A fork of a fork, with the extras I decided were worth having — and, honestly,
+  with a plain wish to spend the time on it.
+</p>
 
-Пришло сообщение — она получает уведомление, в котором нет самого текста, только
-от кого. Чтобы прочитать, надо открыть чат: ровно как человеку надо взять телефон.
-Дальше она сама решает, что делать — ответить, поставить реакцию, промолчать,
-переслать другу, записать голосовое. Ход заканчивается, когда она говорит
-«всё, дальше жду».
+<p align="center">
+  Русская версия: <a href="README_RU.md">README_RU.md</a>
+</p>
 
-Инструменты появляются по ходу дела. Пока чат не открыт, отправлять некуда;
-в канале инструмента отправки нет вовсе — не потому, что её попросили туда
-не писать, а потому что его физически нет.
+<!-- TODO(owner): a recording of her actually working goes here — link or file. -->
 
-Подробнее — [docs/architecture.md](docs/architecture.md) про устройство,
-[docs/features.md](docs/features.md) про то, что она умеет, и
-[docs/persona-checks.md](docs/persona-checks.md) — реплики, которыми характер
-сверяют вручную после правок промптов.
-
-### Память
-
-Три слоя, как у человека:
-
-| | что помнит | как живёт |
-|---|---|---|
-| **разговор** | что говорили только что | в оперативной памяти, до переполнения |
-| **средняя память** | обещания, дела, состояние, кто есть кто | файл, пересобирается моделью |
-| **дневник** | всё остальное, месяцами | markdown-записи с векторами |
-
-Когда разговор распухает, он не выбрасывается, а пересказывается в дневник.
-Оттуда нужное само всплывает в следующих разговорах — по смыслу, а не по
-ключевым словам. Ночью, во сне, близкие записи сводятся вместе и переписываются
-заново: то, что подтвердилось, крепнет; то, что оказалось выдумкой, забывается.
-
-### Живость
-
-Мелочи, из которых складывается ощущение живого человека:
-
-- **сон** — ложится между 23:00 и 01:00, встаёт между 06:00 и 09:00, каждый раз
-  по-новому. Ночью не отвечает никому, кроме владельца;
-- **отлучки** — изредка отходит среди дня на 15–120 минут;
-- **ритм печати** — пауза соразмерна длине реплики, а «печатает…» видно всё время,
-  пока она занята;
-- **опечатки** — редко, и она их сама замечает: либо правит сообщение, либо
-  дописывает следом «*слово»;
-- **порывы** — раз в 27–47 минут может вспомнить что-то своё и написать первой;
-- **повторы** — если новая реплика слишком похожа на уже сказанное, ход
-  откатывается: живой человек в такой момент просто молчит.
+> (Demo recording lands here.)
 
 ---
 
-## Запуск
+> [!WARNING]
+> This project runs as a **userbot** — on a real account, not the Bot API.
+> Telegram's ToS says no. Everything you do with this project from here on is
+> at your own risk. The author takes no responsibility.
 
-Нужны:
+---
+
+## Install
+
+You need:
 
 - **Java 25**;
-- **api_id / api_hash** с [my.telegram.org](https://my.telegram.org) — это обычный
-  аккаунт Telegram, не бот;
-- доступ к модели формата OpenAI (подойдёт любой посредник).
+- **api_id / api_hash** from [my.telegram.org](https://my.telegram.org) — this is
+  a regular Telegram account, not a bot;
+- access to an OpenAI-shaped model (any proxy in front of one works).
 
-Больше ничего ставить не нужно: звук, видео и голос разбираются своими силами,
-внешних программ бот не зовёт.
+Nothing else to install: audio, video and voice are handled in-house, the bot
+never shells out to anything.
 
 ```bash
 git clone https://github.com/xmogdemaybe/Rin rin && cd rin
 
-cp config.properties.example config.properties   # заполнить первые семь строк
-cp -r prompts-example prompts                    # характер: правится как хочется
+cp config.properties.example config.properties   # fill in the first seven lines
+cp -r prompts-example prompts                    # her personality, edit freely
 
 ./gradlew run
 ```
 
-При первом запуске Telegram спросит код подтверждения — он вводится в консоль.
-Дальше сессия хранится в `session/`, и заново это не понадобится.
+The first run asks Telegram for a confirmation code — you type it into the
+terminal. After that the session lives in `session/` and you won't be asked again.
 
-**Сразу после установки включён режим `read_only=true`**: она думает, но ничего
-не отправляет и даже не помечает сообщения прочитанными. Посмотрите лог, убедитесь,
-что всё разумно, и только потом выключайте.
+**Right after install she runs with `read_only=true`**: she thinks, but sends
+nothing and doesn't even mark messages as read. Read the log, make sure it all
+looks sane, and only then turn it off.
 
-### Что стоит поправить в настройках
+### Worth tweaking
 
 ```properties
-lockdown=owner_only        # кому она вообще отвечает: owner_only, contacts, none
-read_only=true             # снять, когда убедитесь, что она ведёт себя прилично
-night_sleep=true           # спит ли по ночам
-sleep_consolidation=false  # пересматривать ли память во сне (переписывает дневник!)
-character_growth_enabled=false  # рост личности: днём заметки о себе, ночью закрепляются
+lockdown=owner_only        # who she answers at all: owner_only, contacts, none
+read_only=true             # drop this once you trust how she behaves
+night_sleep=true           # does she sleep at night
+sleep_consolidation=false  # revisit memory while asleep (it rewrites the diary!)
+character_growth_enabled=false  # personality growth: notes by day, kept by night
 ```
 
-> Рост личности привязан к ночному сну. Если `night_sleep=false`, ночной
-> проход не вызывается вовсе: заметки о себе продолжают копиться в дневнике,
-> а `prompts/character_growth.md` не обновляется, пока ночи не вернут.
+> Personality growth is tied to night sleep. With `night_sleep=false` the night
+> pass never runs at all: notes about herself keep piling up in the diary and
+> `prompts/character_growth.md` stays as it is until you bring the nights back.
 
-Файл читается на ходу. Без перезапуска меняются круг общения, повадки, антиповтор,
-подмешивание дневника, запись LLM-запросов, лимиты и включение консолидации,
-рост личности и счёт доверия.
-Изменения модели, ключа API, расписания сна и остальных параметров требуют перезапуска;
-бот перечисляет их в журнале. Недостающие настройки
-дописываются в него сами, с пояснением к каждой — заглядывать в исходники,
-чтобы узнать про новую настройку, не придётся.
+The config is re-read while running. Who she talks to, her habits, the
+anti-repeat guard, diary blending, LLM request logging, limits, consolidation,
+personality growth and the trust counter all change without a restart. Model,
+API key, sleep schedule and the rest do need one — she lists them in the log.
+Missing settings get appended to the file on their own, each with a note, so you
+don't have to read the source to find out about a new option.
 
-### Как остановить
-
-Только сигналом — `Ctrl+C` или `kill -TERM`:
-
-```
-Останавливаюсь. Дайте время сохранить разговор
-Заканчиваю: новых уведомлений больше не беру
-Всё сохранено, до встречи
-```
-
-Она доводит начатый ход до конца и переносит разговор в память. Убийство через
-`kill -9` теряет всё, что было сказано с последней записи в дневник.
-
----
-
-## Полезное
+### Handy
 
 ```bash
-./gradlew run --args="recall поездка на море"   # что она вспомнит по запросу
-./gradlew run --args="peek"                     # чаты её глазами, ничего не делая
-./gradlew test                                  # проверки
-./gradlew run -Praine.log=DEBUG                 # подробности: отсев, замеры памяти
+./gradlew run --args="recall train trip to the sea"   # what she'd remember
+./gradlew run --args="peek"                           # chats through her eyes, hands off
+./gradlew test                                        # checks
+./gradlew run -Praine.log=DEBUG                       # details: filtering, memory sizes
 ```
 
-Каждый запрос к модели и ответ на него ложатся в `logs/llm/` парой файлов —
-когда она отвечает странно, разбираться проще всего именно там.
+Every request to the model and its answer land in `logs/llm/` as a pair of
+files. When she answers oddly, that's the place to look first.
+
+### Not in this repo
+
+Private things stay on the machine: `config.properties` (keys and phone number),
+`prompts/` (the living personality — samples are in `prompts-example/`), `data/`
+(diary and mid-term memory), `session/` (the Telegram session), `cache/`, `logs/`.
 
 ---
 
-## Что не в репозитории
+## How it works
 
-Личное остаётся на машине:
+The mechanics live in [`docs/`](docs). If you want to know how it all works
+under the hood, go there — or ask the author of the fork this one started from:
+[fenixvd/Raine](https://github.com/fenixvd/Raine). This is a fork of a fork, so
+not much has changed under the hood, apart from a few tricks that are written up
+there as well.
 
-- `config.properties` — ключи и телефон;
-- `prompts/` — живой характер (образцы лежат в `prompts-example/`);
-- `data/` — дневник и средняя память;
-- `session/` — сессия Telegram;
-- `cache/`, `logs/`.
+Docs are in Russian for now.
 
 ---
 
-## Предупреждение
+## Credits
 
-Это **юзербот**: он работает от лица живого аккаунта. Telegram такое не
-приветствует, и за слишком резвое поведение аккаунт можно потерять. Поэтому
-здесь есть ограничитель обращений, паузы и человеческий ритм — не для красоты.
-Заводите отдельный номер и не убирайте ограничения.
+<div align="center">
+  <img src="assets/credits.jpg" width="640" alt="Special thanks">
+</div>
 
-Модель видит переписку тех чатов, которые открывает. Прежде чем расширять круг
-общения, подумайте, чью переписку вы отправляете наружу.
+Where the code comes from, where the ideas come from, and what Rin and I thank
+you for:
 
-## Защита памяти и восстановление после ошибок
+- [fenixvd/Raine](https://github.com/fenixvd/Raine) — the Java codebase this
+  fork starts from;
+- [Alex2772/kuni](https://github.com/Alex2772/kuni) — the original: the idea, the
+  memory design, and talking to the model through a "phone" instead of an API.
 
-Ночная консолидация проходит исходные записи один раз за ночь. Она ограничена
-`sleep_consolidation_minutes` (30 минут), `sleep_consolidation_max_requests`
-(20 логических запросов, включая эмбеддинги) и `sleep_consolidation_max_tokens`
-(100000 токенов ответов и подсказок). Последний ответ может пересечь порог;
-после этого новые запросы не начинаются. Внутренние HTTP-повторы клиента входят
-в один логический запрос. Настройки подхватываются без перезапуска, выключение
-проверяется между запросами; уже начатый запрос ограничен HTTP-таймаутом.
-Исходники архивируются только после успешного сохранения всей замены или
-явного решения о забывании. Память записывается через атомарное переименование.
+Ideas rather than lines of code:
 
-Временные ошибки сети, HTTP 408/429 и 5xx допускают ограниченные повторы.
-Продолжение сохраняет контекст и уже выполненные действия текущего хода.
-Необработанные уведомления вместе с контекстом сохраняются в
-`data/pending/failed-notifications/` (каталог рядом с дневником); они не
-отправляются автоматически при перезапуске, чтобы не повторить внешние действия.
-Ошибки 401/402/403 приостанавливают запросы общего LLM-клиента и обработку
-уведомлений до перезапуска после исправления доступа или баланса.
-Если в день пересказа не ответила служба эмбеддингов, записи сохраняются
-без вектора и досчитываются при первом же поиске — день памяти не пропадает.
+- [Dem0riaN/kuni](https://github.com/Dem0riaN/kuni) — the knowledge that MTProto
+  proxy support can be switched on through the library itself;
+- moeru-ai/airi, plast-mem and the other companion-and-memory projects — ideas
+  and docs.
 
-## Лицензия
+<!-- TODO(owner): write in your own words which models and tools wrote the fork's
+     code, and that he stayed the director and the tester. He asked to keep this
+     wording for himself (R4), so the slot is empty. -->
 
-MIT на код этого репозитория — см. [LICENSE](LICENSE).
+---
 
-У оригинального [Alex2772/kuni](https://github.com/Alex2772/kuni) лицензии нет,
-поэтому промпты и всё, что выросло прямо из него, остаются на его условиях.
-Если планируете что-то делать с этим всерьёз — спросите автора оригинала.
+## License
 
-## Благодарности
+This repository is MIT, exactly like the project this fork was cut from:
+[fenixvd/Raine](https://github.com/fenixvd/Raine) (see [LICENSE](LICENSE)).
 
-<!-- TODO(владелец): сюда встанет сгенерированная картинка с благодарностями.
-     Список ниже — подсказка, кого он закрывает; картинка его не отменяет. -->
-
-> (Картинка с благодарностями появится здесь.)
-
-Откуда взят код:
-
-- [fenixvd/Raine](https://github.com/fenixvd/Raine) — Java-код-база, с которой
-  начинается этот форк;
-- [Alex2772/kuni](https://github.com/Alex2772/kuni) — первоисточник: идея,
-  устройство памяти и разговор с моделью через «телефон» вместо API.
-
-Откуда взяты идеи, а не строчки:
-
-- [Dem0riaN/kuni](https://github.com/Dem0riaN/kuni) — знание о том, что
-  MTProto-прокси можно включить средствами самой библиотеки;
-- moeru-ai/airi, plast-mem и другие проекты про компаньонов и память — идеи
-  и документация.
-
-<!-- TODO(владелец): вписать своими словами, какие модели и инструменты писали
-     код форка и что он оставался постановщиком и тестером. Формулировку
-     владелец просил оставить за собой (R4), поэтому слот пустой. -->
+The source project, [Alex2772/kuni](https://github.com/Alex2772/kuni), ships no
+license, so in theory you'd ask first. I doubt that staying open source, not
+claiming the original code as yours and naming the source in the credits is the
+kind of thing that needs permission. I'm fearless — I'm playing with trinkets.
+I wouldn't advise you to be.
