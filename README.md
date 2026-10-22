@@ -104,6 +104,9 @@ under the hood, go there — or ask the author of the fork this one started from
 not much has changed under the hood, apart from a few tricks that are written up
 there as well.
 
+What this fork actually adds on top — its own tricks and fixes — is collected in
+[docs/fork-features.md](docs/fork-features.md).
+
 Docs are in Russian for now.
 
 ---
