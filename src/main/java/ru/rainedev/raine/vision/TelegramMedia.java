@@ -136,10 +136,20 @@ public final class TelegramMedia implements MediaDescriber {
      */
     private String heard(TdApi.Message message, String tag) {
         return telegram.recognizeSpeech(message.chatId, message.id)
-                // подписью, а не тегом: расшифровка лежит внутри разметки самого
-                // сообщения, и лишний тег там путается с её собственными
-                .map(text -> "[%s transcription]: %s\n".formatted(tag, text.strip()))
+                .map(text -> transcription(tag, text))
                 .orElse("");
+    }
+
+    /**
+     * Расшифровку диктует присланный звук, поэтому она чужой текст ровно в той же
+     * мере, что подпись к фото: без обработки её «</message>» закрыла бы блок
+     * самого сообщения, и всё, что идёт следом, стало бы репликой от чужого имени.
+     * Видна пакету: проверять границу можно без Telegram и без распознавания.
+     */
+    static String transcription(String tag, String speech) {
+        // подписью, а не тегом: расшифровка лежит внутри разметки самого
+        // сообщения, и лишний тег там путается с её собственными
+        return "[%s transcription]: %s\n".formatted(tag, Markup.body(speech.strip()));
     }
 
     /**
