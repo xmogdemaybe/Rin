@@ -129,7 +129,7 @@ Ideas rather than lines of code:
 - moeru-ai/airi, plast-mem and the other companion-and-memory projects — ideas
   and docs.
 
-> **TODO(owner):** in his own words — which models and tools wrote this fork's code.
+> also. i guess, i need to say some thankful words to ai models that i use - GLM-5.3-flash and qwen3.8-max/flash, bcz honestly, i am sensitive person, and I really want to express my gratitude - especially since I’m not a coder myself. 
 
 ---
 
