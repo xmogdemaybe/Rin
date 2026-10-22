@@ -1,6 +1,9 @@
 package ru.rainedev.raine.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,5 +75,30 @@ public final class Numbers {
     /** @param fallback чем заменить, если прочитать не вышло */
     public static long longAt(JsonNode arguments, String field, long fallback) {
         return longAt(arguments, field).orElse(fallback);
+    }
+
+    /**
+     * Список идентификаторов в одном поле: модель пишет их то через запятую,
+     * то через пробел, то настоящим JSON-списком. Мусорное слово среди номеров
+     * пропускаем, а не выбрасываем весь запрос; числа в научной записи читаем
+     * так же, как в одиночном поле, — иначе id молча терялись и удаление
+     * промахивалось мимо сообщения.
+     */
+    public static List<Long> idsAt(JsonNode arguments, String field) {
+        List<Long> ids = new ArrayList<>();
+        JsonNode given = arguments == null ? null : arguments.get(field);
+        if (given == null || given.isNull() || given.isMissingNode()) {
+            return ids;
+        }
+        if (given.isArray()) {
+            for (JsonNode item : given) {
+                longFrom(item).ifPresent(ids::add);
+            }
+            return ids;
+        }
+        for (String part : given.asText("").split("[,;\\s]+")) {
+            longFrom(JsonNodeFactory.instance.textNode(part)).ifPresent(ids::add);
+        }
+        return ids;
     }
 }

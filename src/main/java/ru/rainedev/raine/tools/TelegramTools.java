@@ -26,6 +26,13 @@ public final class TelegramTools {
     /** Столько сообщений подряд — уже не разговор, а поток. */
     private static final int MAX_IN_A_ROW = 10;
 
+    /**
+     * Столько идентификаторов принимаем за один вызов. Правка и удаление
+     * обратимы лишь частично, а список на сотню номеров — это зачистка
+     * переписки, до которой легко дойти одной фразой постороннего.
+     */
+    private static final int MAX_IDS_IN_ONE_GO = 10;
+
     /** Насколько настойчиво просить разбивать длинные реплики. */
     private static final double SPLIT_NUDGE = 0.3;
 
@@ -46,8 +53,7 @@ public final class TelegramTools {
     /** Шире окно делать нельзя: контекст затопит. */
     private static final int MAX_AROUND = 25;
 
-    /** Столько стикеров помещается в избранном и недавних. */
-
+    /** Столько контактов показываем разом: длиннее — простыня, а не список. */
     private static final int CONTACT_LIMIT = 50;
 
     /** Длиннее превью в списке чатов не нужно. */
@@ -890,16 +896,15 @@ public final class TelegramTools {
                 .optionalString("comment", "Optional. Your reaction, sent right after the forwarded message.")
                 .build(arguments -> {
                     long toChatId = Numbers.longAt(arguments, "to_chat_id", 0);
-                    List<Long> ids = new java.util.ArrayList<>();
-                    for (String part : arguments.path("message_id").asText("").split("[,\\s]+")) {
-                        try {
-                            ids.add(Long.parseLong(part.strip()));
-                        } catch (NumberFormatException ignored) {
-                            // мусор среди идентификаторов пропускаем
-                        }
-                    }
+                    List<Long> ids = Numbers.idsAt(arguments, "message_id");
                     if (ids.isEmpty()) {
                         return "Provide the id of the message to forward.";
+                    }
+                    if (tooMany(ids)) {
+                        // поделиться постом и вывалить чат целиком — разные поступки,
+                        // и границы между ними в этом инструменте не было
+                        return "That is too much to share at once. Forward up "
+                                + MAX_IDS_IN_ONE_GO + " messages, and say what they are about.";
                     }
                     // получатель тоже должен быть в круге общения: иначе переписку
                     // можно переслать кому угодно в обход ограничения
@@ -946,6 +951,11 @@ public final class TelegramTools {
                     if (existing.isEmpty()) {
                         return "There is no such message in this chat. Check the message_id.";
                     }
+                    // правка чужого сообщения — не «*опечатка», а подмена чужих
+                    // слов; Telegram обычно отказывает, но отказ должен объяснять
+                    if (!isHers(existing.get(), telegram.myId())) {
+                        return "That message is not yours. You can only edit what you sent.";
+                    }
                     long realId = existing.get().id;
                     // у подписи к снимку правится не текст, а именно подпись
                     boolean isMedia = !(existing.get().content instanceof TdApi.MessageText);
@@ -964,22 +974,26 @@ public final class TelegramTools {
                 .requiredString("message_id", "Id of your message, or several ids separated by commas")
                 .build(arguments -> {
                     // модель порой хочет убрать сразу несколько своих реплик
-                    List<Long> ids = new java.util.ArrayList<>();
-                    for (String part : arguments.path("message_id").asText("").split("[,\\s]+")) {
-                        try {
-                            ids.add(Long.parseLong(part.strip()));
-                        } catch (NumberFormatException ignored) {
-                            // мусор среди идентификаторов пропускаем
-                        }
-                    }
+                    List<Long> ids = Numbers.idsAt(arguments, "message_id");
                     if (ids.isEmpty()) {
                         return "Provide the id of the message to delete.";
+                    }
+                    if (tooMany(ids)) {
+                        return "That is a wall of messages, not a take-back. Remove up "
+                                + MAX_IDS_IN_ONE_GO + " at a time.";
                     }
                     // проверяем до удаления: сообщения из другого чата удалять нечем,
                     // а промах по номеру иначе выглядел бы как успех
                     for (long id : ids) {
-                        if (telegram.message(chatId, id).isEmpty()) {
+                        java.util.Optional<TdApi.Message> found = telegram.message(chatId, id);
+                        if (found.isEmpty()) {
                             return "Message " + id + " is not in this chat.";
+                        }
+                        // «своё» обещано в описании инструмента: в группе с правами
+                        // администратора чужие сообщения тоже удаляются, и одного
+                        // намёка постороннего хватило бы стереть всё вокруг неё
+                        if (!isHers(found.get(), telegram.myId())) {
+                            return "Message " + id + " is not yours. You can only remove what you sent.";
                         }
                     }
                     ids.forEach(id -> {
@@ -1183,6 +1197,21 @@ public final class TelegramTools {
 
     private static long senderOf(TdApi.Message message) {
         return message.senderId instanceof TdApi.MessageSenderUser user ? user.userId : 0;
+    }
+
+    /**
+     * Её ли это сообщение. Править и удалять можно только своё — в групповом
+     * чате с правами администратора Telegram позволяет и чужое, поэтому тут
+     * полагаться на отказ сервера нельзя.
+     */
+    static boolean isHers(TdApi.Message message, long myId) {
+        // ноль — это служебное сообщение без автора; подставлять под неё его нельзя
+        return myId != 0 && senderOf(message) == myId;
+    }
+
+    /** Потолок на идентификаторы в одном вызове — общий для пересылки, правки и удаления. */
+    static boolean tooMany(List<Long> ids) {
+        return ids.size() > MAX_IDS_IN_ONE_GO;
     }
 
     /** Окно ограничено: слишком широкое затопит контекст и вытеснит сам разговор. */
