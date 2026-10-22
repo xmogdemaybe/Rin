@@ -101,8 +101,12 @@ public final class TelegramTools {
 
     private final ru.rainedev.raine.telegram.Lockdown lockdown;
 
-    /** Повадки из настроек: объём истории, стикеры, напоминания. */
-    private ru.rainedev.raine.config.Config.Behaviour behaviour =
+    /**
+     * Повадки из настроек: объём истории, стикеры, напоминания. Пишутся из
+     * потока следителя за файлом, читаются из потока хода — без volatile
+     * новый набор мог не дойти до инструментов.
+     */
+    private volatile ru.rainedev.raine.config.Config.Behaviour behaviour =
             new ru.rainedev.raine.config.Config.Behaviour(2000, false, true, false, true, LIVELIER_REMINDER);
 
     public void behaviour(ru.rainedev.raine.config.Config.Behaviour behaviour) {

@@ -65,16 +65,21 @@ public final class RaineApp implements AutoCloseable {
      */
     private volatile boolean telegramClosing;
 
-    private Telegram telegram;
-    private TelegramTools tools;
-    private NotificationLoop loop;
+    /**
+     * Всё это создаётся в {@link #start()}, а читается потоком обновлений
+     * Telegram, который запускается раньше. Без volatile такой поток вправе
+     * не увидеть присваивание и провалиться в пустоту посреди разговора.
+     */
+    private volatile Telegram telegram;
+    private volatile TelegramTools tools;
+    private volatile NotificationLoop loop;
     private Thread brain;
     private Rest rest;
     private Goodnights goodnights;
     private CharacterGrowth growth;
     private TelegramMedia telegramMedia;
     private Vision vision;
-    private Lockdown lockdown;
+    private volatile Lockdown lockdown;
     private TelegramActions actions;
     private ru.rainedev.raine.core.Surroundings around;
     private final java.util.Random random = new java.util.Random();
@@ -110,8 +115,8 @@ public final class RaineApp implements AutoCloseable {
                 update -> telegram.onSendFailed(update.oldMessageId,
                         update.error == null ? "причина неизвестна" : update.error.message));
         this.client = builder.build(authentication);
-        // прокси включается прежде всего: в сети, где Telegram заблокирован,
-        // иначе не будет даже кода подтверждения
+        // как только клиент есть, первым делом ставим прокси: в сети, где
+        // Telegram заблокирован, без него не дойти даже до кода подтверждения
         TelegramProxy.setup(client, config.telegramProxy());
     }
 
