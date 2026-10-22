@@ -92,8 +92,17 @@ public final class StickerTools {
                     String tail = set.stickers.length > LIMIT
                             ? "\nFirst %d of %d stickers.".formatted(LIMIT, set.stickers.length)
                             : "";
-                    return "Pack \"%s\" is yours now.\n%s%s".formatted(set.title, describe(shown), tail);
+                    return packOpened(set.title, describe(shown), tail);
                 });
+    }
+
+    /**
+     * Заголовок пака сочиняет тот, кто его собрал, а ссылку могла прислать
+     * кто угодно. Ответ инструмента модель читает как разметку — поэтому
+     * заголовок входит в него текстом, одной строкой.
+     */
+    static String packOpened(String title, String stickers, String tail) {
+        return "Pack \"%s\" is yours now.\n%s%s".formatted(Markup.attribute(title), stickers, tail);
     }
 
     /** Список с описаниями — общий вид и для своих стикеров, и для пака. */

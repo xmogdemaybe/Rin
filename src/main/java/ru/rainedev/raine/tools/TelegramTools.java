@@ -305,6 +305,19 @@ public final class TelegramTools {
     }
 
     /**
+     * Название чата придумал не он: в личном чате это имя, которое человек о себе
+     * написал, а название группы — то, что дал ему админ. Описание инструмента
+     * модель читает как указание, поэтому название входит в него одной строкой и
+     * без чужой разметки. Видно пакету: проверять можно без Telegram.
+     */
+    static String openingDescription(String rawTitle) {
+        String title = Markup.attribute(rawTitle);
+        return title.isEmpty()
+                ? "Opens the chat from the notification and shows recent messages."
+                : "Open \"" + title + "\" chat. Use this if you'd like to reply or see messages.";
+    }
+
+    /**
      * Открывает чат: показывает переписку и подменяет набор инструментов на те,
      * что доступны внутри этого чата.
      *
@@ -319,9 +332,7 @@ public final class TelegramTools {
             log.debug("Название чата {} недоступно", chatId);
         }
         return Tool.named("open")
-                .describedAs(title.isEmpty()
-                        ? "Opens the chat from the notification and shows recent messages."
-                        : "Open \"" + title + "\" chat. Use this if you'd like to reply or see messages.")
+                .describedAs(openingDescription(title))
                 .buildContextual((arguments, addTool) -> {
             TdApi.Chat chat = telegram.chat(chatId);
             if (!allowed(chat)) {
