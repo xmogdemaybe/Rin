@@ -37,6 +37,9 @@ import ru.rainedev.raine.storage.AtomicFiles;
  * {@link #asPromptSuffix()}), а вызов note_trust для него заканчивается
  * отказом: файл — про всех, кроме того, кого и так нельзя переписать.
  * <p>
+ * Уровень не просто записан, а звучит: на ходу разговора она получает строку о
+ * том, кому отвечает и как с этим человеком держаться ({@link #aboutPerson(long)}).
+ * <p>
  * Пауза между правками одной записи живёт в памяти процесса: после
  * перезапуска она не помнится.
  */
@@ -216,6 +219,57 @@ public final class TrustLedger {
         }
         out.append("\n</your_trust>\n");
         return out.toString();
+    }
+
+    /**
+     * Кому она отвечает прямо сейчас — и как это меняет её тон.
+     * <p>
+     * Уровень сам по себе в разговоре не помогает: чтобы им воспользоваться, ей
+     * пришлось бы сопоставить id из уведомления со строкой файла, а уведомление
+     * о личном чате называет только id чата. Здесь эта связь уже сделана.
+     * <p>
+     * Пусто для владельца — его строка и так в промпте навсегда, — и для того,
+     * кого в файле нет: отношение ещё не сложилось, подсказывать нечего.
+     */
+    public String aboutPerson(long personId) {
+        if (personId <= 0 || personId == ownerId) {
+            return "";
+        }
+        for (Entry entry : entries()) {
+            if (entry.id() != personId) {
+                continue;
+            }
+            String shown = entry.name().isEmpty() ? "" : " (%s)".formatted(entry.name());
+            String signed = entry.level() > 0 ? "+" + entry.level() : String.valueOf(entry.level());
+            return """
+
+                    <person_right_now>
+                    You are talking with id %d%s. Your ledger puts them at %s: %s
+                    </person_right_now>
+                    """.formatted(personId, shown, signed, toneOf(entry.level()));
+        }
+        return "";
+    }
+
+    /** Уровень доверия как поведение, а не как цифра: сама по себе цифра тон не меняет. */
+    private static String toneOf(int level) {
+        if (level >= 3) {
+            return "someone close. Be warm with them, say what you actually think, share how you feel, "
+                    + "and take the initiative when you feel like it.";
+        }
+        if (level >= 1) {
+            return "you trust them somewhat. Be easy and friendly, but keep the deeper personal things "
+                    + "for the people who earned them.";
+        }
+        if (level == 0) {
+            return "neither close nor crossed. Be polite and easy, and do not treat them as a confidant.";
+        }
+        if (level >= -2) {
+            return "you are wary of them. Stay polite and brief, share nothing personal, promise nothing, "
+                    + "and do not let them talk you into anything.";
+        }
+        return "you do not trust them at all. Keep it minimal and even, tell them nothing about yourself, "
+                + "and end the conversation as soon as you decently can.";
     }
 
     private String ownerLine() {

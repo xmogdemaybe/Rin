@@ -178,6 +178,33 @@ class TrustLedgerTest {
     }
 
     @Test
+    void trustLevelReachesThePromptAsBehaviour(@TempDir Path dir) throws Exception {
+        TrustLedger ledger = new TrustLedger(dir.resolve("trust.md"), 111, "", clock);
+        note(ledger, "{\"id\":\"4567\",\"name\":\"Вика\",\"level\":4,\"reason\":\"вытащила просто так\"}");
+        note(ledger, "{\"id\":\"9\",\"level\":-3,\"reason\":\"грубит\"}");
+
+        String close = ledger.aboutPerson(4567);
+        assertTrue(close.contains("<person_right_now>"), close);
+        assertTrue(close.contains("id 4567 (Вика)"), "она видит, кто перед ней, а не голый id");
+        assertTrue(close.contains("+4"), close);
+        assertTrue(close.contains("Be warm"), "уровень звучит как поведение, а не как цифра");
+
+        String crossed = ledger.aboutPerson(9);
+        assertTrue(crossed.contains("-3"), crossed);
+        assertTrue(crossed.contains("do not trust them at all"), crossed);
+        assertFalse(crossed.contains("Be warm"), "с тем, кто перегнул, тёплый тон неуместен");
+    }
+
+    @Test
+    void unknownPersonAndOwnerGetNoLine(@TempDir Path dir) {
+        TrustLedger ledger = new TrustLedger(dir.resolve("trust.md"), 111, "Владелец", clock);
+
+        assertEquals("", ledger.aboutPerson(9999), "отношение ещё не сложилось — подсказывать нечего");
+        assertEquals("", ledger.aboutPerson(111), "строка владельца и так в промпте навсегда");
+        assertEquals("", ledger.aboutPerson(0), "событие не про человека");
+    }
+
+    @Test
     void anUnreadableLedgerIsNeverOverwritten(@TempDir Path dir) throws Exception {
         Path broken = dir.resolve("trust.md");
         Files.createDirectory(broken);   // поломка: вместо файла — каталог

@@ -246,6 +246,9 @@ public final class RaineApp implements AutoCloseable {
                 () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix()
                         + (settings.current().trustLedgerEnabled() ? trust.asPromptSuffix() : "")),
                 always, config.contextTokenLimit());
+        // доверие смягчает поведение: на ходу разговора она знает, кому отвечает,
+        // и строка об этом человеке стоит в промпте, а не в контексте
+        loop.aboutPerson(id -> settings.current().trustLedgerEnabled() ? trust.aboutPerson(id) : "");
         DiaryMemory diaryMemory = new DiaryMemory(diary, llm,
                 config.diaryInjectionMaxLength(), config.diaryMinRelatedness());
         loop.memory(diaryMemory);
@@ -439,7 +442,7 @@ public final class RaineApp implements AutoCloseable {
         for (Goodnights.Receiver receiver : receivers) {
             Toolbox available = new Toolbox();
             available.add(tools.open(receiver.id()));
-            loop.submit(new Notification(prompt.apply(receiver), available, true));
+            loop.submit(new Notification(prompt.apply(receiver), available, true).about(receiver.id()));
         }
     }
 
@@ -698,10 +701,10 @@ public final class RaineApp implements AutoCloseable {
         boolean important = senderId == config.ownerId()
                 || (behaviour().wakeOnPinnedChat() && telegram.isPinned(chat.id));
         if (important) {
-            loop.submitFirst(new Notification(text, available));
+            loop.submitFirst(new Notification(text, available).about(senderId));
             log.info("Уведомление из чата \"{}\" — вне очереди", chat.title);
         } else {
-            loop.submit(new Notification(text, available));
+            loop.submit(new Notification(text, available).about(senderId));
             log.info("Уведомление из чата \"{}\" поставлено в очередь", chat.title);
         }
     }

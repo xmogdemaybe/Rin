@@ -21,6 +21,7 @@ class NotificationLoopTest {
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<ChatResponse> scripted = new ArrayDeque<>();
         private final List<List<Message>> seenContexts = new ArrayList<>();
+        private final List<String> seenPrompts = new ArrayList<>();
         private final List<String> toolChoices = new ArrayList<>();
         private int calls;
 
@@ -45,6 +46,7 @@ class NotificationLoopTest {
         public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
             calls++;
             seenContexts.add(List.copyOf(history));
+            seenPrompts.add(systemPrompt);
             if (!scripted.isEmpty()) {
                 return scripted.removeFirst();
             }
@@ -353,6 +355,31 @@ class NotificationLoopTest {
                 .filter(m -> m.content() != null && m.content().contains("Have you called #ask"))
                 .count();
         assertEquals(1, reminders, "напоминание уместно один раз, до обращения к памяти");
+    }
+
+    @Test
+    void thePersonOfTheTurnReachesTheSystemPrompt() {
+        // доверие меняет тон: на ходу разговора она знает, кому отвечает
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+
+        List<Long> asked = new ArrayList<>();
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.aboutPerson(id -> {
+            asked.add(id);
+            return id == 0 ? "" : "<about id=%d>".formatted(id);
+        });
+
+        loop.process(new Notification("сообщение от человека").about(777));
+        loop.process(new Notification("служебное событие"));
+
+        assertEquals(List.of(777L, 0L), asked, "каждый ход спрашивает про своего человека");
+        assertTrue(llm.seenPrompts.getFirst().contains("<about id=777>"), llm.seenPrompts.getFirst());
+        assertFalse(llm.seenPrompts.getLast().contains("<about"),
+                "событие не про человека — и дописки про человека нет");
+        assertTrue(loop.context().stream().allMatch(m -> m.content() == null || !m.content().contains("<about")),
+                "дописка живёт в промпте, а не в контексте: в пересказ для дневника ей не надо");
     }
 
     @Test

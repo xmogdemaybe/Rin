@@ -122,6 +122,13 @@ public final class NotificationLoop {
 
     private Memory memory = Memory.NONE;
 
+    /**
+     * Что дописать к системному промпту, когда известно, кому она отвечает.
+     * Доверие к человеку меняет тон — это и есть дописка. Пусто по умолчанию:
+     * не каждое событие про человека.
+     */
+    private volatile java.util.function.LongFunction<String> aboutPerson = id -> "";
+
     private Rest rest;
 
     /** Ход закончился — она отложила телефон. */
@@ -148,6 +155,10 @@ public final class NotificationLoop {
 
     public void memory(Memory memory) {
         this.memory = memory;
+    }
+
+    public void aboutPerson(java.util.function.LongFunction<String> suffix) {
+        this.aboutPerson = suffix;
     }
 
     public void rest(Rest rest) {
@@ -350,7 +361,10 @@ public final class NotificationLoop {
             }
             turn.prepared = true;
             String toolChoice = turn.forceToolCall ? LlmClient.TOOL_CHOICE_REQUIRED : LlmClient.TOOL_CHOICE_AUTO;
-            ChatResponse response = llm.chat(systemPrompt.text(), context, tools.asJson(), toolChoice);
+            // дописка про человека стоит рядом с промптом, а не в контексте: в
+            // пересказ для дневника она попасть не должна
+            ChatResponse response = llm.chat(systemPrompt.text() + aboutPerson.apply(notification.personId()),
+                    context, tools.asJson(), toolChoice);
             turn.prepared = false;
             turn.step = step + 1;
             spentTokens += response.totalTokens();
