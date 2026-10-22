@@ -86,7 +86,9 @@ public final class WebSearch {
      */
     static String render(JsonNode results, String query) {
         if (!results.isArray() || results.isEmpty()) {
-            return "Nothing found on the web for: " + query;
+            // запрос модель берёт из разговора, а разговор диктуют посторонние:
+            // голое эхо вернуло бы чужую скопку уже готовым тегом
+            return "Nothing found on the web for: " + Markup.body(query);
         }
         StringBuilder out = new StringBuilder();
         int kept = 0;

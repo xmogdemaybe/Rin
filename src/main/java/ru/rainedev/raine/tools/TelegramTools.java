@@ -752,9 +752,7 @@ public final class TelegramTools {
         List<TdApi.Chat> mine = found.mine().stream().filter(inCircle).toList();
         List<TdApi.Chat> elsewhere = found.elsewhere().stream().filter(inCircle).toList();
         if (mine.isEmpty() && elsewhere.isEmpty()) {
-            // запрос сочиняет модель, но слово в запрос она берёт из чужого
-            // сообщения: эхо без разметки вернулось бы в контекст готовым тегом
-            return "Nothing found for: " + Markup.body(query);
+            return nothingFound(query);
         }
         // разделено нарочно: со своими разговор продолжают с того места,
         // где он встал, а к чужим приходят с нуля — это разные ситуации
@@ -1138,7 +1136,7 @@ public final class TelegramTools {
                         found = telegram.searchMessages(chatId, query, senderId, limit, fromDaysAgo, toDaysAgo);
                     }
                     if (found.isEmpty()) {
-                        return "Nothing found for: " + query;
+                        return nothingFound(query);
                     }
                     // видно, показали ли всё или только верхушку: от этого зависит,
                     // стоит ли уточнять запрос
@@ -1212,6 +1210,15 @@ public final class TelegramTools {
     /** Потолок на идентификаторы в одном вызове — общий для пересылки, правки и удаления. */
     static boolean tooMany(List<Long> ids) {
         return ids.size() > MAX_IDS_IN_ONE_GO;
+    }
+
+    /**
+     * Эхо запроса, когда ничего не нашлось. Запрос сочиняет модель, но слово в
+     * него она берёт из чужого сообщения: без обработки чужая скопка вернулась
+     * бы в контекст уже готовым тегом — тот же класс, что #33 и #34.
+     */
+    static String nothingFound(String query) {
+        return "Nothing found for: " + Markup.body(query);
     }
 
     /** Окно ограничено: слишком широкое затопит контекст и вытеснит сам разговор. */
