@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Random;
@@ -23,6 +24,8 @@ class SleepConsolidationTest {
 
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<String> answers = new ArrayDeque<>();
+        /** Что уходило модели на переписку — по одному элементу на группу. */
+        final List<String> bodies = new ArrayList<>();
         int chatCalls;
 
         ScriptedLlm willAnswer(String text) {
@@ -33,6 +36,7 @@ class SleepConsolidationTest {
         @Override
         public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
             chatCalls++;
+            bodies.add(history.isEmpty() ? "" : history.get(0).content());
             String text = answers.isEmpty() ? "" : answers.removeFirst();
             Message message = new Message(Message.Role.ASSISTANT, text, List.of(), null, null);
             return new ChatResponse("id", "test", List.of(new ChatResponse.Choice(0, message, "stop")),
@@ -43,6 +47,11 @@ class SleepConsolidationTest {
         public double[] embedding(String input) {
             return new double[] {1, 0, 0};
         }
+    }
+
+    /** Сколько записей модель просили переписать одним куском. */
+    private static long entriesIn(String body) {
+        return body.lines().filter(line -> line.startsWith("{\"confidence\"")).count();
     }
 
     private SleepConsolidation consolidation(Diary diary, ScriptedLlm llm, Path archive) {
@@ -129,6 +138,47 @@ class SleepConsolidationTest {
 
         assertTrue(llm.chatCalls >= 2, "после первого прохода работа продолжается: " + llm.chatCalls);
         assertTrue(llm.chatCalls < 20, "и всё же останавливается, а не крутится всю ночь: " + llm.chatCalls);
+    }
+
+    @Test
+    void unrelatedEntriesAreNotFused(@TempDir Path dir) {
+        // векторы подобраны так, что любая пара ниже половины: это «никак не
+        // связано», и в одну переписку такое тянуть нечем
+        double[][] apart = {{1, 1, 1}, {1, -1, -1}, {-1, 1, -1}, {-1, -1, 1}};
+        Diary diary = new Diary(dir);
+        for (int i = 0; i < apart.length; i++) {
+            diary.save("Запись про разное номер " + i, apart[i]);
+        }
+        ScriptedLlm llm = new ScriptedLlm()
+                .willAnswer("{\"confidence\":0.5}\nПереписанная запись, длинная и целая.");
+
+        consolidation(diary, llm, dir.resolve("archive")).run(Duration.ofMinutes(5), () -> false);
+
+        assertFalse(llm.bodies.isEmpty(), "пересмотр был");
+        for (String body : llm.bodies) {
+            assertEquals(1, entriesIn(body), "в одну переписку попало несвязанное: " + body);
+        }
+    }
+
+    @Test
+    void groupHasAHardCeiling(@TempDir Path dir) {
+        // короткие записи предела по объёму не достигают никогда: без потолка
+        // за одну ночь сводился бы весь дневник одним куском
+        Diary diary = new Diary(dir);
+        for (int i = 0; i < 20; i++) {
+            diary.save("Коротко " + i, new double[] {1, 0, 0});
+        }
+        ScriptedLlm llm = new ScriptedLlm();
+        for (int i = 0; i < 30; i++) {
+            llm.willAnswer("{\"confidence\":0.5}\nСведённая запись номер " + i + " с запасом по длине.");
+        }
+
+        consolidation(diary, llm, dir.resolve("archive")).run(Duration.ofMinutes(5), () -> false);
+
+        assertFalse(llm.bodies.isEmpty());
+        for (String body : llm.bodies) {
+            assertTrue(entriesIn(body) <= 6, "группа выросла без потолка: " + entriesIn(body));
+        }
     }
 
     @Test

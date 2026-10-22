@@ -45,6 +45,17 @@ public final class SleepConsolidation {
     /** Такой уверенностью модель помечает то, что стоит забыть. */
     private static final double FORGET = -0.99;
 
+    /**
+     * Близость, ниже которой запись считается чужой. Шкала нормирована так, что
+     * половина — это «никак не связано»: всё, что ниже, тянуть в одну переписку
+     * незачем. Без этой границы группа дорастала до предела по объёму, а не по
+     * смыслу, и за ночь в одну запись склеивалось несвязанное.
+     */
+    private static final double MIN_RELATEDNESS = 0.5;
+
+    /** Сколько записей сводится за раз: потолок и для коротких, и для длинных. */
+    private static final int MAX_GROUP = 6;
+
     private final Diary diary;
     private final LlmClient llm;
     private final java.util.function.Supplier<String> prompt;
@@ -148,6 +159,10 @@ public final class SleepConsolidation {
 
         int length = target.body().length();
         for (Diary.Match match : diary.query(target.embedding())) {
+            // выдача отсортирована по убыванию: дальше пойдут только чужие
+            if (match.relatedness() < MIN_RELATEDNESS || group.size() >= MAX_GROUP) {
+                break;
+            }
             if (length > maxBodyLength && group.size() >= 3) {
                 break;
             }
