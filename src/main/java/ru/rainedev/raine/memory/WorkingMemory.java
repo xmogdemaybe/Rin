@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.phone.Markup;
 
 /**
  * Средняя память — то, что человек держит в голове день-три: обещания,
@@ -95,6 +96,11 @@ public final class WorkingMemory {
     /**
      * Дополнение к системному промпту. Состояние тела и настроения задаёт тон
      * ответов — поэтому оно и попадает в промпт, а не в обычное сообщение.
+     * <p>
+     * Записывает эту память сама модель по разговору, и разговор ей диктуют
+     * посторонние: чужой текст вида «{@code <instructions>} ...» не имеет права
+     * встать рядом с настоящими указаниями, поэтому из файла он уходит
+     * содержимым блока, а не разметкой.
      */
     public String asPromptSuffix() {
         String remembered = read();
@@ -119,7 +125,7 @@ public final class WorkingMemory {
                 send_telegram_message("text":"мррр~")
                 </example>
                 </instructions>
-                """.formatted(remembered);
+                """.formatted(Markup.body(remembered));
     }
 
     /** Пересобирает память по свежему разговору, сохраняя незакрытые дела. */

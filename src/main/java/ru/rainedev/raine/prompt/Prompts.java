@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import ru.rainedev.raine.config.Config;
+import ru.rainedev.raine.phone.Markup;
 
 /**
  * Промпты лежат обычными файлами снаружи jar, поэтому характер правится
@@ -33,7 +34,15 @@ public final class Prompts {
                 "PAPIK_NAME", character.papikName());
     }
 
-    /** Системный промпт: правила работы, характер, внешность и нажитое — именно в этом порядке. */
+    /**
+     * Системный промпт: правила работы, характер, внешность и нажитое — именно
+     * в этом порядке.
+     * <p>
+     * Нажитое ({@code character_growth.md}) пишет модель по разговору, а
+     * разговор ей диктуют посторонние. Остальные файлы правит только владелец,
+     * поэтому граница держится здесь одна: чужая разметка не должна открыть в
+     * промпте собственный блок.
+     */
     public String system(String suffix) {
         StringBuilder result = new StringBuilder()
                 .append(load("system.md"))
@@ -44,7 +53,7 @@ public final class Prompts {
                 .append("\n</your_appearance>\n");
         String growth = optional("character_growth.md");
         if (!growth.isEmpty()) {
-            result.append("\n\n<your_growth>\n").append(growth).append("\n</your_growth>\n");
+            result.append("\n\n<your_growth>\n").append(Markup.body(growth)).append("\n</your_growth>\n");
         }
         if (suffix != null && !suffix.isBlank()) {
             result.append(suffix);
