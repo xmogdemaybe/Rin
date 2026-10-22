@@ -36,6 +36,14 @@ public final class CharacterGrowth {
     /** Файл каждый ход уходит в контекст: длиннее — дорого. */
     public static final int MAX_LINES = 40;
 
+    /**
+     * Сколько черт уходит в один вопрос. Ответ не бывает длиннее
+     * {@link #MAX_LINES} строк, поэтому и вопрос держится в тех же рамках:
+     * за месяцы заметок набирается больше, чем влезает в ответ, файл упирается
+     * в лимит — и рост личности молча перестаёт работать, ночь за ночью.
+     */
+    public static final int MAX_GROUPS = 30;
+
     /** Повтор — это не два замечания в один вечер, а разнесённые по времени. */
     public static final Duration CORROBORATION_SPAN = Duration.ofHours(12);
 
@@ -98,6 +106,7 @@ public final class CharacterGrowth {
             log.info("Рост личности: подтверждённых черт пока нет — заметки ждут повтора");
             return false;
         }
+        List<Group> asked = strongest(worthwhile);
         String instructions = prompt.get();
         if (instructions.isBlank()) {
             log.warn("Рост личности: шаблон character_growth_pass.md пуст — шаг пропущен");
@@ -108,7 +117,7 @@ public final class CharacterGrowth {
         }
         String content;
         try {
-            content = llm.chat(instructions, List.of(Message.user(request(worthwhile))), null).text();
+            content = llm.chat(instructions, List.of(Message.user(request(asked))), null).text();
         } catch (RuntimeException e) {
             log.warn("Рост личности: проход сорвался — {}", e.getMessage());
             return false;
@@ -197,6 +206,20 @@ public final class CharacterGrowth {
             }
         }
         return groups.stream().filter(group -> confirmed(group.signals())).toList();
+    }
+
+    /** Сильнее и свежее — важнее: они и остаются, когда черт больше предела. */
+    private static List<Group> strongest(List<Group> groups) {
+        if (groups.size() <= MAX_GROUPS) {
+            return groups;
+        }
+        List<Group> sorted = new ArrayList<>(groups);
+        sorted.sort(java.util.Comparator.comparingDouble(Group::intensity).reversed()
+                .thenComparing(group -> group.signals().getLast().at(),
+                        java.util.Comparator.reverseOrder()));
+        log.info("Рост личности: подтверждённых черт {} при пределе {} — спрашиваю о самых сильных",
+                groups.size(), MAX_GROUPS);
+        return List.copyOf(sorted.subList(0, MAX_GROUPS));
     }
 
     /** Повтор — когда замечания разнесены по времени, а не идут подряд один за другим. */

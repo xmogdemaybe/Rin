@@ -115,6 +115,24 @@ class CharacterGrowthTest {
     }
 
     @Test
+    void questionDoesNotGrowWithTheDiary(@TempDir Path dir, @TempDir Path prompts) throws Exception {
+        // заметок за месяцы набирается больше, чем влезает в ответ: без предела
+        // вопрос раздувался, ответ упирался в лимит строк — и файл не переписывался
+        Diary diary = new Diary(dir);
+        for (int i = 0; i < 60; i++) {
+            note(diary, String.format("черта %03d", i), 0.9 + 0.001 * i, "2026-10-20T18:00:00Z");
+        }
+        llm.willAnswer("- короткая запись");
+
+        assertTrue(growth(dir, prompts, "инструкции").pass(() -> false));
+
+        long asked = llm.lastRequest.lines().filter(line -> line.startsWith("- ")).count();
+        assertEquals(CharacterGrowth.MAX_GROUPS, asked, "в вопрос ушло лишнее: " + asked);
+        assertTrue(llm.lastRequest.contains("черта 059"), "самая сильная остаётся");
+        assertFalse(llm.lastRequest.contains("черта 000"), "слабейшая уступает место");
+    }
+
+    @Test
     void twoNotesInOneEveningAreNotACorroboration(@TempDir Path dir, @TempDir Path prompts) {
         Diary diary = new Diary(dir);
         note(diary, "огрызаюсь на колкости", 0.5, "2026-10-20T21:00:00Z");
