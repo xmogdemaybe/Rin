@@ -145,7 +145,10 @@ public final class WorkingMemory {
             }
             String cleaned = ModelText.unwrap(content, "things_to_remember");
             if (cleaned.isBlank()) {
-                continue;
+                // пустой ответ — решение модели, а не обрыв связи: тот же вопрос
+                // ещё раз даст тот же результат, а стоит он весь разговор целиком
+                log.warn("Модель вернула пустую рабочую память — оставляю прежнюю");
+                return;
             }
             String trimmed = bounded(cleaned, "в ответе модели");
             if (trimmed.isBlank()) {

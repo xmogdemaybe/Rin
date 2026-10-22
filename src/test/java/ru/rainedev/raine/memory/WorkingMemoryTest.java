@@ -99,6 +99,7 @@ class WorkingMemoryTest {
         new WorkingMemory(file, llm, "Raine").update("промпт", CONTEXT);
 
         assertTrue(Files.readString(file).contains("Важное дело"), "прежнюю память терять нельзя");
+        assertEquals(1, llm.chatCalls, "тот же вопрос ещё раз даст тот же пустой ответ");
     }
 
     @Test
