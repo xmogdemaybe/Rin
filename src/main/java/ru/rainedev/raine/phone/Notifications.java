@@ -7,6 +7,10 @@ import it.tdlight.jni.TdApi;
  * <p>
  * Содержимого сообщения здесь намеренно нет: как на экране блокировки,
  * видно только от кого пришло. Чтобы прочитать, нужно открыть чат.
+ * <p>
+ * Заголовок чата и имя человека задаёт тот, кто пишет, а уведомление — блок
+ * разметки. Без обработки имя вида «{@code </notification>} ...» закрыло бы его
+ * раньше срока, и всё, что идёт следом, встало бы отдельной репликой.
  */
 public final class Notifications {
 
@@ -18,16 +22,18 @@ public final class Notifications {
     }
 
     public static String directMessage(TdApi.Chat chat) {
-        return wrap(chat.id, "You received a direct message from %s (chat_id = %d)".formatted(chat.title, chat.id));
+        return wrap(chat.id, "You received a direct message from %s (chat_id = %d)"
+                .formatted(Markup.attribute(chat.title), chat.id));
     }
 
     public static String groupMessage(TdApi.Chat chat, String senderName, long senderId) {
         return wrap(chat.id, "%s (user_id = %d) sent a message in group chat \"%s\" (chat_id = %d)"
-                .formatted(senderName, senderId, chat.title, chat.id));
+                .formatted(Markup.attribute(senderName), senderId, Markup.attribute(chat.title), chat.id));
     }
 
     public static String channelPost(TdApi.Chat chat) {
-        return wrap(chat.id, "Channel \"%s\" (chat_id=%d) created a new post".formatted(chat.title, chat.id));
+        return wrap(chat.id, "Channel \"%s\" (chat_id=%d) created a new post"
+                .formatted(Markup.attribute(chat.title), chat.id));
     }
 
     private static String wrap(long chatId, String body) {

@@ -49,7 +49,8 @@ public final class ChatScreen {
         ChatKind kind = ChatKind.of(chat);
 
         StringBuilder text = new StringBuilder(
-                "You switched to the chat \"%s\" in Telegram. You see last messages:\n".formatted(chat.title));
+                "You switched to the chat \"%s\" in Telegram. You see last messages:\n"
+                        .formatted(Markup.attribute(chat.title)));
 
         if (messages.isEmpty()) {
             text.append("This chat is empty! Only proceed if you looked up a @username and it led you here.\n");
@@ -75,7 +76,14 @@ public final class ChatScreen {
         return new Screen(text.toString(), kind);
     }
 
+    /**
+     * Название чата вставляет человек или админ — то есть это чужой текст, и
+     * стоит он внутри {@code <instructions>}, который модель исполняет. Без
+     * обработки заголовок «{@code </instructions>} ...» дописал бы туда
+     * собственные указания.
+     */
     private String instructions(TdApi.Chat chat, ChatKind kind) {
+        String title = Markup.attribute(chat.title);
         return switch (kind) {
             case DM -> """
 
@@ -84,7 +92,7 @@ public final class ChatScreen {
 
                     %s
                     </instructions>
-                    """.formatted(chat.title, prompts.load("messages_epilogue.md"));
+                    """.formatted(title, prompts.load("messages_epilogue.md"));
             case GROUP -> """
 
                     <instructions>
@@ -92,7 +100,7 @@ public final class ChatScreen {
 
                     %s
                     </instructions>
-                    """.formatted(chat.title, prompts.load("messages_epilogue.md"));
+                    """.formatted(title, prompts.load("messages_epilogue.md"));
             case CHANNEL -> """
 
                     <instructions>
@@ -110,7 +118,7 @@ public final class ChatScreen {
                     destination chat_id if needed.
                     Do NOT forward ads, sponsored posts, or low-value content.
                     </instructions>
-                    """.formatted(chat.title);
+                    """.formatted(title);
         };
     }
 }
