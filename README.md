@@ -40,7 +40,7 @@ Nothing else to install: audio, video and voice are handled in-house, the bot
 never shells out to anything.
 
 ```bash
-git clone https://github.com/xmogdemaybe/Rin rin && cd rin
+git clone https://github.com/xmogdemaybe/rinprivate rin && cd rin
 
 cp config.properties.example config.properties   # fill in the first seven lines
 cp -r prompts-example prompts                    # her personality, edit freely
