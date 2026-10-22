@@ -729,16 +729,33 @@ public final class TelegramTools {
                         return "Provide a name or @username to search for.";
                     }
                     Telegram.Found found = telegram.searchChats(query, SEARCH_LIMIT);
-                    if (found.isEmpty()) {
-                        return "Nothing found for: " + query;
-                    }
-                    // разделено нарочно: со своими разговор продолжают с того места,
-                    // где он встал, а к чужим приходят с нуля — это разные ситуации
-                    StringBuilder out = new StringBuilder();
-                    appendChats(out, "chats_you_are_already_in", found.mine());
-                    appendChats(out, "chats_that_do_not_know_you", found.elsewhere());
-                    return out.toString();
+                    return foundAnswer(query, found, this::allowed);
                 });
+    }
+
+    /**
+     * Ответ поиска: наружу выходят только чаты из круга общения.
+     * <p>
+     * Список чатов их прячет, открытие чата проверяет круг, но поиск обходил
+     * оба: название и идентификатор человека вне круга показывались тому, с кем
+     * заговорить разрешено. Пустой итог отвечает той же фразой, что и вообще
+     * ничего не найденный поиск — по ответу не понять, что такой чат есть.
+     */
+    static String foundAnswer(String query, Telegram.Found found,
+                              java.util.function.Predicate<TdApi.Chat> inCircle) {
+        List<TdApi.Chat> mine = found.mine().stream().filter(inCircle).toList();
+        List<TdApi.Chat> elsewhere = found.elsewhere().stream().filter(inCircle).toList();
+        if (mine.isEmpty() && elsewhere.isEmpty()) {
+            // запрос сочиняет модель, но слово в запрос она берёт из чужого
+            // сообщения: эхо без разметки вернулось бы в контекст готовым тегом
+            return "Nothing found for: " + Markup.body(query);
+        }
+        // разделено нарочно: со своими разговор продолжают с того места,
+        // где он встал, а к чужим приходят с нуля — это разные ситуации
+        StringBuilder out = new StringBuilder();
+        appendChats(out, "chats_you_are_already_in", mine);
+        appendChats(out, "chats_that_do_not_know_you", elsewhere);
+        return out.toString();
     }
 
     private static void appendChats(StringBuilder out, String tag, List<TdApi.Chat> chats) {
