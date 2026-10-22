@@ -26,6 +26,13 @@ public interface TelegramActions {
 
     void markRead(long chatId, long[] messageIds);
 
+    /**
+     * Возвращает чат в непрочитанные. Telegram хранит это отдельным флагом,
+     * а не счётчиком сообщений, и снимает флаг сам, стоит чат прочитать, —
+     * поэтому отметка не может повиснуть навечно.
+     */
+    void markUnread(long chatId);
+
     /** Индикатор «печатает…» — тоже видимое действие на аккаунте. */
     void typing(long chatId);
 
@@ -123,6 +130,11 @@ public interface TelegramActions {
         @Override
         public void markRead(long chatId, long[] messageIds) {
             throttled().send(new TdApi.ViewMessages(chatId, messageIds, null, false));
+        }
+
+        @Override
+        public void markUnread(long chatId) {
+            throttled().send(new TdApi.ToggleChatIsMarkedAsUnread(chatId, true));
         }
 
         @Override
@@ -333,6 +345,12 @@ public interface TelegramActions {
         @Override
         public void markRead(long chatId, long[] messageIds) {
             log.info("[только чтение] {} сообщений в чате {} остаются непрочитанными", messageIds.length, chatId);
+        }
+
+        @Override
+        public void markUnread(long chatId) {
+            // чат и не становился прочитанным: в безопасном режиме его не открывают
+            log.info("[только чтение] чат {} остаётся непрочитанным сам", chatId);
         }
 
         @Override

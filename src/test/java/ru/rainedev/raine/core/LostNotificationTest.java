@@ -1,6 +1,7 @@
 package ru.rainedev.raine.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -210,12 +211,126 @@ class LostNotificationTest {
         loop.submit(new Notification("тебе написали"));
 
         Thread.sleep(600);
+        assertEquals(1, loop.strandedCount(), "безнадёжное уведомление брошено совсем");
         worker.interrupt();
 
         assertTrue(llm.calls() >= 6, "попыток должно быть несколько, а вышло " + llm.calls());
         assertTrue(llm.calls() < 40, "цикл не должен долбиться в стену без остановки: " + llm.calls());
         assertEquals(0, loop.queued(), "безнадёжное уведомление не должно остаться в очереди навсегда");
-        assertEquals(1, loop.strandedCount(), "безнадёжное уведомление брошено совсем");
+    }
+
+    @Test
+    void aMessageSheNeverAnsweredLeavesItsChatUnread() throws Exception {
+        // эндпоинт отвергает сам запрос: повторять бессмысленно, уведомление
+        // потеряно. Его чат к этому моменту открыт, значит прочитан, и догон после
+        // перезапуска уже ничего не найдёт — ровно так пропало сообщение владельца
+        FlakyNetwork llm = new FlakyNetwork(1,
+                () -> new LlmFailure(400, "Ошибка эндпоинта (400): cannot parse json of messages"));
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(20));
+        UnreadMark marks = new UnreadMark();
+        marks.watch(loop);
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("Серёжа написал: привет").from(777));
+
+        Notification lost = marks.take();
+        worker.interrupt();
+        assertEquals(777, lost.chatId(), "потерянное уведомление не вернуло чат в непрочитанные");
+        assertEquals(1, marks.count(), "второй раз снимать отметку с того же чата незачем");
+    }
+
+    @Test
+    void aNotificationStillWaitingForTheModelLeavesTheChatRead() throws Exception {
+        // пять пауз кончились, уведомление отложено — но она ещё может к нему
+        // вернуться в этом же процессе. Снять отметку сейчас значило бы поднять
+        // разговор, который она собирается продолжить сама
+        FlakyNetwork llm = new FlakyNetwork(6);
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(20));
+        loop.retryPause(Duration.ofMillis(10));
+        UnreadMark marks = new UnreadMark();
+        marks.watch(loop);
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("Серёжа написал: привет").from(777));
+        for (int waited = 0; waited < 100 && loop.strandedCount() == 0; waited++) {
+            Thread.sleep(20);
+        }
+        assertEquals(1, loop.strandedCount(), "уведомление не отложено до выздоровления модели");
+        assertEquals(0, marks.count(), "отложенное уведомление сняло отметку о прочтении слишком рано");
+        worker.interrupt();
+    }
+
+    @Test
+    void whatShutdownLeavesBehindGoesBackToUnread() throws Exception {
+        // процесс выключается с отложенным уведомлением на руках: в этом процессе
+        // она к нему уже не вернётся, так что пусть ждёт догона
+        FlakyNetwork llm = new FlakyNetwork(Integer.MAX_VALUE);
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(20));
+        loop.retryPause(Duration.ofMillis(10));
+        UnreadMark marks = new UnreadMark();
+        marks.watch(loop);
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("Серёжа написал: привет").from(777));
+        for (int waited = 0; waited < 100 && loop.strandedCount() == 0; waited++) {
+            Thread.sleep(20);
+        }
+        worker.interrupt();
+
+        Notification lost = marks.take();
+        worker.join(2000);
+        assertEquals(777, lost.chatId(), "выключение бросило чат прочитанным");
+        assertEquals(0, loop.strandedCount(), "отложенное осталось висеть после остановки");
+    }
+
+    @Test
+    void aSuspendedAccountGoesBackToUnread() throws Exception {
+        // баланс кончился: до перезапуска она не ответит ни на что, и второе
+        // уведомление умирает, даже не начавшись
+        FlakyNetwork llm = new FlakyNetwork(Integer.MAX_VALUE,
+                () -> new LlmFailure(402, "Ошибка эндпоинта (402): не хватает баланса"));
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(20));
+        UnreadMark marks = new UnreadMark();
+        marks.watch(loop);
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("Серёжа написал: привет").from(777));
+        loop.submit(new Notification("Даша написала: как дела?").from(888));
+
+        assertEquals(777, marks.take().chatId());
+        assertEquals(888, marks.take().chatId(), "приостановленный чат остался прочитанным");
+        worker.interrupt();
+    }
+
+    /** Сколько чатов цикл потребовал вернуть в непрочитанные. */
+    private static final class UnreadMark {
+        private final java.util.concurrent.BlockingQueue<Notification> abandoned =
+                new java.util.concurrent.LinkedBlockingQueue<>();
+        private final java.util.concurrent.atomic.AtomicInteger seen =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        void watch(NotificationLoop loop) {
+            loop.backToUnread(notification -> {
+                seen.incrementAndGet();
+                abandoned.add(notification);
+            });
+        }
+
+        /** Ждёт пять секунд: потеря наступает не сразу, а после попыток. */
+        Notification take() throws InterruptedException {
+            Notification lost = abandoned.poll(5, TimeUnit.SECONDS);
+            assertNotNull(lost, "уведомление так и не вернуло чат в непрочитанные");
+            return lost;
+        }
+
+        /** Сколько снятий отметки было всего — take() из этого числа ничего не убавляет. */
+        int count() {
+            return seen.get();
+        }
     }
 
     /** Сколько раз реплика из уведомления стоит в контексте — дважды быть не должно. */

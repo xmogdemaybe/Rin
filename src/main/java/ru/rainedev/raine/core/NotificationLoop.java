@@ -95,6 +95,16 @@ public final class NotificationLoop {
     private boolean suspended;
     private java.util.function.BiConsumer<Notification, RuntimeException> onFailure = (n, e) -> {};
 
+    /**
+     * Что сделать с чатом уведомления, которое потеряно навсегда. Само по себе
+     * потерянное уведомление не видно: чат открыт, значит прочитан, и при
+     * следующем запуске догон его не найдёт.
+     */
+    private volatile java.util.function.Consumer<Notification> backToUnread = notification -> {};
+
+    /** Чем обернулся отказ: новая попытка, ожидание пока эндпоинт оживёт, или потеря. */
+    private enum Loss { RETRY, PARKED, LOST }
+
     private static final class Turn {
         final Notification notification;
         final long startedAt = System.currentTimeMillis();
@@ -110,6 +120,11 @@ public final class NotificationLoop {
 
     public void onNotificationFailed(java.util.function.BiConsumer<Notification, RuntimeException> action) {
         onFailure = action;
+    }
+
+    /** Кому возвращать чаты уведомлений, до которых не дошла очередь. */
+    public void backToUnread(java.util.function.Consumer<Notification> action) {
+        backToUnread = action;
     }
 
     private final LlmClient llm;
@@ -250,6 +265,20 @@ public final class NotificationLoop {
 
     /** Бесконечный цикл. Прерывается только остановкой потока. */
     public void run() {
+        try {
+            runUntilStopped();
+        } finally {
+            // Неотвеченное на стороне умирает вместе с процессом: без этого его
+            // чат остался бы прочитанным, и при следующем запуске догон его не
+            // найдёт — ровно так потерялось сообщение владельца 22.10
+            for (Notification parked : stranded) {
+                giveUp(parked, "бот остановился");
+            }
+            stranded.clear();
+        }
+    }
+
+    private void runUntilStopped() {
         while (!Thread.currentThread().isInterrupted()) {
             Notification taken = null;
             try {
@@ -280,6 +309,7 @@ public final class NotificationLoop {
                 if (suspended) {
                     onFailure.accept(notification, new IllegalStateException("Запросы приостановлены до перезапуска после ошибки оплаты/доступа"));
                     notifyDone(notification);
+                    giveUp(notification, "запросы приостановлены");
                     continue;
                 }
                 process(notification);
@@ -297,7 +327,8 @@ public final class NotificationLoop {
                 if (Fatal.check(e)) {
                     return;
                 }
-                if (retryLater(taken, e)) {
+                Loss loss = retryLater(taken, e);
+                if (loss == Loss.RETRY) {
                     continue;
                 }
                 log.error("Не удалось обработать уведомление", e);
@@ -305,6 +336,9 @@ public final class NotificationLoop {
                     try { onFailure.accept(taken, e); }
                     catch (RuntimeException saveFailure) { log.error("Не удалось сохранить необработанное уведомление", saveFailure); }
                     notifyDone(taken);
+                }
+                if (loss == Loss.LOST) {
+                    giveUp(taken, "ход не получился");
                 }
                 active = null;
                 retries = 0;
@@ -541,19 +575,19 @@ public final class NotificationLoop {
      * десятками минут. Повтор продолжает тот же ход: контекст и шаг сохранены,
      * выполненные действия не делаются второй раз.
      *
-     * @return взяли ли уведомление на новую попытку
+     * @return чем обернулся отказ — новая попытка, сторона или потеря
      */
-    private boolean retryLater(Notification notification, RuntimeException failure) {
+    private Loss retryLater(Notification notification, RuntimeException failure) {
         boolean network = failure instanceof UncheckedIOException;
         boolean busy = failure instanceof ru.rainedev.raine.llm.LlmFailure endpoint && endpoint.retryable();
         if (notification == null || !(network || busy) || stopping) {
-            return false;
+            return Loss.LOST;
         }
         if (++retries > MAX_RETRIES) {
             log.error("Эндпоинт не отвечает за {} попыток — откладываю, пока не ожиет", MAX_RETRIES);
             retries = 0;
             strand(notification);
-            return false;
+            return Loss.PARKED;
         }
         // Resume the existing turn and context: previous tool actions cannot be rolled back.
         retrying = notification;
@@ -561,7 +595,7 @@ public final class NotificationLoop {
         log.warn("{}, вернусь к уведомлению через {} с (попытка {} из {})",
                 busy ? "модель занята" : "сеть недоступна", pause.toSeconds(), retries, MAX_RETRIES);
         sleep(pause);
-        return true;
+        return Loss.RETRY;
     }
 
     /** Пауза перед попыткой: с каждой вдвое длиннее, но не больше потолка. */
@@ -582,10 +616,30 @@ public final class NotificationLoop {
      */
     private void strand(Notification notification) {
         while (stranded.size() >= STRANDED_LIMIT) {
-            stranded.removeFirst();
+            Notification forgotten = stranded.removeFirst();
             log.warn("Неотвеченных уже накопилось {}, самое давнее забываю", STRANDED_LIMIT);
+            giveUp(forgotten, "неотвеченных больше " + STRANDED_LIMIT);
         }
         stranded.addLast(notification);
+    }
+
+    /**
+     * Уведомление потеряно: ответа на него не будет уже никогда, не только в
+     * этом процессе. Чат, который под этим уведомлением открыли, Telegram
+     * пометил прочитанным, и догон при следующем запуске его не увидит — поэтому
+     * отметку надо снять.
+     */
+    private void giveUp(Notification notification, String reason) {
+        if (notification == null) {
+            return;
+        }
+        log.warn("Уведомление потеряно ({}): возвращаю чат в непрочитанные", reason);
+        try {
+            backToUnread.accept(notification);
+        } catch (RuntimeException e) {
+            // потерянное уведомление не должно ронять цикл
+            log.error("Не удалось вернуть чат в непрочитанные", e);
+        }
     }
 
     /** Эндпоинт ожил — возвращаем в очередь всё, что не досказали. */

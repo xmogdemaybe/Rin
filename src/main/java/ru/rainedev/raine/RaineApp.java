@@ -293,6 +293,9 @@ public final class RaineApp implements AutoCloseable {
         loop.onNotificationDone(done -> tools.closeOpened());
         loop.onNotificationFailed((notification, failure) ->
                 pending.keepFailure(notification.text(), loop.context(), String.valueOf(failure.getMessage())));
+        // потерянное уведомление не должно оставлять чат прочитанным: без отметки
+        // догон при следующем запуске его не найдёт
+        loop.backToUnread(this::backToUnread);
 
         rest = new Rest(random);
         loop.rest(rest);
@@ -375,8 +378,9 @@ public final class RaineApp implements AutoCloseable {
         brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
         Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
         Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(writer, prompts.system("")));
-        // неотвеченное само не переигрывается: сообщение уже прочитано и в
-        // непрочитанном при догоне не числится — пусть хотя бы будет видно
+        // отказ сам не переигрывается: эти файлы нужны для контекста разговора.
+        // Чат, оставленный без ответа, при этом снова числится непрочитанным, и
+        // его найдёт догон при запуске
         int owed = pending.unanswered().size();
         if (owed > 0) {
             log.warn("С прошлого сбоя без ответа осталось {} уведомл. — data/pending/failed-notifications", owed);
@@ -422,7 +426,7 @@ public final class RaineApp implements AutoCloseable {
 
         Toolbox available = new Toolbox();
         available.add(tools.open(chatId));
-        loop.submit(new Notification(text, available, true));
+        loop.submit(new Notification(text, available, true).from(chatId));
         log.info("Уведомление о снимке поставлено в очередь");
     }
 
@@ -445,7 +449,8 @@ public final class RaineApp implements AutoCloseable {
         for (Goodnights.Receiver receiver : receivers) {
             Toolbox available = new Toolbox();
             available.add(tools.open(receiver.id()));
-            loop.submit(new Notification(prompt.apply(receiver), available, true).about(receiver.id()));
+            loop.submit(new Notification(prompt.apply(receiver), available, true)
+                    .about(receiver.id()).from(receiver.id()));
         }
     }
 
@@ -464,7 +469,7 @@ public final class RaineApp implements AutoCloseable {
                 + "tonight's growth pass wrote nothing: the draft had %d lines. Open the chat with your "
                 + "person (id %d) and say plainly, in one short message, that the file is full and needs "
                 + "trimming by hand. Then call #wait.").formatted(
-                        CharacterGrowth.MAX_LINES, lines, ownerId), available, true));
+                        CharacterGrowth.MAX_LINES, lines, ownerId), available, true).from(ownerId));
     }
 
     /**
@@ -482,7 +487,8 @@ public final class RaineApp implements AutoCloseable {
                 + "cut short: the text was %d characters, so some of your own notes no longer reach your system "
                 + "prompt. Open the chat with your person (id %d) and say plainly, in one short message, that the "
                 + "file is too long and needs trimming by hand. Then call #wait.").formatted(
-                        config.workingMemoryFile(), WorkingMemory.MAX_LENGTH, chars, ownerId), available, true));
+                        config.workingMemoryFile(), WorkingMemory.MAX_LENGTH, chars, ownerId),
+                        available, true).from(ownerId));
     }
 
     /**
@@ -500,7 +506,7 @@ public final class RaineApp implements AutoCloseable {
                 + "prompt, so the people above them are invisible to you right now. Open the chat with your "
                 + "person (id %d) and say plainly, in one short message, that the file is too long and needs "
                 + "trimming by hand. Then call #wait.").formatted(
-                        lines, TrustLedger.MAX_LINES, ownerId), available, true));
+                        lines, TrustLedger.MAX_LINES, ownerId), available, true).from(ownerId));
     }
 
     private static String goodnightPrompt(Goodnights.Receiver receiver) {
@@ -646,6 +652,10 @@ public final class RaineApp implements AutoCloseable {
      * Telegram не присылает уведомления о том, что пришло до запуска. Без этого
      * всё, написанное за ночь или за время простоя, остаётся незамеченным
      * навсегда — она просто не узнает, что ей писали.
+     * <p>
+     * Сюда попадают и чаты, которые она оставила непрочитанными сама, не сумев
+     * ответить: открытый чат Telegram считает прочитанным, и без отметки то
+     * сообщение пропало бы молча.
      */
     private void catchUpOnUnread() {
         try {
@@ -656,7 +666,7 @@ public final class RaineApp implements AutoCloseable {
 
             int found = 0;
             for (TdApi.Chat chat : chats) {
-                if (chat.unreadCount == 0 || chat.lastMessage == null || chat.lastMessage.isOutgoing) {
+                if (!awaitsAnswer(chat) || chat.lastMessage == null || chat.lastMessage.isOutgoing) {
                     continue;
                 }
                 long senderId = chat.lastMessage.senderId instanceof TdApi.MessageSenderUser user ? user.userId : 0L;
@@ -717,17 +727,57 @@ public final class RaineApp implements AutoCloseable {
         Toolbox available = new Toolbox();
         available.add(tools.open(chat.id));
 
+        // чат остаётся при уведомлении: не ответит — он снова повиснет
+        // непрочитанным, и догон после перезапуска его найдёт
+        Notification notice = new Notification(text, available).about(senderId).from(chat.id);
+
         // сообщение владельца и закреплённые чаты идут вне очереди: остальное
         // подождёт, а это — то, ради чего она вообще здесь
         boolean important = senderId == config.ownerId()
                 || (behaviour().wakeOnPinnedChat() && telegram.isPinned(chat.id));
         if (important) {
-            loop.submitFirst(new Notification(text, available).about(senderId));
+            loop.submitFirst(notice);
             log.info("Уведомление из чата \"{}\" — вне очереди", chat.title);
         } else {
-            loop.submit(new Notification(text, available).about(senderId));
+            loop.submit(notice);
             log.info("Уведомление из чата \"{}\" поставлено в очередь", chat.title);
         }
+    }
+
+    /**
+     * Чат, ответа на сообщение в котором не досталось, снова висит
+     * непрочитанным. Telegram снимет отметку сам, стоит чат прочитать, так что
+     * она не может остаться навсегда.
+     */
+    private void backToUnread(Notification notification) {
+        if (notification.chatId() == 0) {
+            return;   // событие не из переписки: отмечать негде
+        }
+        TdApi.Chat chat = telegram.chat(notification.chatId());
+        if (!stillUnanswered(chat)) {
+            log.info("Чат \"{}\" уже ей отвечен — отметку не трогаю", chat.title);
+            return;
+        }
+        actions.markUnread(notification.chatId());
+        log.info("Чат \"{}\" снова непрочитанный: ответа на сообщение не было", chat.title);
+    }
+
+    /**
+     * Отметку ставит только чат, где последним стоит чужое сообщение. Своё на
+     * конце значит, что разговор пошёл дальше и она в нём сказала слово, а
+     * поднимать переписку заново — значит ответить на вчерашнее сегодня.
+     */
+    static boolean stillUnanswered(TdApi.Chat chat) {
+        return chat.lastMessage != null && !chat.lastMessage.isOutgoing;
+    }
+
+    /**
+     * Ждёт ли чат ответа. Открытый чат Telegram считает прочитанным даже тогда,
+     * когда она к нему не вернулась, — поэтому сюда попадает и отметка
+     * «не прочитано», которую она оставляет за собой при таком отказе.
+     */
+    static boolean awaitsAnswer(TdApi.Chat chat) {
+        return chat.unreadCount > 0 || chat.isMarkedAsUnread;
     }
 
     /**
