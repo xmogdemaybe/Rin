@@ -138,14 +138,32 @@ public final class Spontaneity implements AutoCloseable {
         return prompt.append(PROMPT).toString();
     }
 
-    private java.util.Optional<DiaryEntry> randomEntry() {
+    /**
+     * Записи, которые уже служили поводом. Нужны, чтобы порыв за порывом не
+     * крутился вокруг одного и того же воспоминания, но живут здесь, а не в
+     * дневнике: запись из дневника не выбрасывают — иначе она пропала бы для
+     * всей остальной памяти до самой ночи, когда список перечитывают с диска.
+     */
+    private static final int RECENT_CAP = 8;
+    private final java.util.Deque<String> recent = new java.util.ArrayDeque<>();
+
+    private synchronized java.util.Optional<DiaryEntry> randomEntry() {
         List<Diary.Match> all = diary.query(new double[0]);
         if (all.isEmpty()) {
             return java.util.Optional.empty();
         }
-        // запись забирается из выдачи: иначе порыв за порывом крутился бы
-        // вокруг одного и того же воспоминания
-        return java.util.Optional.of(diary.take(all.get(random.nextInt(all.size()))));
+        List<Diary.Match> fresh = all.stream()
+                .filter(match -> !recent.contains(match.entry().id()))
+                .toList();
+        // всё уже служило поводом — пусть повторится, чем молчать
+        List<Diary.Match> choice = fresh.isEmpty() ? all : fresh;
+        Diary.Match chosen = choice.get(random.nextInt(choice.size()));
+        diary.use(chosen);
+        recent.addLast(chosen.entry().id());
+        while (recent.size() > RECENT_CAP) {
+            recent.removeFirst();
+        }
+        return java.util.Optional.of(chosen.entry());
     }
 
     @Override

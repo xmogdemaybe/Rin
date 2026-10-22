@@ -112,7 +112,7 @@ public final class DiaryMemory implements Memory {
             if (injected.contains(Fingerprint.of(match.entry().body()))) {
                 continue;
             }
-            DiaryEntry entry = diary.take(match);
+            DiaryEntry entry = diary.use(match);
             injected.add(Fingerprint.of(entry.body()));
             recalled.append("<").append(TAG).append(">\n")
                     .append(Markup.body(entry.body())).append("\n")

@@ -67,6 +67,20 @@ class DiaryMemoryTest {
     }
 
     @Test
+    void recalledEntryStaysInTheDiary(@TempDir Path dir) {
+        // подмешанная запись не исчезает из памяти: новый разговор вспомнит её
+        // снова, а не уткнётся в пустой дневник до самой ночи
+        Diary diary = diaryWith(dir, "мы ездили на Байкал");
+        DiaryMemory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {1, 0, 0}), 4000);
+
+        assertFalse(memory.recall(context("помнишь поездку?")).isEmpty());
+
+        assertEquals(1, diary.size(), "воспоминание не убирает запись из дневника");
+        memory.forget();
+        assertFalse(memory.recall(context("помнишь поездку?")).isEmpty(), "новый разговор помнит то же");
+    }
+
+    @Test
     void thresholdDropsWhenNothingMatches(@TempDir Path dir) {
         Diary diary = diaryWith(dir, "совсем про другое");
         DiaryMemory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {-1, 0, 0}), 4000);

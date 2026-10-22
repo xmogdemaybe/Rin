@@ -66,4 +66,25 @@ class SpontaneityTest {
             assertTrue(impulses > 0, "бодрствуя, она хоть иногда пишет сама");
         }
     }
+
+    @Test
+    void impulseDoesNotConsumeTheDiary(@TempDir Path dir) {
+        // повод вспомнить не стирает само воспоминание: иначе после нескольких
+        // порывов в дневнике оставалось бы всё меньше того, что видно
+        Diary diary = new Diary(dir);
+        diary.save("что-то из прошлого", new double[] {1, 0, 0});
+        NotificationLoop loop = loop();
+
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), new Random(1))) {
+            int impulses = 0;
+            for (int attempt = 0; attempt < 40 && impulses == 0; attempt++) {
+                spontaneity.actNow();
+                impulses = loop.queued();
+            }
+            assertTrue(impulses > 0, "порыв был");
+            assertEquals(1, diary.size(), "дневник остался цел");
+        }
+
+        assertEquals(1, diary.query(new double[0]).size(), "и запись по-прежнему находится");
+    }
 }

@@ -54,15 +54,16 @@ class DiaryTest {
     }
 
     @Test
-    void takenEntryDisappearsFromResults(@TempDir Path dir) throws IOException {
-        // иначе одна и та же запись всплывала бы в контексте снова и снова
+    void usedEntryStaysSearchable(@TempDir Path dir) throws IOException {
+        // припомнить запись — не значит её потерять: от повторов в одном
+        // разговоре бережёт вызывающий, а дневник остаётся дневником
         writeEntry(dir, "1000", "поездка на Байкал", new double[] {1, 0, 0});
         Diary diary = new Diary(dir);
 
-        diary.take(diary.query(new double[] {1, 0, 0}).getFirst());
+        diary.use(diary.query(new double[] {1, 0, 0}).getFirst());
 
-        assertTrue(diary.query(new double[] {1, 0, 0}).isEmpty());
-        assertTrue(Files.exists(dir.resolve("1000.md")), "с диска запись при этом не исчезает");
+        assertEquals(1, diary.query(new double[] {1, 0, 0}).size(), "запись осталась в выдаче");
+        assertTrue(Files.exists(dir.resolve("1000.md")));
     }
 
     @Test
@@ -70,7 +71,7 @@ class DiaryTest {
         writeEntry(dir, "1000", "поездка на Байкал", new double[] {1, 0, 0});
         Diary diary = new Diary(dir);
 
-        DiaryEntry used = diary.take(diary.query(new double[] {1, 0, 0}).getFirst());
+        DiaryEntry used = diary.use(diary.query(new double[] {1, 0, 0}).getFirst());
 
         assertEquals(1, used.metadata().usageCount());
         assertTrue(used.metadata().score() > 0, "запись пришлась к месту — оценка должна вырасти");
@@ -85,7 +86,7 @@ class DiaryTest {
         writeEntry(dir, "1000", "не в тему", new double[] {1, 0, 0});
         Diary diary = new Diary(dir);
 
-        DiaryEntry used = diary.take(new Diary.Match(diary.query(new double[] {1, 0, 0}).getFirst().entry(), 0.1));
+        DiaryEntry used = diary.use(new Diary.Match(diary.query(new double[] {1, 0, 0}).getFirst().entry(), 0.1));
 
         assertTrue(used.metadata().score() < 0, "притянутая за уши запись должна терять в оценке");
     }
