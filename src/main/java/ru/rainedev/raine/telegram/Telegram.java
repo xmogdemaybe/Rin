@@ -21,20 +21,21 @@ public final class Telegram {
     private final SimpleTelegramClient client;
     private final long myId;
     private final String characterName;
-    private final Map<Long, String> nameCache = new ConcurrentHashMap<>();
+
+    /**
+     * Имена отправителей. Живут дольше, чем свойства чата: человек меняет имя
+     * редко, а спрашивать его на каждое сообщение — расточительство.
+     */
+    private final ShortLivedCache<Long, String> nameCache = new ShortLivedCache<>(NAME_CACHE_MILLIS);
+
+    private static final long NAME_CACHE_MILLIS = 10 * 60_000;
 
     /**
      * Свойства чата спрашиваются по нескольку раз на каждое сообщение: заглушён ли,
      * закреплён ли, можно ли с ним говорить. Каждый такой вопрос — обращение
      * к Telegram, а их число ограничено.
      */
-    private final Map<Long, Cached> chatCache = new ConcurrentHashMap<>();
-
-    private record Cached(TdApi.Chat chat, long at) {
-        boolean fresh() {
-            return System.currentTimeMillis() - at < CHAT_CACHE_MILLIS;
-        }
-    }
+    private final ShortLivedCache<Long, TdApi.Chat> chatCache = new ShortLivedCache<>(CHAT_CACHE_MILLIS);
 
     private static final long CHAT_CACHE_MILLIS = 15_000;
 
@@ -48,9 +49,18 @@ public final class Telegram {
     private static final long RECOGNITION_TICK = 500;
     private static final int RECOGNITION_TIMEOUT_TICKS = 60;
 
-    private Boolean premium;
+    /** Ставится один раз, но прочитать его обязан любой поток, открывший чат. */
+    private volatile Boolean premium;
 
     private final Throttle throttle = new Throttle();
+
+    /**
+     * Ограничитель один на весь аккаунт. У действий был свой: два независимых
+     * окна пропускали вдвое больше обращений, чем Telegram считает человеческими.
+     */
+    Throttle throttle() {
+        return throttle;
+    }
 
     /** Каждое обращение к Telegram проходит через ограничитель. */
     private SimpleTelegramClient throttled() {
@@ -80,7 +90,7 @@ public final class Telegram {
     /** Свежие данные: непрочитанное и последнее сообщение меняются постоянно. */
     public TdApi.Chat chat(long chatId) {
         TdApi.Chat chat = ask(new TdApi.GetChat(chatId));
-        chatCache.put(chatId, new Cached(chat, System.currentTimeMillis()));
+        chatCache.put(chatId, chat);
         return chat;
     }
 
@@ -89,8 +99,7 @@ public final class Telegram {
      * пятнадцати секунд давности достаточно, а обращение экономится.
      */
     public TdApi.Chat chatCached(long chatId) {
-        Cached cached = chatCache.get(chatId);
-        return cached != null && cached.fresh() ? cached.chat() : chat(chatId);
+        return chatCache.get(chatId, this::chat);
     }
 
     /**
@@ -107,25 +116,28 @@ public final class Telegram {
         if (id == myId) {
             return "You (" + characterName + ")";
         }
-        return nameCache.computeIfAbsent(id, key -> {
+        String name = nameCache.get(id, key -> {
             try {
                 TdApi.User user = ask(new TdApi.GetUser(key));
-                String name = (user.firstName + " " + user.lastName).strip();
+                String full = (user.firstName + " " + user.lastName).strip();
                 String username = usernameOf(user);
                 if (!username.isEmpty()) {
-                    name = name.isEmpty() ? "@" + username : name + " (@" + username + ")";
+                    full = full.isEmpty() ? "@" + username : full + " (@" + username + ")";
                 }
                 // имя человек задаёт себе сам, значит там может оказаться что угодно
-                return ru.rainedev.raine.phone.ControlMarkers.sanitize(name);
+                return ru.rainedev.raine.phone.ControlMarkers.sanitize(full);
             } catch (RuntimeException userLookupFailed) {
                 try {
                     return ru.rainedev.raine.phone.ControlMarkers.sanitize(chat(key).title);
                 } catch (RuntimeException e) {
                     log.debug("Не удалось определить имя для id {}", key);
-                    return "";
+                    // пустоту не запоминаем: сбой связи на минуту оставил бы все
+                    // реплики этого человека без имени до самого перезапуска
+                    return null;
                 }
             }
         });
+        return name == null ? "" : name;
     }
 
     private static String usernameOf(TdApi.User user) {
@@ -146,8 +158,15 @@ public final class Telegram {
             if (page.messages == null || page.messages.length == 0) {
                 break;
             }
+            long last = page.messages[page.messages.length - 1].id;
+            // страница не сдвинулась — дальше листать некуда. Без этой остановки
+            // цикл крутился бы по одному месту и жёг лимит обращений, а за ним
+            // пришёл бы flood-wait или блокировка аккаунта
+            if (last == fromMessageId) {
+                break;
+            }
             collected.addAll(List.of(page.messages));
-            fromMessageId = page.messages[page.messages.length - 1].id;
+            fromMessageId = last;
         }
         List<TdApi.Message> ordered = new ArrayList<>(collected.subList(0, Math.min(collected.size(), limit)));
         ordered.sort((a, b) -> Long.compare(a.id, b.id));
@@ -459,7 +478,7 @@ public final class Telegram {
         request.sharePhoneNumber = false;   // свой номер не раздаём
         ask(request);
 
-        nameCache.remove(userId);
+        nameCache.forget(userId);
     }
 
     public List<TdApi.User> contacts(int limit) {
@@ -701,16 +720,30 @@ public final class Telegram {
      */
     private final Map<Long, java.util.concurrent.CompletableFuture<Long>> pendingSends = new ConcurrentHashMap<>();
 
+    /** Больше половины тысячи неподтверждённых отправок не бывает; это потолок на случай сбоя. */
+    private static final int PENDING_SENDS_CAP = 500;
+
     public void onSendSucceeded(long temporaryId, long finalId) {
-        pendingSends.computeIfAbsent(temporaryId, id -> new java.util.concurrent.CompletableFuture<>())
-                .complete(finalId);
+        note(temporaryId, finalId);
     }
 
     /** Отправка не удалась — знать об этом важнее, чем молча идти дальше. */
     public void onSendFailed(long temporaryId, String reason) {
         log.warn("Сообщение не отправилось: {}", reason);
+        note(temporaryId, 0L);
+    }
+
+    /**
+     * Подтверждение приходит и тогда, когда настоящий номер никому не нужен, —
+     * запись тогда создаётся здесь и никем не забирается. Без чистки за неделю
+     * такая колода росла бы по числу отправленных сообщений.
+     */
+    private void note(long temporaryId, long finalId) {
         pendingSends.computeIfAbsent(temporaryId, id -> new java.util.concurrent.CompletableFuture<>())
-                .complete(0L);
+                .complete(finalId);
+        if (pendingSends.size() > PENDING_SENDS_CAP) {
+            pendingSends.entrySet().removeIf(entry -> entry.getValue().isDone());
+        }
     }
 
     /**
