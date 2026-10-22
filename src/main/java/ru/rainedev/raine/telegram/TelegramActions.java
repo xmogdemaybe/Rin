@@ -66,16 +66,18 @@ public interface TelegramActions {
 
         private final SimpleTelegramClient client;
         private final Telegram telegram;
-        private final Throttle throttle = new Throttle();
 
         /** Спросить и дождаться ответа, но не бесконечно. */
         private <T extends TdApi.Object> T ask(TdApi.Function<T> request) {
             return Await.reply(throttled().send(request), request.getClass().getSimpleName());
         }
 
-        /** Каждое действие тоже считается обращением к Telegram. */
+        /**
+         * Каждое действие тоже считается обращением к Telegram — и проходит через
+         * тот же ограничитель, что и вопросы: свой счётчик удваивал бы частоту.
+         */
         private SimpleTelegramClient throttled() {
-            throttle.allow();
+            telegram.throttle().allow();
             return client;
         }
 

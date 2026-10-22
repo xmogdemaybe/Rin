@@ -1,8 +1,6 @@
 package ru.rainedev.raine.telegram;
 
 import java.time.Duration;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,27 +20,42 @@ public final class Throttle {
 
     private static final Duration PAUSE = Duration.ofSeconds(1);
 
-    private final AtomicInteger sinceLastPause = new AtomicInteger();
-    private final AtomicLong lastPauseAt = new AtomicLong(System.nanoTime());
+    private long windowStartedAt = System.nanoTime();
+    private int usedInWindow;
 
     public void allow() {
-        long now = System.nanoTime();
-        if (now - lastPauseAt.get() > PAUSE.toNanos()) {
-            // прошла секунда — счётчик начинается заново
-            lastPauseAt.set(now);
-            sinceLastPause.set(0);
-            return;
-        }
-        if (sinceLastPause.incrementAndGet() < BURST) {
+        Duration wait = reserve();
+        if (wait.isZero()) {
             return;
         }
         log.debug("Слишком часто обращаюсь к Telegram — притормаживаю");
         try {
-            Thread.sleep(PAUSE);
+            Thread.sleep(wait);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        lastPauseAt.set(System.nanoTime());
-        sinceLastPause.set(0);
+    }
+
+    /**
+     * Занимает место в текущем окне. Счёт и решение о паузе принимались двумя
+     * раздельными счётчиками, и при конкурентии потоки расходились: каждый
+     * считал, что последний слот его, и обращений уходилось вдвое больше
+     * лимита. Здесь окно занято целиком под одним замком, а спит уже тот, кому
+     * не хватило места, — замок он не держит и других не задерживает.
+     */
+    private synchronized Duration reserve() {
+        long now = System.nanoTime();
+        if (now - windowStartedAt >= PAUSE.toNanos()) {
+            // прошла секунда — окно начинается заново
+            windowStartedAt = now;
+            usedInWindow = 1;
+            return Duration.ZERO;
+        }
+        if (++usedInWindow < BURST) {
+            return Duration.ZERO;
+        }
+        usedInWindow = 0;
+        windowStartedAt = now + PAUSE.toNanos();
+        return PAUSE;
     }
 }
