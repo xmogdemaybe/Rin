@@ -42,7 +42,11 @@ public final class Diary {
         double[] embed(String text);
     }
 
-    private Embedder embedder;
+    /**
+     * Кто считает вектор. volatile: поиск читает его вне замка, и без этого
+     * новый счётчик мог долго оставаться невидимым для других потоков.
+     */
+    private volatile Embedder embedder;
 
     public Diary(Path dir) {
         this.dir = dir;
@@ -154,9 +158,17 @@ public final class Diary {
      *               всё равно не с чем, а обращений к сети выходит по числу
      *               записей
      */
-    public synchronized List<Match> query(double[] vector) {
-        List<Match> matches = new ArrayList<>(entries.size());
-        for (DiaryEntry entry : List.copyOf(entries.values())) {
+    public List<Match> query(double[] vector) {
+        // Под замком — только снимок. Досчёт вектора это сеть и диск, и на
+        // дневнике без векторов это по обращению на запись: под замком такая
+        // проверка останавливала сохранение, порыв и весь остальной дневник
+        // на десятки секунд, а то и на время таймаута эндпоинта.
+        List<DiaryEntry> snapshot;
+        synchronized (this) {
+            snapshot = List.copyOf(entries.values());
+        }
+        List<Match> matches = new ArrayList<>(snapshot.size());
+        for (DiaryEntry entry : snapshot) {
             DiaryEntry ready = vector.length == 0 ? entry : withEmbedding(entry, vector.length);
             // уверенность слегка поднимает запись в выдаче: проверенному верят охотнее
             double relatedness = Similarity.cosine(vector, ready.embedding())
@@ -180,7 +192,9 @@ public final class Diary {
             double[] embedding = embedder.embed(entry.body().replace("\t", "  "));
             DiaryEntry updated = new DiaryEntry(entry.id(), entry.body(), embedding, entry.metadata());
             write(updated);
-            entries.put(updated.id(), updated);
+            synchronized (this) {
+                entries.put(updated.id(), updated);
+            }
             log.info("Досчитан вектор для записи {}", updated.id());
             return updated;
         } catch (RuntimeException e) {

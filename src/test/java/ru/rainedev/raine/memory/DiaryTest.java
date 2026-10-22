@@ -3,12 +3,16 @@ package ru.rainedev.raine.memory;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -131,6 +135,38 @@ class DiaryTest {
 
         assertEquals(1.0, matches.getFirst().relatedness(), 1e-9);
         assertTrue(Files.readString(dir.resolve("1000.md")).contains("1.0"), "вектор должен сохраниться");
+    }
+
+    @Test
+    void slowSearchDoesNotStopSaving(@TempDir Path dir) throws Exception {
+        // досчёт вектора — это сеть: пока поиск держал общий замок, сохранение
+        // ждало целого таймаута эндпоинта и вся память стояла вместе с ним
+        Files.writeString(dir.resolve("1000.md"), """
+                ---
+                {"score":0,"confidence":0,"lastUsed":"never","usageCount":0,"embedding":[]}
+                ---
+
+                запись без вектора""");
+        Diary diary = new Diary(dir);
+        CountDownLatch searching = new CountDownLatch(1);
+        CountDownLatch letGo = new CountDownLatch(1);
+        diary.embedder(text -> {
+            searching.countDown();
+            try {
+                letGo.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new double[] {1, 0, 0};
+        });
+        Thread searcher = Thread.ofVirtual().start(() -> diary.query(new double[] {1, 0, 0}));
+        assertTrue(searching.await(5, TimeUnit.SECONDS), "поиск дошёл до счётчика вектора");
+
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> diary.save("новая запись", new double[] {0, 1, 0}));
+
+        letGo.countDown();
+        searcher.join(Duration.ofSeconds(5));
+        assertEquals(2, diary.size(), "пока искали, запись сохранилась");
     }
 
     @Test
