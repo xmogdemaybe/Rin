@@ -163,6 +163,18 @@ class TrustLedgerTest {
     }
 
     @Test
+    void colonInNameDoesNotBlindTheLedger(@TempDir Path dir) throws Exception {
+        TrustLedger ledger = new TrustLedger(dir.resolve("trust.md"), 111, "", clock);
+
+        note(ledger, "{\"id\":\"4567\",\"name\":\"Маша: соседка\",\"level\":4,\"reason\":\"проводила домой\"}");
+
+        assertEquals(List.of(new TrustLedger.Entry(4567, "Маша соседка", 4)), ledger.entries(),
+                "двоеточие — разделитель формата строки; в имени оно сломало бы чтение");
+        assertTrue(ledger.aboutPerson(4567).contains("<person_right_now>"),
+                "непрочитанная запись означала бы, что о человеке она не знает вовсе");
+    }
+
+    @Test
     void promptSuffixStatesOwnerBeyondTheFile(@TempDir Path dir) throws Exception {
         TrustLedger ledger = new TrustLedger(dir.resolve("trust.md"), 555, "Владелец", clock);
 

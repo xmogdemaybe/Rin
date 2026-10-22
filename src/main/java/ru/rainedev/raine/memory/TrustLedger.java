@@ -144,7 +144,7 @@ public final class TrustLedger {
             throw new LowQualityException("Нужен уровень доверия — целое от -5 до +5.");
         }
         int level = rawLevel > 5 ? 5 : rawLevel < -5 ? -5 : rawLevel.intValue();
-        String name = sanitize(arguments.path("name").asText(""), NAME_LIMIT);
+        String name = sanitizeName(arguments.path("name").asText(""));
         String reason = sanitize(arguments.path("reason").asText(""), REASON_LIMIT);
         if (reason.isEmpty()) {
             throw new LowQualityException("Нужна причина записи: что конкретно так изменило доверие.");
@@ -325,6 +325,15 @@ public final class TrustLedger {
             log.warn("Доверие: файл не читается — {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Имя стоит в строке между «, » и «:» — а двоеточие и есть разделитель
+     * формата. Попав в имя, оно ломает чтение: такую строку {@link #entries()}
+     * уже не распознаёт, и человек исчезает из вида молча.
+     */
+    private static String sanitizeName(String raw) {
+        return sanitize(raw.replace(':', ' '), NAME_LIMIT);
     }
 
     /**
