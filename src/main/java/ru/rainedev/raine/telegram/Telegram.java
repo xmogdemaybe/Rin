@@ -351,6 +351,33 @@ public final class Telegram {
     }
 
     /**
+     * Чат с собой. История в Telegram принадлежит чату, а не человеку, поэтому
+     * свою выкладывают именно туда: номер пользователя для этого не годится.
+     */
+    public long myChatId() {
+        try {
+            return privateChat(myId).id;
+        } catch (RuntimeException e) {
+            log.debug("Чат с собой недоступен: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Можно ли выложить историю. Telegram отвечает причиной, а не просто «нет»:
+     * премиум, бусты канала и предел активных историй — разные случаи, и ждать
+     * в одном из них бессмысленно.
+     */
+    public Optional<TdApi.CanPostStoryResult> canPostStory(long chatId) {
+        try {
+            return Optional.ofNullable(ask(new TdApi.CanPostStory(chatId)));
+        } catch (RuntimeException e) {
+            log.debug("Не удалось узнать, можно ли выкладывать историю в чат {}: {}", chatId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Распознаёт речь силами Telegram Premium — без внешних сервисов и оплаты
      * за минуты. Результат приходит не сразу, поэтому ждём его опросом.
      */

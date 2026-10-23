@@ -62,6 +62,9 @@ public final class TelegramTools {
     /** Длинное голосовое никто не слушает. */
     private static final int MAX_VOICE_LENGTH = 400;
 
+    /** Сутки — обычный срок истории; дольше её держит только премиум. */
+    private static final int STORY_PERIOD = 86400;
+
     /**
      * Заметка о себе уходит в метаданные дневника, а ночью — в промпт роста
      * одной строкой: без разметки и без простыни в ней смысла нет.
@@ -921,6 +924,76 @@ public final class TelegramTools {
     }
 
     /**
+     * Выкладывание истории. Снимок берут из галереи: сначала его снимают или
+     * находят, и только потом решают показать — как в обычном клиенте.
+     * <p>
+     * До отправки спрашивают разрешение у Telegram: он отвечает причиной,
+     * и без неё она гадала бы, подождать сутки или не ждать вовсе.
+     */
+    public Tool postStory() {
+        return Tool.named("post_story")
+                .describedAs("Posts a story from your gallery. It stays up for a day and the people you keep in "
+                        + "your contacts see it. Take the photo with take_photo first, or reuse one you already "
+                        + "have. Only one story of yours can be up at a time.")
+                .requiredString("photo", "Filename from your gallery, the one take_photo returned")
+                .optionalString("caption", "Optional short caption under the photo")
+                .build(arguments -> {
+                    if (camera == null || !camera.isAvailable()) {
+                        return "You have no camera, so there is nothing to post a story from.";
+                    }
+                    String name = arguments.path("photo").asText("").strip();
+                    if (!isPlainFilename(name)) {
+                        return "Filename must be a plain name, without slashes or dots leading elsewhere.";
+                    }
+                    java.nio.file.Path photo = galleryPhoto(gallery, name);
+                    if (photo == null) {
+                        return "There is no such photo. Take one with take_photo first.";
+                    }
+                    // история принадлежит чату, а свой чат — это чат с собой
+                    long chatId = telegram.myChatId();
+                    if (chatId == 0) {
+                        return "Your story list is out of reach right now. Try again later.";
+                    }
+                    String refusal = postRefusal(telegram.canPostStory(chatId).orElse(null));
+                    if (!refusal.isEmpty()) {
+                        log.info("Историю не выложить: {}", refusal);
+                        return refusal;
+                    }
+                    long storyId = actions.postStory(chatId, photo,
+                            arguments.path("caption").asText("").strip(), STORY_PERIOD);
+                    if (storyId == 0) {
+                        return "Nothing was posted.";
+                    }
+                    log.info("История {} выложена из снимка {}", storyId, name);
+                    return "Story posted. It will be up for a day.";
+                });
+    }
+
+    /**
+     * Почему выкладывать нельзя. Пустая строка — можно.
+     * Видно пакету: переводить ответы Telegram учатся без самого Telegram.
+     */
+    static String postRefusal(TdApi.CanPostStoryResult result) {
+        return switch (result) {
+            case null -> "Telegram did not say whether you can post a story. Try again later.";
+            case TdApi.CanPostStoryResultOk ignored -> "";
+            case TdApi.CanPostStoryResultPremiumNeeded ignored ->
+                    "Posting stories needs Telegram Premium, and you do not have it.";
+            case TdApi.CanPostStoryResultBoostNeeded ignored ->
+                    "This chat needs more boosts before it can post stories.";
+            case TdApi.CanPostStoryResultActiveStoryLimitExceeded ignored ->
+                    "You already have a story up. Wait for it to expire — a story lives for a day.";
+            case TdApi.CanPostStoryResultWeeklyLimitExceeded ignored ->
+                    "You have posted too many stories this week. Try again later.";
+            case TdApi.CanPostStoryResultMonthlyLimitExceeded ignored ->
+                    "You have posted too many stories this month. Try again later.";
+            case TdApi.CanPostStoryResultLiveStoryIsActive ignored ->
+                    "Your live story is still running. It has to end before you post another one.";
+            default -> "Telegram did not let you post a story right now.";
+        };
+    }
+
+    /**
      * Сохранение в контакты. Человек, записанный по имени, потом находится
      * поиском — иначе он теряется среди чатов, как только переписка уходит вниз.
      */
@@ -1420,6 +1493,21 @@ public final class TelegramTools {
      */
     private static boolean isPlainFilename(String name) {
         return !name.isEmpty() && !name.contains("/") && !name.contains("\\") && !name.contains("..");
+    }
+
+    /**
+     * Снимок из галереи или null, если имя уводит наружу либо файла нет.
+     * Одной проверки имени мало: на Windows «C:photo.png» — тоже путь, и в нём
+     * нет ни косой черты, ни точек. Видно пакету: имя приходит от модели,
+     * и проверять его учатся без Telegram.
+     */
+    static java.nio.file.Path galleryPhoto(java.nio.file.Path gallery, String name) {
+        java.nio.file.Path root = gallery.normalize();
+        java.nio.file.Path photo = root.resolve(name).normalize();
+        if (!photo.startsWith(root)) {
+            return null;
+        }
+        return java.nio.file.Files.exists(photo) ? photo : null;
     }
 
     /** Модель может прислать id строкой, числом или не прислать вовсе. */
