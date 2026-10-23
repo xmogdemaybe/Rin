@@ -107,6 +107,20 @@ class SharedStoryTest {
     }
 
     @Test
+    void anUnavailableStoryIsNamedInsteadOfLeftBlank() {
+        // пустая строка здесь — приглашение дорисовать содержимое самой
+        String note = TelegramMedia.described(Optional.empty(), ignored -> "что-то разглядели");
+
+        assertFalse(note.isBlank(), "недоступность надо называть словами");
+        assertFalse(note.contains("<"), note);
+    }
+
+    @Test
+    void aReachableStoryIsStillDescribed() {
+        assertEquals("снег", TelegramMedia.described(Optional.of(story("гуляла")), ignored -> "снег"));
+    }
+
+    @Test
     void theDescriptionLandsUnderThePlaceholder() {
         // до этого присланная история была одной пометкой: видно, что кидали,
         // а что именно — нет
