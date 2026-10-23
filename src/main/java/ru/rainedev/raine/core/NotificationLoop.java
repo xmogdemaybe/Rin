@@ -560,6 +560,9 @@ public final class NotificationLoop {
     /** wait и pause доступны всегда: иначе ход невозможно закончить. */
     private Toolbox withFinishingTools(Toolbox notificationTools) {
         Toolbox tools = new Toolbox();
+        // правами владеет постоянный набор: чат, открытый по ходу дела, не должен
+        // вернуть то, что владелец снял
+        tools.actionsAllowed(alwaysAvailable.allowsActions() && notificationTools.allowsActions());
         alwaysAvailable.all().forEach(tools::add);
         notificationTools.all().forEach(tools::add);
         tools.add(Tool.simple("wait", "Wait until further notifications", arguments -> "Success"));

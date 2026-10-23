@@ -7,7 +7,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Инструмент, доступный модели. Действовать она может только через них. */
-public record Tool(String name, String description, ObjectNode parameters, ContextualHandler handler) {
+public record Tool(String name, String description, ObjectNode parameters, ContextualHandler handler,
+                   boolean mutates) {
 
     /**
      * Обработчик, которому нужен набор инструментов текущего хода. Открытие чата
@@ -61,9 +62,20 @@ public record Tool(String name, String description, ObjectNode parameters, Conte
         private String description = "";
         private final Map<String, ObjectNode> properties = new LinkedHashMap<>();
         private final java.util.List<String> required = new java.util.ArrayList<>();
+        private boolean mutates;
 
         private Builder(String name) {
             this.name = name;
+        }
+
+        /**
+         * Помечает инструмент как действие: оно меняет Telegram — сообщение,
+         * реакция, удаление. В режиме только чтения такой инструмент до модели
+         * не доходит, и просить о пощаде словами промпта не приходится.
+         */
+        public Builder mutating() {
+            this.mutates = true;
+            return this;
         }
 
         public Builder describedAs(String description) {
@@ -116,7 +128,7 @@ public record Tool(String name, String description, ObjectNode parameters, Conte
             properties.forEach(props::set);
             parameters.putArray("required").addAll(required.stream().map(JsonNodeFactory.instance::textNode).toList());
             parameters.put("additionalProperties", false);
-            return new Tool(name, description, parameters, handler);
+            return new Tool(name, description, parameters, handler, mutates);
         }
     }
 }

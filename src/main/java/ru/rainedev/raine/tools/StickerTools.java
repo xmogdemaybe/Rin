@@ -144,6 +144,7 @@ public final class StickerTools {
         return Tool.named("sticker_save")
                 .describedAs("Saves a sticker so you can use it later. Use this if you liked a sticker someone sent.")
                 .requiredInteger("sticker_id", "Id of the sticker to save")
+                .mutating()
                 .build(arguments -> {
                     long stickerId = ru.rainedev.raine.core.Numbers.longAt(arguments, "sticker_id", 0);
                     if (stickerId == 0) {
@@ -168,6 +169,7 @@ public final class StickerTools {
                 .requiredInteger("sticker_id", "Id of the sticker to send")
                 .optionalString("reply_to_message_id",
                         "Optional. Quote a specific message — a sticker in reply to something said earlier.")
+                .mutating()
                 .build(arguments -> {
                     // круг общения проверяется и здесь: открыть чат — одно,
                     // а отправить в него — другое, и запрет должен работать в обоих
