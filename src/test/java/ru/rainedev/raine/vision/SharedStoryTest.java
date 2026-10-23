@@ -19,8 +19,9 @@ class SharedStoryTest {
     /** Зрение и слух здесь не нужны: важно лишь, куда уходит содержимое истории. */
     private static final Function<Optional<Integer>, String> LOOK =
             id -> id.map(file -> "фото " + file).orElse("нечего смотреть");
-    private static final Function<Optional<Integer>, String> WATCH =
-            id -> id.map(file -> "видео " + file).orElse("нечего смотреть");
+    private static final Function<TdApi.StoryContentVideo, String> WATCH =
+            video -> TelegramMedia.storyVideo(video,
+                    (id, withSound) -> id.map(file -> "видео " + file).orElse(""));
 
     @Test
     void theCaptionCannotCloseTheStoryBlock() {
@@ -93,13 +94,10 @@ class SharedStoryTest {
     }
 
     @Test
-    void theAlternativeVideoStandsInForTheMissingMainOne() {
-        // основной поток бывает в HEVC, и клиент кладёт рядом запасной в H.264;
-        // любого из двух по отдельности может не быть вовсе
-        assertEquals(Optional.of(5), TelegramMedia.storyVideo(content(video(5), video(9))));
-        assertEquals(Optional.of(9), TelegramMedia.storyVideo(content(null, video(9))));
-        assertEquals(Optional.of(5), TelegramMedia.storyVideo(content(video(5), null)));
-        assertEquals(Optional.empty(), TelegramMedia.storyVideo(content(null, null)));
+    void aStoryWithoutAVideoIsNotWatched() {
+        // ни основного ролика, ни запасного: смотреть нечего, и это не ошибка
+        assertEquals("", TelegramMedia.storyVideo(content(null, null),
+                (id, withSound) -> id.map(file -> "видео " + file).orElse("")));
     }
 
     @Test

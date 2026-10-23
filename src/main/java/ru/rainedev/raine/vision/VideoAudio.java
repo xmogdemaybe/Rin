@@ -71,6 +71,12 @@ public final class VideoAudio {
     /** Длина заголовка ADTS без контрольной суммы. */
     private static final int ADTS_HEADER = 7;
 
+    /**
+     * Тише этого в дорожке ничего нет. Речь и цифровая тишина различаются на
+     * порядки: даже шёпот громче шума квантования во много раз.
+     */
+    private static final int SILENCE_PEAK = 256;
+
     /** С такой подписи начинается всякий MP4; всё прочее нам не по зубам. */
     private static final List<String> KNOWN_BOXES = List.of("ftyp", "moov", "mdat", "free", "skip", "wide");
 
@@ -133,6 +139,12 @@ public final class VideoAudio {
             }
             Sound sound = decode(track.get());
             if (sound == null || sound.samples().length == 0) {
+                return Optional.empty();
+            }
+            if (silent(sound.samples())) {
+                // дорожка есть, а звука в ней нет: распознавание речи на тишине
+                // не молчит, а выдумывает субтитры
+                log.debug("Дорожка оказалась тишиной — слушать нечего");
                 return Optional.empty();
             }
             samples = sound.samples();
@@ -260,5 +272,22 @@ public final class VideoAudio {
             offset += chunk.length;
         }
         return new Sound(samples, rate);
+    }
+
+    /**
+     * Пуста ли дорожка. Распознавание речи на тишине не молчит: оно выдаёт
+     * выдуманные субтитры, и они уходят в разговор как услышанное. Проверить
+     * громкость своими силами дешевле, чем потом объясняться.
+     * Видно пакету: тишину учатся находить без видео и без распознавания.
+     */
+    static boolean silent(short[] samples) {
+        for (short sample : samples) {
+            // сравниваем именно так, а не через Math.abs: у крайнего отсчёта
+            // модуль не помещается в short и выглядел бы тише порога
+            if (sample >= SILENCE_PEAK || sample <= -SILENCE_PEAK) {
+                return false;
+            }
+        }
+        return true;
     }
 }
