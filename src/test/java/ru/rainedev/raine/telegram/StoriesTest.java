@@ -105,6 +105,21 @@ class StoriesTest {
     }
 
     @Test
+    void anArchiveUpdateDoesNotEraseTheLiveListOfTheSameChat() {
+        // архив приходит тем же чатом: удалить по нему — значит потерять живую
+        // ленту, за которую на аватарке висит кружок
+        Stories feed = new Stories();
+        feed.onChanged(main(17L, 0, story(1, 50), story(2, 60)));
+
+        feed.onChanged(archived(17L, story(9, 10)));
+        feed.onChanged(archived(17L));
+
+        List<Stories.Entry> entries = feed.feed();
+        assertEquals(1, entries.size(), "чат остался в ленте");
+        assertEquals(2, entries.getFirst().total(), "и обе его истории тоже");
+    }
+
+    @Test
     void theFeedStartsWithWhoeverPostedLatest() {
         Stories feed = new Stories();
         feed.onChanged(main(21L, 0, story(1, 100)));
