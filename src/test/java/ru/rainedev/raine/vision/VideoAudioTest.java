@@ -161,4 +161,20 @@ class VideoAudioTest {
     void missingFileIsNotAnError() {
         assertFalse(VideoAudio.extract(Path.of("/net/takogo/video.mp4")).isPresent());
     }
+
+    @Test
+    void silenceIsNotTakenForSpeech() {
+        // распознавание речи на тишине не молчит: оно выдумывает субтитры,
+        // и они ушли бы в разговор как услышанное
+        assertTrue(VideoAudio.silent(new short[] {0, 1, -1, 255, -255}), "шум квантования — ещё не речь");
+        assertTrue(VideoAudio.silent(new short[0]), "в пустой дорожке говорить нечему");
+    }
+
+    @Test
+    void soundIsNotTakenForSilence() {
+        assertFalse(VideoAudio.silent(new short[] {0, 0, 300, 0}), "тихий, но звук");
+        // крайние отсчёты: модуль у них не помещается в short, но звуком быть не перестают
+        assertFalse(VideoAudio.silent(new short[] {0, Short.MIN_VALUE}));
+        assertFalse(VideoAudio.silent(new short[] {Short.MAX_VALUE, 0}));
+    }
 }

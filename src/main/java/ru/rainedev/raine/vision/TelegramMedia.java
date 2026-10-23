@@ -83,7 +83,7 @@ public final class TelegramMedia implements MediaDescriber {
      */
     public String describeStory(TdApi.Story story) {
         return storyBlock(story, seen(story.content,
-                file -> look(file, Vision.Kind.PHOTO), this::watch));
+                file -> look(file, Vision.Kind.PHOTO), video -> storyVideo(video, this::watch)));
     }
 
     /**
@@ -92,18 +92,35 @@ public final class TelegramMedia implements MediaDescriber {
      * Видно пакету: разбирать содержимое можно без Telegram и без зрения.
      */
     static String seen(TdApi.StoryContent content, java.util.function.Function<Optional<Integer>, String> look,
-                       java.util.function.Function<Optional<Integer>, String> watch) {
+                       java.util.function.Function<TdApi.StoryContentVideo, String> watch) {
         return switch (content) {
             case TdApi.StoryContentPhoto photo -> look.apply(largest(photo.photo));
-            case TdApi.StoryContentVideo video -> watch.apply(storyVideo(video));
+            case TdApi.StoryContentVideo video -> watch.apply(video);
             case null, default -> "";
         };
     }
 
-    /** Основное видео, а рядом с ним запасное в H.264 — его берут, когда основного нет. */
-    static Optional<Integer> storyVideo(TdApi.StoryContentVideo content) {
-        return fileOf(content.video == null ? null : content.video.video)
-                .or(() -> fileOf(content.alternativeVideo == null ? null : content.alternativeVideo.video));
+    /**
+     * Ролик истории.
+     * <p>
+     * Анимация звука не имеет вовсе, а распознавание речи на тишине не молчит —
+     * оно выдумывает субтитры, и они ушли бы в разговор как услышанное.
+     * <p>
+     * Основной ролик бывает в HEVC, который нашему разборщику не по зубам:
+     * когда из него ничего не вышло, пробуют запасной — тот в H.264.
+     * Видно пакету: порядок проб учат без Telegram и без зрения.
+     *
+     * @param watch разбор файла: его номер и слушать ли звук
+     */
+    static String storyVideo(TdApi.StoryContentVideo content,
+                             java.util.function.BiFunction<Optional<Integer>, Boolean, String> watch) {
+        boolean withSound = content.video == null || !content.video.isAnimation;
+        String seen = watch.apply(storyFile(content.video), withSound);
+        return seen == null || seen.isBlank() ? watch.apply(storyFile(content.alternativeVideo), withSound) : seen;
+    }
+
+    private static Optional<Integer> storyFile(TdApi.StoryVideo video) {
+        return fileOf(video == null ? null : video.video);
     }
 
     /**
@@ -248,8 +265,17 @@ public final class TelegramMedia implements MediaDescriber {
      * чем ничего.
      */
     private String watch(Optional<Integer> fileId) {
+        return watch(fileId, true);
+    }
+
+    /**
+     * @param withSound слушать ли дорожку. У ролика без звука её не слушают:
+     *                  распознавание речи на тишине выдумывает субтитры, и они
+     *                  ушли бы в разговор как услышанное
+     */
+    private String watch(Optional<Integer> fileId, boolean withSound) {
         return fileId.flatMap(telegram::download)
-                .map(file -> vision.describeVideo(VideoFrames.sample(file), context.get(), file))
+                .map(file -> vision.describeVideo(VideoFrames.sample(file), context.get(), file, withSound))
                 .orElse("");
     }
 

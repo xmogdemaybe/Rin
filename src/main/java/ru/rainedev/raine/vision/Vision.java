@@ -127,6 +127,16 @@ public final class Vision {
      * @param file сам файл — из него слышно звук. Без него видео немое
      */
     public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file) {
+        return describeVideo(frames, context, file, true);
+    }
+
+    /**
+     * @param withSound слушать ли дорожку. Анимации и прочие ролики без звука не
+     *                  слушают вовсе: распознавание речи на тишине не молчит, а
+     *                  выдумывает субтитры, и они ушли бы в разговор как услышанное
+     */
+    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
+                                boolean withSound) {
         // разбор ролика — это шестнадцать обращений к зрению плюс расшифровка
         // звука; повторять их при каждом открытии чата непозволительно дорого
         if (file != null) {
@@ -138,7 +148,7 @@ public final class Vision {
         }
         if (frames.isEmpty()) {
             // картинку разобрать не вышло, но в звуке может быть всё главное
-            String onlySound = heard(file)
+            String onlySound = heard(file, withSound)
                     .map(speech -> "<video transcription>\n<f track=\"audio\">\n" + Markup.body(speech)
                             + "\n</f>\n</video transcription>\n")
                     .orElse("");
@@ -175,7 +185,7 @@ public final class Vision {
         if (timeline.isEmpty()) {
             return "";
         }
-        heard(file).ifPresent(speech ->
+        heard(file, withSound).ifPresent(speech ->
                 timeline.append("<f track=\"audio\">\n").append(Markup.body(speech)).append("\n</f>\n"));
         log.info("Просмотрено кадров: {}", frames.size());
         String described = "<video transcription>\n" + timeline
@@ -190,9 +200,11 @@ public final class Vision {
     /**
      * В ролике половина смысла обычно в звуке: без него «человек что-то говорит
      * в камеру» — это всё, что она узнает.
+     *
+     * @param withSound есть ли в ролике что слушать
      */
-    private java.util.Optional<String> heard(java.nio.file.Path file) {
-        if (file == null || hearing == null || !hearing.isAvailable()) {
+    private java.util.Optional<String> heard(java.nio.file.Path file, boolean withSound) {
+        if (!withSound || file == null || hearing == null || !hearing.isAvailable()) {
             return java.util.Optional.empty();
         }
         java.util.Optional<java.nio.file.Path> audio = VideoAudio.extract(file);
