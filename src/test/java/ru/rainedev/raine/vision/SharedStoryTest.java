@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import it.tdlight.jni.TdApi;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
@@ -152,6 +153,28 @@ class SharedStoryTest {
 
         assertTrue(marker.contains("chat_id=5501583141"), marker);
         assertTrue(marker.contains("story_id=12"), marker);
+    }
+
+    @Test
+    void theCaptionSurvivesWithoutEyes() {
+        // подпись пишет человек, и она не картинка: терять её из-за выключенного
+        // зрения незачем
+        TdApi.Story story = story("гуляла");
+        story.content = photoContent(3);
+        TelegramMedia blind = new TelegramMedia(null, null, () -> List.of());
+
+        String seen = blind.describeStory(story);
+
+        assertFalse(blind.sees(), "зрения нет");
+        assertTrue(seen.contains("caption=\"гуляла\""), seen);
+        assertFalse(seen.contains("фото 3"), "картинку вслепую не описывают: " + seen);
+    }
+
+    @Test
+    void nothingElseIsReachedWithoutEyes() {
+        // Telegram здесь намеренно нет: если бы разбор полез скачивать файл,
+        // тест упал бы раньше проверки
+        assertEquals("", new TelegramMedia(null, null, () -> List.of()).describe(message(new TdApi.MessagePhoto())));
     }
 
     private static TdApi.Message message(TdApi.MessageContent content) {

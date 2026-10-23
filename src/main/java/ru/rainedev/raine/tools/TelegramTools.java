@@ -306,7 +306,7 @@ public final class TelegramTools {
     /** Аватарка — по ней понятно, как выглядит собеседник. */
     public Tool chatPhoto(long chatId) {
         return Tool.simple("get_chat_photo", "Looks at the profile photo of this chat.", arguments -> {
-            if (media == null) {
+            if (media == null || !media.sees()) {
                 return "You can't see photos right now.";
             }
             return telegram.chatPhoto(chatId)
@@ -892,9 +892,9 @@ public final class TelegramTools {
                         return "Provide chat_id and story_id from view_stories.";
                     }
                     if (media == null) {
-                        // зрение выключено — смотреть нечем. Открывать историю
-                        // всё равно нельзя: автор увидел бы просмотр, за которым
-                        // ничего не стоит
+                        // разбор вложений не подключён вовсе: смотреть нечем, а
+                        // открывать историю всё равно нельзя — автор увидел бы
+                        // просмотр, за которым ничего не стоит
                         return "You cannot look at stories: your vision is turned off.";
                     }
                     TdApi.Chat chat;
@@ -911,6 +911,13 @@ public final class TelegramTools {
                     if (story == null) {
                         // истории живут сутки-двое: к этому моменту она могла протухнуть
                         return "That story is gone — they expire after a day or two.";
+                    }
+                    if (!media.sees()) {
+                        // глаз нет, но подпись и плашки — текст: его читают и так.
+                        // Историю не открывают: автор увидел бы просмотр, за которым
+                        // ничего не стоит
+                        return media.describeStory(story)
+                                + "\nYou cannot see the picture — your vision is turned off.";
                     }
                     actions.openStory(chatId, storyId);
                     try {

@@ -27,7 +27,7 @@ public final class MediaAhead {
     private MediaAhead() {}
 
     public static void look(MediaDescriber media, List<TdApi.Message> messages) {
-        if (media == MediaDescriber.NONE || messages.size() < 2) {
+        if (!media.sees() || messages.size() < 2) {
             return;
         }
         long startedAt = System.currentTimeMillis();
