@@ -1,10 +1,15 @@
 package ru.rainedev.raine.phone;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import it.tdlight.jni.TdApi;
 import java.util.List;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -21,22 +26,26 @@ class MediaAheadTest {
     void attachmentsAreLookedAtSideBySide() {
         // по одному десяток картинок — это минута молчания, пока собеседник ждёт
         AtomicInteger looks = new AtomicInteger();
-        MediaDescriber slow = message -> {
+        // барьер сходится только тогда, когда все шестеро стоят на нём вместе:
+        // за ним видно именно одновременность, а не удачное стечение секунд
+        CyclicBarrier together = new CyclicBarrier(6);
+        AtomicBoolean queued = new AtomicBoolean();
+        MediaDescriber sideBySide = message -> {
             try {
-                Thread.sleep(200);
+                together.await(10, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+            } catch (BrokenBarrierException | TimeoutException e) {
+                queued.set(true);
             }
             looks.incrementAndGet();
             return "описание";
         };
 
-        long startedAt = System.currentTimeMillis();
-        MediaAhead.look(slow, List.of(message(1), message(2), message(3), message(4), message(5), message(6)));
-        long spent = System.currentTimeMillis() - startedAt;
+        MediaAhead.look(sideBySide, List.of(message(1), message(2), message(3), message(4), message(5), message(6)));
 
         assertEquals(6, looks.get(), "разглядеть надо все");
-        assertTrue(spent < 700, "шесть по 200 мс должны уложиться в одно ожидание, а вышло " + spent);
+        assertFalse(queued.get(), "шесть обращений должны идти одновременно, а не друг за другом");
     }
 
     @Test

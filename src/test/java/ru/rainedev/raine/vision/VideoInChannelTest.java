@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import it.tdlight.jni.TdApi;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
@@ -55,10 +56,109 @@ class VideoInChannelTest {
         assertEquals(Vision.Kind.STICKER, TelegramMedia.kindOf(document(null)));
     }
 
+    @Test
+    void aChannelIsGlancedWhileChannelVideosAreOff() {
+        // правило читается из одного места: и когда историю кинули в канал, и
+        // когда её открывают из ленты
+        assertTrue(media(false).onlyGlanceIn(channel()), "в канале хватит заставки");
+        assertFalse(media(true).onlyGlanceIn(channel()), "разрешено — значит смотрим целиком");
+    }
+
+    @Test
+    void anyOtherChatIsWatchedWhole() {
+        TelegramMedia media = media(false);
+
+        assertFalse(media.onlyGlanceIn(privateChat()), "в переписке ролик — часть разговора");
+        assertFalse(media.onlyGlanceIn(group()), "группа — не канал");
+        assertFalse(media.onlyGlanceIn(null), "неизвестного чата как канала считать нельзя");
+    }
+
+    @Test
+    void aGlanceThatSawNothingSaysSoWithoutTouchingTheVideo() {
+        // заставки может и не быть: молчание тогда выглядит как «вложения нет»,
+        // а лезть за кадром в канал ровно тогда, когда его запретили, глупо
+        AtomicBoolean watched = new AtomicBoolean();
+
+        String described = TelegramMedia.watchOrGlance(true,
+                () -> {
+                    watched.set(true);
+                    return "покадровое описание";
+                },
+                () -> "");
+
+        assertTrue(described.contains("not supported"), described);
+        assertFalse(watched.get(), "сам ролик так и не тронут");
+    }
+
+    @Test
+    void aStoryVideoInAChannelStopsAtTheThumbnail() {
+        // история из канала приходит потоком: покадрово разбирать каждую —
+        // платить зрению за каждый кадр каждого поста
+        AtomicBoolean watched = new AtomicBoolean();
+
+        String seen = TelegramMedia.storyVideo(videoStory(), true,
+                (file, withSound) -> {
+                    watched.set(true);
+                    return "покадровое описание";
+                },
+                () -> "заставка");
+
+        assertEquals("заставка", seen);
+        assertFalse(watched.get(), "к самому ролику даже прикасаться незачем");
+    }
+
+    @Test
+    void aStoryVideoInAChatIsWatchedWhole() {
+        assertEquals("покадровое описание",
+                TelegramMedia.storyVideo(videoStory(), false,
+                        (file, withSound) -> "покадровое описание", () -> "заставка"));
+    }
+
+    /** Зрение и Telegram здесь не нужны: решает только тип чата да тумблер. */
+    private static TelegramMedia media(boolean videoInChannels) {
+        TelegramMedia media = new TelegramMedia(null, null, () -> List.of());
+        media.videoInChannels(videoInChannels);
+        return media;
+    }
+
+    private static TdApi.Chat chat(TdApi.ChatType type) {
+        TdApi.Chat chat = new TdApi.Chat();
+        chat.id = 1L;
+        chat.type = type;
+        return chat;
+    }
+
+    private static TdApi.Chat channel() {
+        TdApi.ChatTypeSupergroup type = new TdApi.ChatTypeSupergroup();
+        type.isChannel = true;
+        return chat(type);
+    }
+
+    private static TdApi.Chat group() {
+        TdApi.ChatTypeSupergroup type = new TdApi.ChatTypeSupergroup();
+        type.isChannel = false;
+        return chat(type);
+    }
+
+    private static TdApi.Chat privateChat() {
+        return chat(new TdApi.ChatTypePrivate());
+    }
+
     private static TdApi.MessageDocument document(String fileName) {
         TdApi.MessageDocument message = new TdApi.MessageDocument();
         message.document = new TdApi.Document();
         message.document.fileName = fileName;
         return message;
+    }
+
+    /** Ролик истории: сам файл есть, а зрения и Telegram рядом не требуется. */
+    private static TdApi.StoryContentVideo videoStory() {
+        TdApi.File file = new TdApi.File();
+        file.id = 9;
+        TdApi.StoryVideo video = new TdApi.StoryVideo();
+        video.video = file;
+        TdApi.StoryContentVideo content = new TdApi.StoryContentVideo();
+        content.video = video;
+        return content;
     }
 }
