@@ -43,9 +43,24 @@ git clone https://github.com/xmogdemaybe/Rin rin && cd rin
 
 cp config.properties.example config.properties   # заполнить первые семь строк
 cp -r prompts-example prompts                    # характер: правится как хочется
-
-./gradlew run
 ```
+
+Дальше — развилка:
+
+```bash
+./gradlew run                    # посмотреть, как она
+```
+
+```bash
+./gradlew installDist            # оставить жить
+./build/install/rin/bin/rin
+```
+
+`run` — способ быстрый, но она останавливается вместе с консолью, которая её
+запустила. `installDist` собирает готовую запускалку в `build/install/rin/`:
+это обычный процесс, он переживает закрытие терминала и может работать сколько
+угодно. В обоих случаях запускать нужно из папки проекта: `config.properties` и
+`prompts/` читаются оттуда.
 
 При первом запуске Telegram спросит код подтверждения — он вводится в консоль.
 Дальше сессия хранится в `session/`, и заново это не понадобится.
