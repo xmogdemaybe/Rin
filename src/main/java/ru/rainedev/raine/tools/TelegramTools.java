@@ -186,11 +186,17 @@ public final class TelegramTools {
         this.actingOnImpulse = flag;
     }
 
-    /** Съёмка подключается отдельно: без ключа генерации инструмента просто не будет. */
-    public void camera(ru.rainedev.raine.image.ImageGenerator camera, java.nio.file.Path gallery,
-                       PhotoOutcome outcome) {
-        this.camera = camera;
+    /**
+     * Папка снимков. Настраивается сама, независимо от генератора: готовые
+     * фото в ней остаются, даже когда рисовать нечем, — и их можно выкладывать.
+     */
+    public void gallery(java.nio.file.Path gallery) {
         this.gallery = gallery;
+    }
+
+    /** Съёмка подключается отдельно: без ключа генерации инструмента просто не будет. */
+    public void camera(ru.rainedev.raine.image.ImageGenerator camera, PhotoOutcome outcome) {
+        this.camera = camera;
         this.photoOutcome = outcome;
     }
 
@@ -1005,9 +1011,6 @@ public final class TelegramTools {
                 .requiredString("photo", "Filename from your gallery, the one take_photo returned")
                 .optionalString("caption", "Optional short caption under the photo")
                 .build(arguments -> {
-                    if (camera == null || !camera.isAvailable()) {
-                        return "You have no camera, so there is nothing to post a story from.";
-                    }
                     String name = arguments.path("photo").asText("").strip();
                     if (!isPlainFilename(name)) {
                         return "Filename must be a plain name: no path, no drive letter.";

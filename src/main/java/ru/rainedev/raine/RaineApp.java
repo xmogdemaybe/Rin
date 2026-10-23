@@ -185,6 +185,9 @@ public final class RaineApp implements AutoCloseable {
                 lockdown, antiRepeat);
         tools.media(telegramMedia);
         tools.storyFeed(stories);
+        // галерея — папка из настроек, а не часть генератора: снимки, которые в
+        // ней уже лежат, можно выкладывать и тогда, когда рисовать нечем
+        tools.gallery(config.camera().gallery());
 
         var horde = new ru.rainedev.raine.image.HordeClient(
                 config.camera().baseUrl(), config.camera().apiKey(), config.camera().models(),
@@ -192,8 +195,7 @@ public final class RaineApp implements AutoCloseable {
         if (config.camera().enabled() && horde.isAvailable()) {
             tools.camera(new ru.rainedev.raine.image.ImageGenerator(horde, llm, prompts,
                     config.camera().gallery(), config.character().name(),
-                    config.vision().model(), config.camera().maxTrials()),
-                    config.camera().gallery(), this::onPhotoOutcome);
+                    config.vision().model(), config.camera().maxTrials()), this::onPhotoOutcome);
         } else {
             log.info("Генерация снимков не настроена: сфотографироваться нечем");
         }
