@@ -1305,7 +1305,8 @@ public final class TelegramTools {
      * Сколько раз эта же черта уже записана — по совпадению формулировки, без
      * сети. Копилка считается вместе с дневником: заметка, сделанная час
      * назад, в дневник ещё не дошла, а повтором уже считается.
-     */    private long sameTraitCount(String trait) {
+     */
+    private long sameTraitCount(String trait) {
         long pending = traitSignals.countSame(trait);
         if (traitDiary == null) {
             return pending;
@@ -1339,9 +1340,6 @@ public final class TelegramTools {
                 });
     }
 
-    
-    
-    
     /** Поиск по переписке — «когда мы это обсуждали?». */
     public Tool searchMessages(long chatId, MessageFormatter.ChatView view) {
         return Tool.named("search_messages")

@@ -54,7 +54,6 @@ public final class Stories {
         Comparator<TdApi.ChatActiveStories> newestFirst = Comparator.comparingInt(Stories::newest).reversed()
                 .thenComparingLong(stories -> stories.chatId);
         return active.values().stream()
-                .filter(stories -> inFeed(stories.list))
                 .sorted(newestFirst)
                 .map(Stories::entryOf)
                 .flatMap(Optional::stream)

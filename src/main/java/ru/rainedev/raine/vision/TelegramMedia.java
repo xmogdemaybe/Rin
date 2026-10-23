@@ -235,6 +235,11 @@ public final class TelegramMedia implements MediaDescriber {
                             : "предложенная реакция: %s (%d)".formatted(emoji, reaction.totalCount));
                 }
                 case TdApi.StoryAreaTypeUpgradedGift gift -> noted.add(withValue("подарок", gift.giftName));
+                // метка места: координаты, а не название — назвать её «местом»
+                // с заголовком было бы выдумкой
+                case TdApi.StoryAreaTypeLocation ignored -> noted.add("метка места по координатам");
+                // новых типов наклеек Telegram добавляет больше, чем успевает
+                // обновиться библиотека: молчание здесь честнее выдуманного имени
                 case null, default -> { }
             }
         }
