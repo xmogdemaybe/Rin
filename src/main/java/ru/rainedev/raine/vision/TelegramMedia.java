@@ -205,6 +205,9 @@ public final class TelegramMedia implements MediaDescriber {
     /**
      * Плашки на истории рисует сам клиент поверх картинки: ни в файле, ни в кадрах
      * их нет. Ссылка, погода или репост поста видны только здесь.
+     * <p>
+     * Наполненность полей Telegram оставляет за собой, а слово «null» в описании
+     * читается как часть содержания, поэтому пустоту называют самой плашкой.
      */
     static String attached(TdApi.StoryArea[] areas) {
         if (areas == null) {
@@ -212,21 +215,32 @@ public final class TelegramMedia implements MediaDescriber {
         }
         List<String> noted = new ArrayList<>();
         for (TdApi.StoryArea area : areas) {
+            if (area == null) {
+                continue;
+            }
             switch (area.type) {
-                case TdApi.StoryAreaTypeLink link -> noted.add("ссылка: " + link.url);
+                case TdApi.StoryAreaTypeLink link -> noted.add(withValue("ссылка", link.url));
                 case TdApi.StoryAreaTypeVenue venue ->
-                        noted.add(venue.venue == null ? "место" : "место: " + venue.venue.title);
-                case TdApi.StoryAreaTypeWeather weather ->
-                        noted.add("погода: %s %.0f°".formatted(weather.emoji, weather.temperature));
+                        noted.add(withValue("место", venue.venue == null ? null : venue.venue.title));
+                case TdApi.StoryAreaTypeWeather weather -> noted.add(withValue("погода",
+                        (weather.emoji == null ? "" : weather.emoji + " ") + "%.0f°".formatted(weather.temperature)));
                 case TdApi.StoryAreaTypeMessage ignored -> noted.add("репост сообщения из другого чата");
-                case TdApi.StoryAreaTypeSuggestedReaction reaction ->
-                        noted.add("предложенная реакция: %s (%d)"
-                                .formatted(emojiOf(reaction.reactionType), reaction.totalCount));
-                case TdApi.StoryAreaTypeUpgradedGift gift -> noted.add("подарок: " + gift.giftName);
+                case TdApi.StoryAreaTypeSuggestedReaction reaction -> {
+                    String emoji = emojiOf(reaction.reactionType);
+                    noted.add(emoji.isBlank()
+                            ? "предложенная реакция (%d)".formatted(reaction.totalCount)
+                            : "предложенная реакция: %s (%d)".formatted(emoji, reaction.totalCount));
+                }
+                case TdApi.StoryAreaTypeUpgradedGift gift -> noted.add(withValue("подарок", gift.giftName));
                 case null, default -> { }
             }
         }
         return String.join("; ", noted);
+    }
+
+    /** Плашка без значения остаётся своим названием: «ссылка» честнее, чем «null». */
+    private static String withValue(String label, String value) {
+        return value == null || value.isBlank() ? label : label + ": " + value;
     }
 
     private static String emojiOf(TdApi.ReactionType type) {

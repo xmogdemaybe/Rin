@@ -63,6 +63,32 @@ class SharedStoryTest {
     }
 
     @Test
+    void anAbsentAreaIsSkippedAndNotCounted() {
+        // массив приезжает из TDLib и дырявее его только подпись истории:
+        // пустой элемент не должен ронять разметку всего чата
+        String attached = TelegramMedia.attached(new TdApi.StoryArea[] {
+                null,
+                area(new TdApi.StoryAreaTypeLink("https://example.com/dog")),
+        });
+
+        assertEquals("ссылка: https://example.com/dog", attached);
+    }
+
+    @Test
+    void anUnnamedAreaIsNamedByItself() {
+        // «null» внутри подписи модель прочитает как часть содержания, а не как
+        // пропущенное поле
+        TdApi.StoryAreaTypeLink link = new TdApi.StoryAreaTypeLink();
+        link.url = null;
+        TdApi.StoryAreaTypeUpgradedGift gift = new TdApi.StoryAreaTypeUpgradedGift();
+        gift.giftName = "  ";
+
+        String attached = TelegramMedia.attached(new TdApi.StoryArea[] { area(link), area(gift) });
+
+        assertEquals("ссылка; подарок", attached);
+    }
+
+    @Test
     void aStoryWithoutADescriptionStaysOneLine() {
         // пустой блок выглядит так, будто историю разглядели и в ней ничего нет
         assertEquals("<story caption=\"гуляла\" />", TelegramMedia.storyBlock(story("гуляла"), ""));
