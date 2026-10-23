@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -13,20 +12,18 @@ import org.junit.jupiter.api.io.TempDir;
 
 class FilenameSafetyTest {
 
-    private static boolean plain(String name) throws Exception {
-        Method method = TelegramTools.class.getDeclaredMethod("isPlainFilename", String.class);
-        method.setAccessible(true);
-        return (boolean) method.invoke(null, name);
+    private static boolean plain(String name) {
+        return TelegramTools.isPlainFilename(name);
     }
 
     @Test
-    void acceptsOrdinaryFilenames() throws Exception {
+    void acceptsOrdinaryFilenames() {
         assertTrue(plain("1784651739.webp"));
         assertTrue(plain("1784651739.ogg"));
     }
 
     @Test
-    void refusesPathsLeadingOutOfTheFolder() throws Exception {
+    void refusesPathsLeadingOutOfTheFolder() {
         // имя файла приходит от модели: без проверки это дорога к любому файлу на диске
         assertFalse(plain("../../etc/passwd"));
         assertFalse(plain("..\\windows\\system32"));
@@ -36,7 +33,15 @@ class FilenameSafetyTest {
     }
 
     @Test
-    void refusesEmptyName() throws Exception {
+    void refusesADriveRelativeName() {
+        // на Windows это тоже путь: ни точек, ни косых черт в нём нет, и проверка
+        // «не выпуская за папку» его бы пропустила — двоеточие режем на имени
+        assertFalse(plain("C:photo.png"));
+        assertFalse(plain("D:photo.png"));
+    }
+
+    @Test
+    void refusesEmptyName() {
         assertFalse(plain(""));
     }
 
@@ -45,12 +50,12 @@ class FilenameSafetyTest {
         Path photo = gallery.resolve("1784651739.webp");
         Files.writeString(photo, "снимок");
 
-        assertEquals(photo, TelegramTools.galleryPhoto(gallery, "1784651739.webp"));
+        assertEquals(photo, TelegramTools.fileInside(gallery, "1784651739.webp"));
     }
 
     @Test
     void aPhotoThatIsNotThereIsNotFound(@TempDir Path gallery) {
-        assertNull(TelegramTools.galleryPhoto(gallery, "missing.webp"));
+        assertNull(TelegramTools.fileInside(gallery, "missing.webp"));
     }
 
     @Test
@@ -59,6 +64,16 @@ class FilenameSafetyTest {
         // и без них — на Windows достаточно «C:photo.png»
         Files.writeString(gallery.getParent().resolve("outside.webp"), "чужое");
 
-        assertNull(TelegramTools.galleryPhoto(gallery, "../outside.webp"));
+        assertNull(TelegramTools.fileInside(gallery, "../outside.webp"));
+    }
+
+    @Test
+    void aFolderIsNotAPhoto(@TempDir Path gallery) throws Exception {
+        // «.» разворачивается в саму папку: отправить её нельзя, и жаловаться
+        // на несуществующий снимок честнее, чем тащить каталог в Telegram
+        Files.createDirectory(gallery.resolve("sub"));
+
+        assertNull(TelegramTools.fileInside(gallery, "sub"));
+        assertNull(TelegramTools.fileInside(gallery, "."));
     }
 }

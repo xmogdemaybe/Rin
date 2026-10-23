@@ -508,10 +508,10 @@ public final class TelegramTools {
                     // отдельными сообщениями следом, как обычная реплика
                     if (!photoName.isEmpty()) {
                         if (!isPlainFilename(photoName)) {
-                            return "Filename must be a plain name, without slashes or dots leading elsewhere.";
+                            return "Filename must be a plain name: no path, no drive letter.";
                         }
-                        java.nio.file.Path photo = gallery.resolve(photoName);
-                        if (!java.nio.file.Files.exists(photo)) {
+                        java.nio.file.Path photo = fileInside(gallery, photoName);
+                        if (photo == null) {
                             return "There is no such photo. Take one with take_photo first.";
                         }
                         List<String> lines = linesOf(text);
@@ -529,10 +529,10 @@ public final class TelegramTools {
 
                     if (!audioName.isEmpty()) {
                         if (!isPlainFilename(audioName)) {
-                            return "Filename must be a plain name, without slashes or dots leading elsewhere.";
+                            return "Filename must be a plain name: no path, no drive letter.";
                         }
-                        java.nio.file.Path recorded = voiceDir.resolve(audioName);
-                        if (!java.nio.file.Files.exists(recorded)) {
+                        java.nio.file.Path recorded = fileInside(voiceDir, audioName);
+                        if (recorded == null) {
                             return "There is no such voice message. Record one with record_audio first.";
                         }
                         try (TypingIndicator recording = TypingIndicator.recordingVoice(actions, chatId)) {
@@ -977,9 +977,9 @@ public final class TelegramTools {
                     }
                     String name = arguments.path("photo").asText("").strip();
                     if (!isPlainFilename(name)) {
-                        return "Filename must be a plain name, without slashes or dots leading elsewhere.";
+                        return "Filename must be a plain name: no path, no drive letter.";
                     }
-                    java.nio.file.Path photo = galleryPhoto(gallery, name);
+                    java.nio.file.Path photo = fileInside(gallery, name);
                     if (photo == null) {
                         return "There is no such photo. Take one with take_photo first.";
                     }
@@ -1523,25 +1523,30 @@ public final class TelegramTools {
     /**
      * Имя файла приходит от модели, а значит может прийти что угодно. Без этой
      * проверки «../../» в имени вывел бы за пределы галереи — к любому файлу
-     * на диске.
+     * на диске. Двоеточие режет ту же дорогу на Windows: «C:photo.png» — путь,
+     * и ни точек, ни косых черт в нём нет. Видно пакету: проверять это имя
+     * учатся без Telegram.
      */
-    private static boolean isPlainFilename(String name) {
-        return !name.isEmpty() && !name.contains("/") && !name.contains("\\") && !name.contains("..");
+    static boolean isPlainFilename(String name) {
+        return !name.isEmpty()
+                && !name.contains("/")
+                && !name.contains("\\")
+                && !name.contains("..")
+                && !name.contains(":");
     }
 
     /**
-     * Снимок из галереи или null, если имя уводит наружу либо файла нет.
-     * Одной проверки имени мало: на Windows «C:photo.png» — тоже путь, и в нём
-     * нет ни косой черты, ни точек. Видно пакету: имя приходит от модели,
-     * и проверять его учатся без Telegram.
+     * Файл из папки, где ему положено лежать, или null: имя могло развернуться
+     * наружу уже после проверки. Проверки имени одной мало — поэтому смотрим ещё
+     * и на сам путь, и на то, что по нему действительно файл, а не каталог.
      */
-    static java.nio.file.Path galleryPhoto(java.nio.file.Path gallery, String name) {
-        java.nio.file.Path root = gallery.normalize();
-        java.nio.file.Path photo = root.resolve(name).normalize();
-        if (!photo.startsWith(root)) {
+    static java.nio.file.Path fileInside(java.nio.file.Path folder, String name) {
+        java.nio.file.Path root = folder.normalize();
+        java.nio.file.Path file = root.resolve(name).normalize();
+        if (!file.startsWith(root)) {
             return null;
         }
-        return java.nio.file.Files.exists(photo) ? photo : null;
+        return java.nio.file.Files.isRegularFile(file) ? file : null;
     }
 
     /** Модель может прислать id строкой, числом или не прислать вовсе. */
