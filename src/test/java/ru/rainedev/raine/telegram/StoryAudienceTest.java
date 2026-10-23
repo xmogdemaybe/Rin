@@ -45,7 +45,8 @@ class StoryAudienceTest {
 
     @Test
     void nobodyIsExcludedFromTheStory() {
-        // список исключений пуст: отсекаем только тех, кого попросили не показывать
+        // круг задаёт сам выбор аудитории; личного списка «кроме» у неё нет,
+        // и вырезать кого-то в обход настройки она не вправе
         TdApi.StoryPrivacySettingsEveryone everyone =
                 (TdApi.StoryPrivacySettingsEveryone) StoryAudience.EVERYONE.request();
         TdApi.StoryPrivacySettingsContacts contacts =

@@ -89,6 +89,16 @@ class SharedStoryTest {
     }
 
     @Test
+    void aLocationStickerIsNamedWithoutInventingAPlace() {
+        // в такой плашке лежат координаты, а не название: выдумывать «где именно»
+        // незачем, а молчать — значит потерять сам факт метки
+        String attached = TelegramMedia.attached(
+                new TdApi.StoryArea[] { area(new TdApi.StoryAreaTypeLocation()) });
+
+        assertEquals("метка места по координатам", attached);
+    }
+
+    @Test
     void aStoryWithoutADescriptionStaysOneLine() {
         // пустой блок выглядит так, будто историю разглядели и в ней ничего нет
         assertEquals("<story caption=\"гуляла\" />", TelegramMedia.storyBlock(story("гуляла"), ""));
