@@ -919,8 +919,8 @@ public final class TelegramTools {
                         return media.describeStory(story)
                                 + "\nYou cannot see the picture — your vision is turned off.";
                     }
-                    actions.openStory(chatId, storyId);
                     try {
+                        actions.openStory(chatId, storyId);
                         // в канале роликом считают заставку: там их много на день
                         String seen = media.describeStory(story, media.onlyGlanceIn(chat));
                         log.info("{}", watched(chatId, storyId, seen));
@@ -928,7 +928,13 @@ public final class TelegramTools {
                                 ? "You watched the story, but there was nothing to look at."
                                 : seen;
                     } finally {
-                        actions.closeStory(chatId, storyId);
+                        // закрытие не должно прятать настоящую причину: история
+                        // могла не открыться, и ругаться тогда на close бессмысленно
+                        try {
+                            actions.closeStory(chatId, storyId);
+                        } catch (RuntimeException e) {
+                            log.debug("Историю {} чата {} не удалось закрыть: {}", storyId, chatId, e.getMessage());
+                        }
                     }
                 });
     }
