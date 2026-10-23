@@ -44,9 +44,24 @@ git clone https://github.com/xmogdemaybe/Rin rin && cd rin
 
 cp config.properties.example config.properties   # fill in the first seven lines
 cp -r prompts-example prompts                    # her personality, edit freely
-
-./gradlew run
 ```
+
+Starting her is a fork in the road:
+
+```bash
+./gradlew run                     # for a first look
+```
+
+```bash
+./gradlew installDist             # to let her live on
+./build/install/rin/bin/rin
+```
+
+`run` is the quick one, but she stops together with the terminal that started
+her. `installDist` builds a standalone launcher under `build/install/rin/`: an
+ordinary process, which outlives the console and can be left running for good.
+Either way, start from the project folder — `config.properties` and `prompts/`
+are read from there.
 
 The first run asks Telegram for a confirmation code — you type it into the
 terminal. After that the session lives in `session/` and you won't be asked again.
