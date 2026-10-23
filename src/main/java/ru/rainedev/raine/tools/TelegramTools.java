@@ -915,6 +915,7 @@ public final class TelegramTools {
                     actions.openStory(chatId, storyId);
                     try {
                         String seen = media.describeStory(story);
+                        log.info("{}", watched(chatId, storyId, seen));
                         return seen.isBlank()
                                 ? "You watched the story, but there was nothing to look at."
                                 : seen;
@@ -922,6 +923,22 @@ public final class TelegramTools {
                         actions.closeStory(chatId, storyId);
                     }
                 });
+    }
+
+    /**
+     * Строчка в лог. «Действия» на шаге показывают только название тулзы, и по
+     * ним не понять, открыла она историю или отказалась; здесь видно чата,
+     * номера и что именно разгляделось.
+     * <p>
+     * Видно пакету: текст проверяют без Telegram и без зрения.
+     */
+    static String watched(long chatId, int storyId, String seen) {
+        return seen.isBlank()
+                ? "Историю %d чата %d открыла — разглядывать нечего".formatted(storyId, chatId)
+                // одной строкой: многострочный просмотр тонет в логе между
+                // шагами разговора
+                : "Историю %d чата %d открыла: %s".formatted(storyId, chatId,
+                        seen.strip().replaceAll("\\s*\\n\\s*", " "));
     }
 
     /**
