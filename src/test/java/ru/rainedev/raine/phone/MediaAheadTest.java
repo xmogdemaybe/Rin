@@ -44,4 +44,27 @@ class MediaAheadTest {
         MediaAhead.look(MediaDescriber.NONE, List.of(message(1), message(2)));
         MediaAhead.look(message -> "описание", List.of());
     }
+
+    @Test
+    void withoutEyesNothingIsWarmedUp() {
+        // зрение выключено: гонять сеть заранее ради пустого ответа — значит
+        // отнимать время у разговора
+        AtomicInteger looks = new AtomicInteger();
+        MediaDescriber blind = new MediaDescriber() {
+            @Override
+            public String describe(TdApi.Message message) {
+                looks.incrementAndGet();
+                return "";
+            }
+
+            @Override
+            public boolean sees() {
+                return false;
+            }
+        };
+
+        MediaAhead.look(blind, List.of(message(1), message(2), message(3)));
+
+        assertEquals(0, looks.get(), "вслепую разглядывать нечего");
+    }
 }

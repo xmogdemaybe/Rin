@@ -19,6 +19,7 @@ public final class TelegramMedia implements MediaDescriber {
     private static final String UNREACHABLE = "её больше не открыть — могла протухнуть или быть скрытой";
 
     private final Telegram telegram;
+    /** Может не быть: зрение включают тумблером, а подпись истории читается и без него. */
     private final Vision vision;
     private final Supplier<List<Message>> context;
 
@@ -31,6 +32,12 @@ public final class TelegramMedia implements MediaDescriber {
         this.context = context;
     }
 
+    /** Есть ли чем разглядывать картинки. Без этого файл хотя бы не качают. */
+    @Override
+    public boolean sees() {
+        return vision != null;
+    }
+
     public void videoInChannels(boolean allowed) {
         this.videoInChannels = allowed;
     }
@@ -38,6 +45,12 @@ public final class TelegramMedia implements MediaDescriber {
     @Override
     public String describe(TdApi.Message message) {
         if (message == null || message.content == null) {
+            return "";
+        }
+        // без зрения разбирать нечего, и история не в счёт: её подпись и плашки —
+        // текст, а не картинка. Остальные вложения при выключенном зрении
+        // остаются ровно тем, чем были: пометкой о типе
+        if (!sees() && !(message.content instanceof TdApi.MessageStory)) {
             return "";
         }
         return switch (message.content) {
@@ -285,6 +298,9 @@ public final class TelegramMedia implements MediaDescriber {
      *                  ушли бы в разговор как услышанное
      */
     private String watch(Optional<Integer> fileId, boolean withSound) {
+        if (!sees()) {
+            return "";
+        }
         return fileId.flatMap(telegram::download)
                 .map(file -> vision.describeVideo(VideoFrames.sample(file), context.get(), file, withSound))
                 .orElse("");
@@ -316,6 +332,9 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     private String look(Optional<Integer> fileId, Vision.Kind kind) {
+        if (!sees()) {
+            return "";
+        }
         return fileId.flatMap(telegram::download)
                 .map((Path file) -> vision.describe(file, kind, context.get()))
                 .orElse("");

@@ -151,7 +151,6 @@ public final class RaineApp implements AutoCloseable {
         LlmClient llm = new OpenAiCompatibleClient(config.llm(), config.embeddingModel());
 
         // зрение подключается к разметке: описание встаёт прямо под вложением
-        MediaDescriber media = MediaDescriber.NONE;
         if (config.vision().enabled()) {
             vision = new Vision(llm, prompts, config.vision().cacheDir(),
                     config.vision().model(), config.vision().cheapModel(), config.character().name());
@@ -159,12 +158,14 @@ public final class RaineApp implements AutoCloseable {
             if (hearing.isAvailable()) {
                 vision.hearing(hearing);
             }
-            telegramMedia = new TelegramMedia(telegram, vision, () -> loop == null ? List.of() : loop.context());
-            telegramMedia.videoInChannels(config.vision().videoInChannels());
-            media = telegramMedia;
         } else {
             log.info("Зрение выключено: вложения видны только по типу");
         }
+        // разбор вложений подключён и без зрения: подпись истории, её плашки и
+        // расшифровка голоса глаз не требуют, а вот картинок без зрения нет
+        telegramMedia = new TelegramMedia(telegram, vision, () -> loop == null ? List.of() : loop.context());
+        telegramMedia.videoInChannels(config.vision().videoInChannels());
+        MediaDescriber media = telegramMedia;
 
         MessageFormatter formatter = new MessageFormatter(
                 telegram::nameOf,
@@ -181,9 +182,7 @@ public final class RaineApp implements AutoCloseable {
         AntiRepeat antiRepeat = new AntiRepeat(llm, prompts.lazy("anti_repeat.md"), config.repeat());
         tools = new TelegramTools(telegram, actions, new ChatScreen(formatter, prompts).recentDepth(config.vision().recentDepth()),
                 lockdown, antiRepeat);
-        if (telegramMedia != null) {
-            tools.media(telegramMedia);
-        }
+        tools.media(telegramMedia);
         tools.storyFeed(stories);
 
         var horde = new ru.rainedev.raine.image.HordeClient(

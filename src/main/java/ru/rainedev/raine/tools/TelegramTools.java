@@ -306,7 +306,7 @@ public final class TelegramTools {
     /** Аватарка — по ней понятно, как выглядит собеседник. */
     public Tool chatPhoto(long chatId) {
         return Tool.simple("get_chat_photo", "Looks at the profile photo of this chat.", arguments -> {
-            if (media == null) {
+            if (media == null || !media.sees()) {
                 return "You can't see photos right now.";
             }
             return telegram.chatPhoto(chatId)
@@ -892,9 +892,9 @@ public final class TelegramTools {
                         return "Provide chat_id and story_id from view_stories.";
                     }
                     if (media == null) {
-                        // зрение выключено — смотреть нечем. Открывать историю
-                        // всё равно нельзя: автор увидел бы просмотр, за которым
-                        // ничего не стоит
+                        // разбор вложений не подключён вовсе: смотреть нечем, а
+                        // открывать историю всё равно нельзя — автор увидел бы
+                        // просмотр, за которым ничего не стоит
                         return "You cannot look at stories: your vision is turned off.";
                     }
                     TdApi.Chat chat;
@@ -912,9 +912,17 @@ public final class TelegramTools {
                         // истории живут сутки-двое: к этому моменту она могла протухнуть
                         return "That story is gone — they expire after a day or two.";
                     }
+                    if (!media.sees()) {
+                        // глаз нет, но подпись и плашки — текст: его читают и так.
+                        // Историю не открывают: автор увидел бы просмотр, за которым
+                        // ничего не стоит
+                        return media.describeStory(story)
+                                + "\nYou cannot see the picture — your vision is turned off.";
+                    }
                     actions.openStory(chatId, storyId);
                     try {
                         String seen = media.describeStory(story);
+                        log.info("{}", watched(chatId, storyId, seen));
                         return seen.isBlank()
                                 ? "You watched the story, but there was nothing to look at."
                                 : seen;
@@ -922,6 +930,22 @@ public final class TelegramTools {
                         actions.closeStory(chatId, storyId);
                     }
                 });
+    }
+
+    /**
+     * Строчка в лог. «Действия» на шаге показывают только название тулзы, и по
+     * ним не понять, открыла она историю или отказалась; здесь видно чата,
+     * номера и что именно разгляделось.
+     * <p>
+     * Видно пакету: текст проверяют без Telegram и без зрения.
+     */
+    static String watched(long chatId, int storyId, String seen) {
+        return seen.isBlank()
+                ? "Историю %d чата %d открыла — разглядывать нечего".formatted(storyId, chatId)
+                // одной строкой: многострочный просмотр тонет в логе между
+                // шагами разговора
+                : "Историю %d чата %d открыла: %s".formatted(storyId, chatId,
+                        seen.strip().replaceAll("\\s*\\n\\s*", " "));
     }
 
     /**

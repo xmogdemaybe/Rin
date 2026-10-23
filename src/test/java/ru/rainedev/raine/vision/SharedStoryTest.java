@@ -5,9 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import it.tdlight.jni.TdApi;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
+import ru.rainedev.raine.phone.MessageContent;
 import ru.rainedev.raine.phone.MessageFormatter;
 
 /**
@@ -133,10 +135,46 @@ class SharedStoryTest {
         String result = formatter.format(message(new TdApi.MessageStory()),
                 new MessageFormatter.ChatView(1L, 500L));
 
-        assertTrue(result.contains("[история]"), result);
+        assertTrue(result.contains("[история"), result);
         assertTrue(result.contains("caption=\"гуляла\""), result);
         assertTrue(result.contains("ссылка: https://example.com/cat"), result);
         assertTrue(result.contains("фото 3"), result);
+    }
+
+    @Test
+    void theMarkerCarriesTheCoordinatesToOpenIt() {
+        // описание встаёт один раз, а вернуться к истории можно и позже — для
+        // этого нужны чат автора и её номер, больше взять их неоткуда
+        TdApi.MessageStory shared = new TdApi.MessageStory();
+        shared.storyPosterChatId = 5501583141L;
+        shared.storyId = 12;
+
+        String marker = MessageContent.describe(shared);
+
+        assertTrue(marker.contains("chat_id=5501583141"), marker);
+        assertTrue(marker.contains("story_id=12"), marker);
+    }
+
+    @Test
+    void theCaptionSurvivesWithoutEyes() {
+        // подпись пишет человек, и она не картинка: терять её из-за выключенного
+        // зрения незачем
+        TdApi.Story story = story("гуляла");
+        story.content = photoContent(3);
+        TelegramMedia blind = new TelegramMedia(null, null, () -> List.of());
+
+        String seen = blind.describeStory(story);
+
+        assertFalse(blind.sees(), "зрения нет");
+        assertTrue(seen.contains("caption=\"гуляла\""), seen);
+        assertFalse(seen.contains("фото 3"), "картинку вслепую не описывают: " + seen);
+    }
+
+    @Test
+    void nothingElseIsReachedWithoutEyes() {
+        // Telegram здесь намеренно нет: если бы разбор полез скачивать файл,
+        // тест упал бы раньше проверки
+        assertEquals("", new TelegramMedia(null, null, () -> List.of()).describe(message(new TdApi.MessagePhoto())));
     }
 
     private static TdApi.Message message(TdApi.MessageContent content) {
