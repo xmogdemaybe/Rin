@@ -71,12 +71,14 @@ public interface TelegramActions {
 
     /**
      * Выкладывание истории. Видно всем, кого она выбрала, и висит сутки —
-     * поэтому решение «выкладывать ли» принимает владелец настройкой.
+     * поэтому решение «выкладывать ли» и «кому показывать» принимает владелец настройкой.
      *
      * @param activePeriod сколько секунд история живёт
+     * @param audience     кому она будет видна
      * @return номер выложенной истории, 0 если ничего не выложено
      */
-    long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod);
+    long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod,
+                   StoryAudience audience);
 
     void uploadingPhoto(long chatId);
 
@@ -291,7 +293,8 @@ public interface TelegramActions {
         }
 
         @Override
-        public long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod) {
+        public long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod,
+                              StoryAudience audience) {
             TdApi.InputStoryContentPhoto content = new TdApi.InputStoryContentPhoto();
             content.photo = new TdApi.InputFileLocal(photo.toAbsolutePath().toString());
             content.addedStickerFileIds = new int[0];
@@ -305,9 +308,7 @@ public interface TelegramActions {
             if (caption != null && !caption.isBlank()) {
                 request.caption = new TdApi.FormattedText(caption, new TdApi.TextEntity[0]);
             }
-            // историю видят её контакты: для разговора с людьми этого довольно,
-            // а показывать снимок всему Telegram без спроса владельца нельзя
-            request.privacySettings = new TdApi.StoryPrivacySettingsContacts();
+            request.privacySettings = audience.request();
             request.albumIds = new int[0];
             request.activePeriod = activePeriod;
             return ask(request).id;
@@ -470,8 +471,10 @@ public interface TelegramActions {
         }
 
         @Override
-        public long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod) {
-            log.info("[только чтение] история из {} с подписью «{}» осталась бы невыложенной", photo, caption);
+        public long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod,
+                              StoryAudience audience) {
+            log.info("[только чтение] история из {} для {} с подписью «{}» осталась бы невыложенной",
+                    photo, audience, caption);
             return 0;
         }
 

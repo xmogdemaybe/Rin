@@ -12,6 +12,7 @@ import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.ChatScreen;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MessageFormatter;
+import ru.rainedev.raine.telegram.StoryAudience;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
 
@@ -929,12 +930,14 @@ public final class TelegramTools {
      * <p>
      * До отправки спрашивают разрешение у Telegram: он отвечает причиной,
      * и без неё она гадала бы, подождать сутки или не ждать вовсе.
+     *
+     * @param audience кому история будет видна — выбирает владелец, а не она
      */
-    public Tool postStory() {
+    public Tool postStory(StoryAudience audience) {
         return Tool.named("post_story")
-                .describedAs("Posts a story from your gallery. It stays up for a day and the people you keep in "
-                        + "your contacts see it. Take the photo with take_photo first, or reuse one you already "
-                        + "have. Only one story of yours can be up at a time.")
+                .describedAs(("Posts a story from your gallery. It stays up for a day and is visible to "
+                        + "%s. Take the photo with take_photo first, or reuse one you already have. "
+                        + "Only one story of yours can be up at a time.").formatted(audience.described()))
                 .requiredString("photo", "Filename from your gallery, the one take_photo returned")
                 .optionalString("caption", "Optional short caption under the photo")
                 .build(arguments -> {
@@ -960,12 +963,12 @@ public final class TelegramTools {
                         return refusal;
                     }
                     long storyId = actions.postStory(chatId, photo,
-                            arguments.path("caption").asText("").strip(), STORY_PERIOD);
+                            arguments.path("caption").asText("").strip(), STORY_PERIOD, audience);
                     if (storyId == 0) {
                         return "Nothing was posted.";
                     }
-                    log.info("История {} выложена из снимка {}", storyId, name);
-                    return "Story posted. It will be up for a day.";
+                    log.info("История {} выложена из снимка {} для {}", storyId, name, audience);
+                    return "Story posted — visible to %s. It will be up for a day.".formatted(audience.described());
                 });
     }
 

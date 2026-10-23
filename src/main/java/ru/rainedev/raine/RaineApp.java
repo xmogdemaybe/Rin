@@ -31,6 +31,7 @@ import ru.rainedev.raine.phone.Notifications;
 import ru.rainedev.raine.prompt.Prompts;
 import ru.rainedev.raine.telegram.Lockdown;
 import ru.rainedev.raine.telegram.Stories;
+import ru.rainedev.raine.telegram.StoryAudience;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
 import ru.rainedev.raine.telegram.TelegramProxy;
@@ -232,7 +233,9 @@ public final class RaineApp implements AutoCloseable {
         }
         // выкладывание — тумблер отдельный: историю видят люди, и решать это владельцу
         if (config.storiesPosting()) {
-            always.add(tools.postStory());
+            StoryAudience audience = StoryAudience.of(config.storiesAudience());
+            log.info("Истории выкладываю — они будут видны: {}", describe(audience));
+            always.add(tools.postStory(audience));
         }
 
         // рост личности: заметки о себе принимает эта же связка. Тумблер снял —
@@ -825,6 +828,14 @@ public final class RaineApp implements AutoCloseable {
             case NONE -> "все";
             case CONTACTS_ONLY -> "только контакты";
             case OWNER_ONLY -> "только владелец";
+        };
+    }
+
+    private static String describe(StoryAudience audience) {
+        return switch (audience) {
+            case EVERYONE -> "всем";
+            case CLOSE_FRIENDS -> "ближнему кругу";
+            case CONTACTS -> "только контактам";
         };
     }
 
