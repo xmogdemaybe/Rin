@@ -159,10 +159,11 @@ public final class RaineApp implements AutoCloseable {
                 vision.hearing(hearing);
             }
         } else {
-            log.info("Зрение выключено: вложения видны только по типу");
+            log.info("Зрение выключено: вложения видны только по типу, из истории — только текст");
         }
-        // разбор вложений подключён и без зрения: подпись истории, её плашки и
-        // расшифровка голоса глаз не требуют, а вот картинок без зрения нет
+        // разбор вложений подключён и без зрения: подпись истории и её плашки —
+        // текст, а не картинка. Остальные вложения при выключенном зрении
+        // остаются пометкой о типе, как было всегда
         telegramMedia = new TelegramMedia(telegram, vision, () -> loop == null ? List.of() : loop.context());
         telegramMedia.videoInChannels(config.vision().videoInChannels());
         MediaDescriber media = telegramMedia;

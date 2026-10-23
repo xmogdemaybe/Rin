@@ -203,6 +203,19 @@ class SharedStoryTest {
         assertEquals("", new TelegramMedia(null, null, () -> List.of()).describe(message(new TdApi.MessagePhoto())));
     }
 
+    @Test
+    void blindEyesDoNotBlameTheFormat() {
+        // «not supported» — это про файл, а файл цел: просто зрение выключено,
+        // и такая ложь ушла бы в разговор как слова о самом ролике
+        TdApi.Story story = story("гуляла");
+        story.content = content(video(5), null);
+
+        String seen = new TelegramMedia(null, null, () -> List.of()).describeStory(story);
+
+        assertTrue(seen.contains("caption=\"гуляла\""), seen);
+        assertFalse(seen.contains("not supported"), seen);
+    }
+
     private static TdApi.Message message(TdApi.MessageContent content) {
         TdApi.Message message = new TdApi.Message();
         message.id = 600L;
