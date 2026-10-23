@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import ru.rainedev.raine.telegram.Stories;
 
@@ -59,5 +60,40 @@ class StoryFeedLineTest {
         // канал и человек — разные вещи: в канале не ответишь, а человеку напишешь
         assertTrue(TelegramTools.storyLine(new Stories.Entry(15L, 1, 1, 1), "Новости", "channel")
                 .contains("kind=\"channel\""));
+    }
+
+    @Test
+    void anEmptyFeedSaysSoWithoutAnEmptyBlock() {
+        assertEquals("No one has stories up right now.", TelegramTools.feedOf(List.of()));
+    }
+
+    @Test
+    void aFeedWithinTheLimitIsShownWhole() {
+        String answer = TelegramTools.feedOf(List.of("<story chat_id=\"1\"/>\n", "<story chat_id=\"2\"/>\n"));
+
+        assertTrue(answer.contains("chat_id=\"2\""), "обрезать нечего: " + answer);
+        assertFalse(answer.contains("cut short"), "хвоста нет, и врать про него незачем: " + answer);
+    }
+
+    @Test
+    void aLongFeedIsCutWithHonestWordAboutTheRest() {
+        // лента приходит весь день: без предела сотни чатов ушли бы в контекст
+        List<String> lines = new java.util.ArrayList<>();
+        for (int i = 0; i < TelegramTools.STORY_FEED_LIMIT + 7; i++) {
+            lines.add("<story chat_id=\"%d\"/>\n".formatted(i));
+        }
+
+        String answer = TelegramTools.feedOf(lines);
+
+        assertTrue(answer.contains("chat_id=\"0\""), answer);
+        assertTrue(answer.contains("chat_id=\"%d\"".formatted(TelegramTools.STORY_FEED_LIMIT - 1)), answer);
+        assertFalse(answer.contains("chat_id=\"%d\"".formatted(TelegramTools.STORY_FEED_LIMIT)),
+                "за пределом лимита строк быть не должно: " + answer);
+        assertTrue(answer.contains("7 more are up but not shown"),
+                "молчаливый обрезок читается как «больше никого нет»: " + answer);
+        assertTrue(answer.endsWith("not shown here."), "хвост остаётся после блока: " + answer);
+        assertEquals(TelegramTools.STORY_FEED_LIMIT,
+                answer.split("<story ").length - 1, "строк ровно по лимиту: " + answer);
+        assertEquals(1, answer.split("</stories>").length - 1, "блок один и он закрыт: " + answer);
     }
 }

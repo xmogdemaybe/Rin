@@ -57,6 +57,9 @@ public final class TelegramTools {
     /** Столько контактов показываем разом: длиннее — простыня, а не список. */
     private static final int CONTACT_LIMIT = 50;
 
+    /** Столько строк ленты историй уходит в ответ разом: дальше — простыня. */
+    static final int STORY_FEED_LIMIT = 40;
+
     /** Длиннее превью в списке чатов не нужно. */
     private static final int PREVIEW_LENGTH = 80;
 
@@ -839,7 +842,7 @@ public final class TelegramTools {
                     if (storyFeed == null) {
                         return "Stories are turned off.";
                     }
-                    StringBuilder out = new StringBuilder();
+                    List<String> lines = new java.util.ArrayList<>();
                     for (ru.rainedev.raine.telegram.Stories.Entry entry : storyFeed.feed()) {
                         TdApi.Chat chat;
                         try {
@@ -850,12 +853,30 @@ public final class TelegramTools {
                         if (!allowed(chat)) {
                             continue;
                         }
-                        out.append(storyLine(entry, chat.title, kindOf(chat)));
+                        lines.add(storyLine(entry, chat.title, kindOf(chat)));
                     }
-                    return out.isEmpty()
-                            ? "No one has stories up right now."
-                            : "These people have stories right now:\n<stories>\n" + out + "</stories>";
+                    return feedOf(lines);
                 });
+    }
+
+    /**
+     * Ответ ленты из готовых строк. Telegram пополняет её весь день, и список
+     * мог бы разрастись до сотен чатов — тогда он занял бы полконтекста.
+     * Показываем начало, а остаток называем вслух: молчаливый обрезок модель
+     * прочла бы как «больше никого нет». Видно пакету: склейку проверяют без Telegram.
+     */
+    static String feedOf(List<String> lines) {
+        if (lines.isEmpty()) {
+            return "No one has stories up right now.";
+        }
+        int shown = Math.min(STORY_FEED_LIMIT, lines.size());
+        StringBuilder out = new StringBuilder("These people have stories right now:\n<stories>\n")
+                .append(String.join("", lines.subList(0, shown)))
+                .append("</stories>");
+        return shown == lines.size()
+                ? out.toString()
+                : out + "\nThe list is cut short: %d more are up but not shown here."
+                        .formatted(lines.size() - shown);
     }
 
     /** Строка ленты. Видно пакету: круг общения и разметку проверяют без Telegram. */
