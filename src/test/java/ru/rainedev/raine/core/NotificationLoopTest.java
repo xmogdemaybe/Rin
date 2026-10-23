@@ -166,7 +166,7 @@ class NotificationLoopTest {
     }
 
     @Test
-    void technicalFailureIsShownToModelInsteadOfBreakingTurn() {
+    void technicalFailureReachesTheModelWithoutItsDetails() {
         Toolbox tools = new Toolbox(Tool.simple("send", "Отправляет", arguments -> {
             throw new IllegalStateException("нет сети");
         }));
@@ -178,9 +178,14 @@ class NotificationLoopTest {
         NotificationLoop loop = loopWith(llm, tools);
         loop.process(new Notification("тебе написали"));
 
-        assertTrue(loop.context().stream()
-                .anyMatch(m -> m.content() != null && m.content().contains("нет сети")),
-                "модель должна увидеть причину и решить, что делать");
+        assertTrue(loop.context().stream().anyMatch(m -> m.content() != null
+                        && m.content().startsWith("Не получилось")),
+                "модель должна увидеть отказ и решить, что делать");
+        // причины в контексте нет: в тексте ошибки бывают данные аккаунта,
+        // а подробности и так ложатся в журнал
+        assertFalse(loop.context().stream().anyMatch(m -> m.content() != null
+                        && m.content().contains("нет сети")),
+                "текст ошибки не должен уходить в разговор");
     }
 
     @Test
