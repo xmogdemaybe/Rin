@@ -272,6 +272,7 @@ public final class TelegramTools {
                 // описание параметра берётся из промпта: это часть характера,
                 // а не техническая подпись — правится без пересборки
                 .requiredString("audio_desc", speechPrompt.get())
+                .mutating()
                 .build(arguments -> {
                     String text = arguments.path("audio_desc").asText("").strip();
                     if (text.isEmpty()) {
@@ -456,6 +457,7 @@ public final class TelegramTools {
                 .optionalString("reply_to_message_id",
                         "Optional. Quote a specific earlier message by its message_id. Leave empty for a normal "
                                 + "reply — quoting every message looks unnatural in a live conversation.")
+                .mutating()
                 .build(arguments -> {
                     String text = arguments.path("text").asText("").replace("\r", "").strip();
                     String photoName = arguments.path("photo_filename").asText("").strip();
@@ -637,6 +639,7 @@ public final class TelegramTools {
                         + "sending a full reply. Allowed: " + String.join(" ", Emoji.ALLOWED))
                 .requiredInteger("message_id", "Id of the message to react to")
                 .requiredString("emoji", "One emoji from the allowed list")
+                .mutating()
                 .build(arguments -> {
                     long messageId = Numbers.longAt(arguments, "message_id", 0);
                     String wanted = Emoji.normalize(arguments.path("emoji").asText(""));
@@ -1010,6 +1013,7 @@ public final class TelegramTools {
                         + "Only one story of yours can be up at a time.").formatted(audience.described()))
                 .requiredString("photo", "Filename from your gallery, the one take_photo returned")
                 .optionalString("caption", "Optional short caption under the photo")
+                .mutating()
                 .build(arguments -> {
                     String name = arguments.path("photo").asText("").strip();
                     if (!isPlainFilename(name)) {
@@ -1074,6 +1078,7 @@ public final class TelegramTools {
                 .requiredInteger("user_id", "Id of the person")
                 .requiredString("first_name", "How you want to call them in your contacts")
                 .optionalString("last_name", "Optional last name")
+                .mutating()
                 .build(arguments -> {
                     long userId = Numbers.longAt(arguments, "user_id", 0);
                     String firstName = arguments.path("first_name").asText("").strip();
@@ -1140,6 +1145,7 @@ public final class TelegramTools {
                 .requiredInteger("to_chat_id", "Id of the destination chat. Use your own chat id to save it "
                         + "for yourself.")
                 .optionalString("comment", "Optional. Your reaction, sent right after the forwarded message.")
+                .mutating()
                 .build(arguments -> {
                     long toChatId = Numbers.longAt(arguments, "to_chat_id", 0);
                     List<Long> ids = Numbers.idsAt(arguments, "message_id");
@@ -1185,6 +1191,7 @@ public final class TelegramTools {
                         + "or correct a mistake you notice in your own message.")
                 .requiredInteger("message_id", "Id of your message")
                 .requiredString("text", "New text")
+                .mutating()
                 .build(arguments -> {
                     long messageId = Numbers.longAt(arguments, "message_id", 0);
                     String text = arguments.path("text").asText("").strip();
@@ -1218,6 +1225,7 @@ public final class TelegramTools {
                 .describedAs("Deletes your own message for everyone. Use it when you sent something to the wrong "
                         + "chat or want to take it back.")
                 .requiredString("message_id", "Id of your message, or several ids separated by commas")
+                .mutating()
                 .build(arguments -> {
                     // модель порой хочет убрать сразу несколько своих реплик
                     List<Long> ids = Numbers.idsAt(arguments, "message_id");
@@ -1324,15 +1332,16 @@ public final class TelegramTools {
 
     /** Крайняя мера против того, кто не понимает отказа. */
     public Tool blockChat(long chatId) {
-        return Tool.simple("remove_and_ban_chat",
-                """
+        return Tool.named("remove_and_ban_chat")
+                .describedAs("""
                 Removes this chat from your list; for a private chat it also stops that person from writing to you.
                 Use this if:
                 - you dislike this chat and this person;
                 - they are consistently rude to you (consult #ask before deciding);
                 - they are needy: asking you to roleplay, to write code, to solve their tasks.
-                You are not an assistant. It is fine to close a door.""",
-                arguments -> {
+                You are not an assistant. It is fine to close a door.""")
+                .mutating()
+                .build(arguments -> {
                     if (lockdown.isOwner(chatId)) {
                         // единственный человек, которого нельзя закрыть
                         return "This is your person. You cannot block this chat.";

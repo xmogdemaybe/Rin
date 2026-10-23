@@ -212,6 +212,9 @@ public final class RaineApp implements AutoCloseable {
 
         // ask доступен всегда: заглянуть в память можно в любой момент хода
         Toolbox always = new Toolbox();
+        // в режиме только чтения действий в наборе нет вовсе: не «попробуй и
+        // получишь отказ», а чего нет — того и не попросишь
+        always.actionsAllowed(!config.readOnly());
         WebSearch web = new WebSearch(config.webSearchUrl(), config.webSearchKey());
         Recall recall = new Recall(diary, llm, prompts.lazy("character_base.md"), web,
                 config.diaryMinRelatedness());

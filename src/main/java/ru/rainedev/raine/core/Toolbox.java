@@ -47,14 +47,42 @@ public final class Toolbox {
 
     private final Map<String, Tool> tools = new LinkedHashMap<>();
 
+    /** Действия разрешены по умолчанию: снимает их только явная настройка владельца. */
+    private boolean actionsAllowed = true;
+
     public Toolbox(Tool... initial) {
         for (Tool tool : initial) {
             add(tool);
         }
     }
 
+    /**
+     * @param allowed ложь выкидывает из набора всё, что меняет Telegram. Право
+     *                можно включить в любой момент: уже положенные действия уходят
+     *                вместе с ним, иначе порядок вызовов решал бы, что видит модель
+     */
+    public Toolbox actionsAllowed(boolean allowed) {
+        synchronized (tools) {
+            actionsAllowed = allowed;
+            if (!allowed) {
+                tools.entrySet().removeIf(entry -> entry.getValue().mutates());
+            }
+        }
+        return this;
+    }
+
+    public boolean allowsActions() {
+        synchronized (tools) {
+            return actionsAllowed;
+        }
+    }
+
     public Toolbox add(Tool tool) {
         synchronized (tools) {
+            if (tool.mutates() && !actionsAllowed) {
+                log.debug("Инструмент {} не предлагаю: режим только чтения", tool.name());
+                return this;
+            }
             tools.put(tool.name(), tool);
         }
         return this;
