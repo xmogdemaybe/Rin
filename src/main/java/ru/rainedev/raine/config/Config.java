@@ -37,6 +37,7 @@ public record Config(
         boolean sleepConsolidation,
         boolean characterGrowthEnabled,
         boolean trustLedgerEnabled,
+        boolean storiesEnabled,
         Consolidation consolidation,
         Night night,
         TelegramProxy telegramProxy,
@@ -259,6 +260,8 @@ public record Config(
                         "расти ли характером: днём она оставляет о себе заметки, ночью заметки закрепляются"),
                 s.flag("trust_ledger_enabled", true,
                         "вести ли счёт доверия к людям: инструмент note_trust и её список в системном промпте"),
+                s.flag("stories_enabled", true,
+                        "смотреть ли истории: лента тех, кто их выложил, и просмотр по одной"),
                 new Consolidation(
                         s.integer("sleep_consolidation_minutes", 30, "предел минут на пересмотр за ночь"),
                         s.integer("sleep_consolidation_max_requests", 20, "предел запросов: ответы и эмбеддинги за ночь"),

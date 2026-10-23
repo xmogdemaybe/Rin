@@ -83,6 +83,7 @@ public final class TelegramTools {
             () -> "Exactly what you want to say in the voice message";
     private final AntiRepeat antiRepeat;
     private ru.rainedev.raine.vision.TelegramMedia media;
+    private ru.rainedev.raine.telegram.Stories storyFeed;
     private final StickerTools stickers;
     private ru.rainedev.raine.speech.VoiceGenerator voice;
     private ru.rainedev.raine.image.ImageGenerator camera;
@@ -291,6 +292,11 @@ public final class TelegramTools {
     public void media(ru.rainedev.raine.vision.TelegramMedia media) {
         this.media = media;
         stickers.media(media);
+    }
+
+    /** Лента историй приходит обновлениями из Telegram: без неё смотреть нечего. */
+    public void storyFeed(ru.rainedev.raine.telegram.Stories storyFeed) {
+        this.storyFeed = storyFeed;
     }
 
     /** Аватарка — по ней понятно, как выглядит собеседник. */
@@ -813,6 +819,105 @@ public final class TelegramTools {
             }
             return out.append("</contacts>").toString();
         });
+    }
+
+    /**
+     * Лента историй: кто сейчас что выложил.
+     * <p>
+     * Наружу выходят только чаты из круга общения: иначе список рассказал бы,
+     * кто именно выложил историю, тому, с кем говорить не разрешено.
+     */
+    public Tool viewStories() {
+        return Tool.simple("view_stories",
+                "Shows whose stories are up right now: how many of them you have not seen and which one to start "
+                        + "with. Watching a story is a separate call — take chat_id and story_id from this list.",
+                arguments -> {
+                    if (storyFeed == null) {
+                        return "Stories are turned off.";
+                    }
+                    StringBuilder out = new StringBuilder();
+                    for (ru.rainedev.raine.telegram.Stories.Entry entry : storyFeed.feed()) {
+                        TdApi.Chat chat;
+                        try {
+                            chat = telegram.chatCached(entry.chatId());
+                        } catch (RuntimeException e) {
+                            continue;   // чата не видно — значит, и истории его не её дело
+                        }
+                        if (!allowed(chat)) {
+                            continue;
+                        }
+                        out.append(storyLine(entry, chat.title, kindOf(chat)));
+                    }
+                    return out.isEmpty()
+                            ? "No one has stories up right now."
+                            : "These people have stories right now:\n<stories>\n" + out + "</stories>";
+                });
+    }
+
+    /** Строка ленты. Видно пакету: круг общения и разметку проверяют без Telegram. */
+    static String storyLine(ru.rainedev.raine.telegram.Stories.Entry entry, String title, String kind) {
+        StringBuilder out = new StringBuilder("<story chat_id=\"").append(entry.chatId())
+                .append("\" title=\"").append(Markup.attribute(title))
+                .append("\" kind=\"").append(kind)
+                .append("\" total=\"").append(entry.total()).append('"');
+        // непросмотренные важнее прочих: смотреть начинают с них
+        if (entry.unseen() > 0) {
+            out.append(" unseen=\"").append(entry.unseen())
+                    .append("\" first_story_id=\"").append(entry.first()).append('"');
+        }
+        return out.append("/>\n").toString();
+    }
+
+    /**
+     * Просмотр одной истории: открыть, разглядеть, закрыть. Автор видит просмотр
+     * ровно так же, как если бы историю открыли в обычном клиенте.
+     * <p>
+     * Смотрят между открытием и закрытием: разбор фото или ролика занимает
+     * несколько секунд, и это честная длина просмотра, а не мгновенный пролист.
+     */
+    public Tool watchStory() {
+        return Tool.named("watch_story")
+                .describedAs("Watches one story: opens it, looks at the photo or the video, reads the caption and "
+                        + "anything attached to it. The author sees that you have watched it.")
+                .requiredInteger("chat_id", "Chat id of the person, from view_stories")
+                .requiredInteger("story_id", "Story id, from view_stories")
+                .build(arguments -> {
+                    long chatId = Numbers.longAt(arguments, "chat_id", 0);
+                    int storyId = (int) Numbers.longAt(arguments, "story_id", 0);
+                    if (chatId == 0 || storyId <= 0) {
+                        return "Provide chat_id and story_id from view_stories.";
+                    }
+                    if (media == null) {
+                        // зрение выключено — смотреть нечем. Открывать историю
+                        // всё равно нельзя: автор увидел бы просмотр, за которым
+                        // ничего не стоит
+                        return "You cannot look at stories: your vision is turned off.";
+                    }
+                    TdApi.Chat chat;
+                    try {
+                        chat = telegram.chat(chatId);
+                    } catch (RuntimeException e) {
+                        return "No such chat.";
+                    }
+                    if (!allowed(chat)) {
+                        log.info("История чата {} вне круга общения — не смотрю", chatId);
+                        return "No such chat.";
+                    }
+                    TdApi.Story story = telegram.story(chatId, storyId).orElse(null);
+                    if (story == null) {
+                        // истории живут сутки-двое: к этому моменту она могла протухнуть
+                        return "That story is gone — they expire after a day or two.";
+                    }
+                    actions.openStory(chatId, storyId);
+                    try {
+                        String seen = media.describeStory(story);
+                        return seen.isBlank()
+                                ? "You watched the story, but there was nothing to look at."
+                                : seen;
+                    } finally {
+                        actions.closeStory(chatId, storyId);
+                    }
+                });
     }
 
     /**
