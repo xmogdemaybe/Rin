@@ -887,8 +887,8 @@ public final class TelegramTools {
                 .requiredInteger("story_id", "Story id, from view_stories")
                 .build(arguments -> {
                     long chatId = Numbers.longAt(arguments, "chat_id", 0);
-                    int storyId = (int) Numbers.longAt(arguments, "story_id", 0);
-                    if (chatId == 0 || storyId <= 0) {
+                    int storyId = storyIdAt(arguments);
+                    if (chatId == 0 || storyId == 0) {
                         return "Provide chat_id and story_id from view_stories.";
                     }
                     if (media == null) {
@@ -953,6 +953,18 @@ public final class TelegramTools {
                 // шагами разговора
                 : "Историю %d чата %d открыла: %s".formatted(storyId, chatId,
                         seen.strip().replaceAll("\\s*\\n\\s*", " "));
+    }
+
+    /**
+     * Номер истории. В Telegram он короткий, а модель могла прислать длинный, и
+     * обычным приведением к int тот развернулся бы в совсем другой номер:
+     * 4294967300 — в четвёртую историю. Просмотр засчитали бы не там, где
+     * хотели, и автор увидел бы его. Нуль значит «номера нет» — тот же отказ,
+     * что и у пустого поля. Видно пакету: аргументы разбирают без Telegram.
+     */
+    static int storyIdAt(com.fasterxml.jackson.databind.JsonNode arguments) {
+        long id = Numbers.longAt(arguments, "story_id", 0);
+        return id > 0 && id <= Integer.MAX_VALUE ? (int) id : 0;
     }
 
     /**
