@@ -116,9 +116,12 @@ public final class TelegramMedia implements MediaDescriber {
      *                   в каналах, где историй много на один день
      */
     public String describeStory(TdApi.Story story, boolean onlyGlance) {
-        return storyBlock(story, seen(story.content,
+        // вслепую разбирать нечего, и жалобу на формат из пустоты не собрать:
+        // ролик цел, просто глаз нет — тогда остаются подпись и плашки
+        String seen = sees() ? seen(story.content,
                 file -> look(file, Vision.Kind.PHOTO),
-                video -> storyVideo(video, onlyGlance, this::watch, () -> glanceOf(video))));
+                video -> storyVideo(video, onlyGlance, this::watch, () -> glanceOf(video))) : "";
+        return storyBlock(story, seen);
     }
 
     /** Заставка ролика истории: один кадр вместо всего разбора. */
