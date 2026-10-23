@@ -69,6 +69,15 @@ public interface TelegramActions {
 
     void sendPhoto(long chatId, java.nio.file.Path file, String caption);
 
+    /**
+     * Выкладывание истории. Видно всем, кого она выбрала, и висит сутки —
+     * поэтому решение «выкладывать ли» принимает владелец настройкой.
+     *
+     * @param activePeriod сколько секунд история живёт
+     * @return номер выложенной истории, 0 если ничего не выложено
+     */
+    long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod);
+
     void uploadingPhoto(long chatId);
 
     /** Статус «в сети». По нему собеседник видит, спит она или нет. */
@@ -282,6 +291,29 @@ public interface TelegramActions {
         }
 
         @Override
+        public long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod) {
+            TdApi.InputStoryContentPhoto content = new TdApi.InputStoryContentPhoto();
+            content.photo = new TdApi.InputFileLocal(photo.toAbsolutePath().toString());
+            content.addedStickerFileIds = new int[0];
+
+            TdApi.PostStory request = new TdApi.PostStory();
+            request.chatId = chatId;
+            request.content = content;
+            // плашки — ссылки, место, погода — рисует клиент поверх снимка.
+            // Их не ставим: пустой список обязателен, а null Telegram не примет
+            request.areas = new TdApi.InputStoryAreas(new TdApi.InputStoryArea[0]);
+            if (caption != null && !caption.isBlank()) {
+                request.caption = new TdApi.FormattedText(caption, new TdApi.TextEntity[0]);
+            }
+            // историю видят её контакты: для разговора с людьми этого довольно,
+            // а показывать снимок всему Telegram без спроса владельца нельзя
+            request.privacySettings = new TdApi.StoryPrivacySettingsContacts();
+            request.albumIds = new int[0];
+            request.activePeriod = activePeriod;
+            return ask(request).id;
+        }
+
+        @Override
         public void setOnline(boolean online) {
             TdApi.SetOption request = new TdApi.SetOption();
             request.name = "online";
@@ -435,6 +467,12 @@ public interface TelegramActions {
         @Override
         public void sendPhoto(long chatId, java.nio.file.Path file, String caption) {
             log.info("[только чтение] в чат {} ушло бы фото {} с подписью: {}", chatId, file, caption);
+        }
+
+        @Override
+        public long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod) {
+            log.info("[только чтение] история из {} с подписью «{}» осталась бы невыложенной", photo, caption);
+            return 0;
         }
 
         @Override

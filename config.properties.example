@@ -163,6 +163,9 @@ trust_ledger_enabled=true
 # смотреть ли истории: лента тех, кто их выложил, и просмотр по одной
 stories_enabled=true
 
+# выкладывать ли свои истории: без спроса владельца она этого не делает
+stories_posting=false
+
 # спит ли она ночью
 night_sleep=true
 

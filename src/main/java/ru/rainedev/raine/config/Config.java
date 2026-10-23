@@ -38,6 +38,7 @@ public record Config(
         boolean characterGrowthEnabled,
         boolean trustLedgerEnabled,
         boolean storiesEnabled,
+        boolean storiesPosting,
         Consolidation consolidation,
         Night night,
         TelegramProxy telegramProxy,
@@ -262,6 +263,8 @@ public record Config(
                         "вести ли счёт доверия к людям: инструмент note_trust и её список в системном промпте"),
                 s.flag("stories_enabled", true,
                         "смотреть ли истории: лента тех, кто их выложил, и просмотр по одной"),
+                s.flag("stories_posting", false,
+                        "выкладывать ли свои истории: без спроса владельца она этого не делает"),
                 new Consolidation(
                         s.integer("sleep_consolidation_minutes", 30, "предел минут на пересмотр за ночь"),
                         s.integer("sleep_consolidation_max_requests", 20, "предел запросов: ответы и эмбеддинги за ночь"),
