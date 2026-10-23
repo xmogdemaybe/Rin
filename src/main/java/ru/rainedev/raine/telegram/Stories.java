@@ -30,13 +30,15 @@ public final class Stories {
     /**
      * Обновление из Telegram: список историй чата изменился.
      * <p>
-     * Пустой список — истории кончились или ушли в архив, и в ленте их больше нет.
+     * Пустой список — истории кончились, и в ленте их больше нет. Архивные
+     * обновления не трогают ничего: архив приходит тем же чатом, и удаление по
+     * нему стирало бы живую ленту, которую человек видит в кружке на аватарке.
      */
     public void onChanged(TdApi.ChatActiveStories stories) {
-        if (stories == null) {
+        if (stories == null || !inFeed(stories.list)) {
             return;
         }
-        if (stories.stories == null || stories.stories.length == 0 || !inFeed(stories.list)) {
+        if (stories.stories == null || stories.stories.length == 0) {
             active.remove(stories.chatId);
             return;
         }
@@ -70,9 +72,13 @@ public final class Stories {
         return newest;
     }
 
-    /** В архивной ленте истории тоже живут, но их не показывают как свежие. */
+    /**
+     * Архив — единственное, что в ленту не входит: там истории, которые уже
+     * не светятся кружком. Неизвестный Telegram список считаем живым, иначе
+     * сообщение об окончании историй могло бы не дойти до удаления.
+     */
     private static boolean inFeed(TdApi.StoryList list) {
-        return list instanceof TdApi.StoryListMain;
+        return !(list instanceof TdApi.StoryListArchive);
     }
 
     /**
