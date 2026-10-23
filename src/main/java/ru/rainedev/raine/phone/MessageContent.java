@@ -66,7 +66,10 @@ public final class MessageContent {
             case TdApi.MessageGame game -> "[игра] " + Markup.body(game.game.title)
                     + " — " + Markup.body(game.game.description);
             case TdApi.MessageGameScore score -> "[результат в игре] " + score.score;
-            case TdApi.MessageStory ignored -> "[история]";
+            // номер истории и чат автора: без них «[история]» — только факт
+            // пересылки, а открыть её уже нечем
+            case TdApi.MessageStory story ->
+                    "[история chat_id=%d story_id=%d]".formatted(story.storyPosterChatId, story.storyId);
             case TdApi.MessageChecklist ignored -> "[список дел]";
             case TdApi.MessageChecklistTasksDone ignored -> "[отметили дела в списке]";
             case TdApi.MessageChecklistTasksAdded ignored -> "[в список добавили дела]";
