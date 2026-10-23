@@ -12,7 +12,7 @@ import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MediaDescriber;
 import ru.rainedev.raine.telegram.Telegram;
 
-/** Скачивает вложение из Telegram и передаёт его зрению. */
+/** Скачивает вложение из Telegram и передаёт его зрению или слуху. */
 public final class TelegramMedia implements MediaDescriber {
 
     /** Что видно, если историю достать не удалось. */
@@ -22,6 +22,15 @@ public final class TelegramMedia implements MediaDescriber {
     /** Может не быть: зрение включают тумблером, а подпись истории читается и без него. */
     private final Vision vision;
     private final Supplier<List<Message>> context;
+
+    /** Слух самой модели: голосовые и кружки. Может не быть вовсе. */
+    private ru.rainedev.raine.speech.ModelHearing hearing;
+
+    /** Чем помечать услышанное; без него отметка не ставится даже с включённым тумблером. */
+    private ru.rainedev.raine.telegram.TelegramActions actions;
+
+    /** Ставить ли отметку «прослушано» — её увидит автор сообщения, поэтому решает владелец. */
+    private boolean markHeard;
 
     /** Разбирать ли ролики в каналах покадрово. Обычно нет — слишком дорого. */
     private boolean videoInChannels;
@@ -38,6 +47,19 @@ public final class TelegramMedia implements MediaDescriber {
         return vision != null;
     }
 
+    /** Слух подключается отдельно: голосовое слышно и без глаз. */
+    public void hearing(ru.rainedev.raine.speech.ModelHearing hearing) {
+        this.hearing = hearing;
+    }
+
+    /**
+     * @param allowed тумблер владельца: отметку «прослушано» увидит тот, кто прислал
+     */
+    public void markHeard(ru.rainedev.raine.telegram.TelegramActions actions, boolean allowed) {
+        this.actions = actions;
+        this.markHeard = allowed;
+    }
+
     public void videoInChannels(boolean allowed) {
         this.videoInChannels = allowed;
     }
@@ -48,9 +70,10 @@ public final class TelegramMedia implements MediaDescriber {
             return "";
         }
         // без зрения разбирать нечего, и история не в счёт: её подпись и плашки —
-        // текст, а не картинка. Остальные вложения при выключенном зрении
-        // остаются ровно тем, чем были: пометкой о типе
-        if (!sees() && !(message.content instanceof TdApi.MessageStory)) {
+        // текст, а не картинка. Голосовое и кружок слушают ушами, а не глазами,
+        // поэтому они разбираются и без зрения. Остальные вложения при
+        // выключенном зрении остаются ровно тем, чем были: пометкой о типе
+        if (!sees() && !hearable(message) && !(message.content instanceof TdApi.MessageStory)) {
             return "";
         }
         return switch (message.content) {
@@ -64,8 +87,10 @@ public final class TelegramMedia implements MediaDescriber {
             case TdApi.MessageGift gift -> gift(gift);
             case TdApi.MessageVoiceNote ignored -> heard(message, "voice");
             case TdApi.MessageVideoNote videoNote ->
-                    // в кружке есть и картинка, и речь — берём и то, и другое
-                    watch(fileOf(videoNote.videoNote.video)) + heard(message, "video_note");
+                    // в кружке есть и картинка, и речь — берём и то, и другое;
+                    // одно и то же дважды в разговор не пойдёт: если кружок
+                    // слушает сама модель, распознаватель к дорожке не зовут
+                    watch(fileOf(videoNote.videoNote.video), !listensCircles()) + heard(message, "video_note");
             case TdApi.MessageVideo video -> video.video == null ? "" : watchOrGlance(
                     message, fileOf(video.video.video), thumbnailOf(video.video.thumbnail));
             case TdApi.MessageAnimation animation -> animation.animation == null ? "" : watchOrGlance(
@@ -336,12 +361,73 @@ public final class TelegramMedia implements MediaDescriber {
 
     /**
      * Голосовое без расшифровки — потерянное сообщение: видно, что оно было,
-     * а что сказали, неизвестно.
+     * а что сказали, неизвестно. Сначала спрашиваем Telegram: он делает это сам
+     * и за премиум качество лучше. Не вышло — слушает сама модель.
      */
     private String heard(TdApi.Message message, String tag) {
-        return telegram.recognizeSpeech(message.chatId, message.id)
-                .map(text -> transcription(tag, text))
-                .orElse("");
+        Optional<String> speech = telegram.recognizeSpeech(message.chatId, message.id);
+        if (speech.isEmpty()) {
+            speech = heardByModel(message);
+        }
+        if (speech.isEmpty()) {
+            return "";
+        }
+        if (actions != null && shouldMarkHeard(message, markHeard)) {
+            actions.openContent(message.chatId, message.id);
+        }
+        return transcription(tag, speech.get());
+    }
+
+    /** Есть чем слушать это вложение вовсе: зрение для голосового не нужно. */
+    private static boolean hearable(TdApi.Message message) {
+        return message.content instanceof TdApi.MessageVoiceNote
+                || message.content instanceof TdApi.MessageVideoNote;
+    }
+
+    /** Слушает ли кружок сама модель — тогда распознаватель дорожки не нужен. */
+    private boolean listensCircles() {
+        return hearing != null && hearing.hearsVideoNotes();
+    }
+
+    /**
+     * Что модель слышит из файла сама. Пусто, если слуха нет или тумблер снят:
+     * качать ради этого файл незачем.
+     */
+    private Optional<String> heardByModel(TdApi.Message message) {
+        if (hearing == null) {
+            return Optional.empty();
+        }
+        return switch (message.content) {
+            case TdApi.MessageVoiceNote voice when hearing.hearsVoiceNotes() ->
+                    hearing.listen(soundOf(voice.voiceNote.voice), false);
+            case TdApi.MessageVideoNote note when hearing.hearsVideoNotes() ->
+                    hearing.listen(soundOf(note.videoNote.video), true);
+            default -> Optional.empty();
+        };
+    }
+
+    private Optional<Path> soundOf(TdApi.File file) {
+        return fileOf(file).flatMap(telegram::download);
+    }
+
+    /**
+     * Отметку «прослушано» ставят один раз и только по настоящему услышанному:
+     * иначе она соврёт автору дважды.
+     * <p>
+     * Самоудаляющийся кружок не помечают вовсе — открытое содержимое запускает
+     * его таймер, и сообщение исчезнет, не дожив до ответа.
+     * <p>
+     * Видно пакету: решать это учат без Telegram.
+     */
+    static boolean shouldMarkHeard(TdApi.Message message, boolean allowed) {
+        if (!allowed) {
+            return false;
+        }
+        return switch (message.content) {
+            case TdApi.MessageVoiceNote voice -> !voice.voiceNote.isListened;
+            case TdApi.MessageVideoNote note -> !note.videoNote.isViewed && !note.isSecret;
+            default -> false;
+        };
     }
 
     /**

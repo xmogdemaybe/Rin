@@ -35,6 +35,13 @@ public interface TelegramActions {
     void markRead(long chatId, long[] messageIds);
 
     /**
+     * Отметка «прослушано»: по ней автор видит, что голосовое или кружок
+     * открыли. У содержимого с самоудалением она ещё и запускает таймер,
+     * поэтому такие сообщения не помечают.
+     */
+    void openContent(long chatId, long messageId);
+
+    /**
      * Возвращает чат в непрочитанные. Telegram хранит это отдельным флагом,
      * а не счётчиком сообщений, и снимает флаг сам, стоит чат прочитать, —
      * поэтому отметка не может повиснуть навечно.
@@ -159,6 +166,13 @@ public interface TelegramActions {
         @Override
         public void markRead(long chatId, long[] messageIds) {
             throttled().send(new TdApi.ViewMessages(chatId, messageIds, null, false));
+        }
+
+        @Override
+        public void openContent(long chatId, long messageId) {
+            // отметка нужна автору, а не ей: ждать её подтверждения в разборе
+            // вложений незачем
+            throttled().send(new TdApi.OpenMessageContent(chatId, messageId));
         }
 
         @Override
@@ -407,6 +421,13 @@ public interface TelegramActions {
         @Override
         public void markRead(long chatId, long[] messageIds) {
             log.info("[только чтение] {} сообщений в чате {} остаются непрочитанными", messageIds.length, chatId);
+        }
+
+        @Override
+        public void openContent(long chatId, long messageId) {
+            // галочку «прослушано» увидел бы автор — в безопасном режиме молчим
+            log.debug("[только чтение] содержимое сообщения {} в чате {} остаётся непрослушанным",
+                    messageId, chatId);
         }
 
         @Override

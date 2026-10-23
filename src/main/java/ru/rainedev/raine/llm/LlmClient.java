@@ -35,4 +35,24 @@ public interface LlmClient {
     default String describeImage(String model, String systemPrompt, String context, byte[] image) {
         throw new UnsupportedOperationException("Зрение не подключено");
     }
+
+    /**
+     * Слышит ли эта модель звук сама, без отдельного распознавателя. Разговорные
+     * модели умеют это с завода, но слух есть не у каждого эндпоинта: спрашиваем
+     * заранее, чтобы не тыкать в одну и ту же стену на каждое голосовое.
+     */
+    default boolean hears() {
+        return false;
+    }
+
+    /**
+     * Пересказывает присланный звук словами.
+     *
+     * @param model  какой моделью слушать
+     * @param format чем был файл: по нему эндпоинт решает, как его распаковать
+     * @return текст того, что сказано, — на языке говорящего
+     */
+    default String hear(String model, String systemPrompt, String context, byte[] audio, String format) {
+        throw new UnsupportedOperationException("Слух не подключён");
+    }
 }

@@ -17,6 +17,7 @@ import ru.rainedev.raine.config.Config;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.prompt.Prompts;
 
 class VisionTest {
@@ -204,19 +205,29 @@ class VisionTest {
 
     @Test
     void refusalIsNotADescription() {
-        // все пять формулировок взяты из кэша описаний живого бота
-        assertTrue(Vision.refusal("I'm unable to assist with that."));
-        assertTrue(Vision.refusal("I'm sorry, but I can't assist with that."));
-        assertTrue(Vision.refusal("I'm sorry, I can't assist with that."));
-        assertTrue(Vision.refusal("I'm unable to view images directly. However, if you provide me with details…"));
-        assertTrue(Vision.refusal("I'm unable to identify or provide descriptions for this image."));
+        // все пять формулировок взяты из кэша описаний живого бота; правило
+        // переехало в Refusal: по нему отказ узнают и глаза, и уши
+        assertTrue(Refusal.detected("I'm unable to assist with that."));
+        assertTrue(Refusal.detected("I'm sorry, but I can't assist with that."));
+        assertTrue(Refusal.detected("I'm sorry, I can't assist with that."));
+        assertTrue(Refusal.detected("I'm unable to view images directly. However, if you provide me with details…"));
+        assertTrue(Refusal.detected("I'm unable to identify or provide descriptions for this image."));
     }
 
     @Test
     void descriptionThatMerelyMentionsAnApologyIsKept() {
         // отказ узнаётся по началу ответа: «sorry» внутри подписи — это подпись
-        assertFalse(Vision.refusal("- **Title:** Мем с надписью «Sorry, I can't do that»"));
-        assertFalse(Vision.refusal("- **Title:** Человек с котом на руках"));
+        assertFalse(Refusal.detected("- **Title:** Мем с надписью «Sorry, I can't do that»"));
+        assertFalse(Refusal.detected("- **Title:** Человек с котом на руках"));
+    }
+
+    @Test
+    void refusalToHearIsRecognisedToo() {
+        // то же правило для слуха: извинение за то, что звук не дошёл, не должно
+        // уходить в разговор как услышанное
+        assertTrue(Refusal.detected("I'm sorry, but I can't hear any speech in this audio."));
+        assertTrue(Refusal.detected("Извини, я не слышу, что здесь сказано."));
+        assertFalse(Refusal.detected("Привет! Как дела?"));
     }
 
     @Test

@@ -1,4 +1,4 @@
-package ru.rainedev.raine.vision;
+package ru.rainedev.raine.speech;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
