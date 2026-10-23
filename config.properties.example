@@ -160,6 +160,9 @@ character_growth_enabled=false
 # вести ли счёт доверия к людям: инструмент note_trust и её список в системном промпте
 trust_ledger_enabled=true
 
+# смотреть ли истории: лента тех, кто их выложил, и просмотр по одной
+stories_enabled=true
+
 # спит ли она ночью
 night_sleep=true
 

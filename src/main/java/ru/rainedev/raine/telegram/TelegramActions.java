@@ -21,6 +21,14 @@ public interface TelegramActions {
 
     void closeChat(long chatId);
 
+    /**
+     * Открытие истории — то, по чему автор видит, что её посмотрели. Без этой
+     * пары просмотр остался бы невидимым, как если бы она ничего не открывала.
+     */
+    void openStory(long storyPosterChatId, int storyId);
+
+    void closeStory(long storyPosterChatId, int storyId);
+
     /** Снимает «печатает...»: иначе индикатор висит ещё несколько секунд после ухода. */
     void stopTyping(long chatId);
 
@@ -117,6 +125,16 @@ public interface TelegramActions {
         @Override
         public void closeChat(long chatId) {
             ask(new TdApi.CloseChat(chatId));
+        }
+
+        @Override
+        public void openStory(long storyPosterChatId, int storyId) {
+            ask(new TdApi.OpenStory(storyPosterChatId, storyId));
+        }
+
+        @Override
+        public void closeStory(long storyPosterChatId, int storyId) {
+            ask(new TdApi.CloseStory(storyPosterChatId, storyId));
         }
 
         @Override
@@ -335,6 +353,17 @@ public interface TelegramActions {
         @Override
         public void closeChat(long chatId) {
             // закрывать нечего
+        }
+
+        @Override
+        public void openStory(long storyPosterChatId, int storyId) {
+            log.info("[только чтение] историю {} чата {} не открываю — автор увидел бы просмотр",
+                    storyId, storyPosterChatId);
+        }
+
+        @Override
+        public void closeStory(long storyPosterChatId, int storyId) {
+            // история и не открывалась
         }
 
         @Override

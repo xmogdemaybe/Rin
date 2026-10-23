@@ -30,6 +30,7 @@ import ru.rainedev.raine.phone.MessageFormatter;
 import ru.rainedev.raine.phone.Notifications;
 import ru.rainedev.raine.prompt.Prompts;
 import ru.rainedev.raine.telegram.Lockdown;
+import ru.rainedev.raine.telegram.Stories;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
 import ru.rainedev.raine.telegram.TelegramProxy;
@@ -46,6 +47,12 @@ public final class RaineApp implements AutoCloseable {
 
     private final Config config;
     private final SimpleTelegramClient client;
+
+    /**
+     * Лента историй заводится сразу: Telegram присылает её обновлениями,
+     * и начать он может раньше, чем мы дойдём до сборки инструментов.
+     */
+    private final Stories stories = new Stories();
 
     /** Правки в config.properties подхватываются на ходу — как и промпты. */
     private ru.rainedev.raine.config.LiveConfig settings;
@@ -115,6 +122,9 @@ public final class RaineApp implements AutoCloseable {
         builder.addUpdateHandler(TdApi.UpdateMessageSendFailed.class,
                 update -> telegram.onSendFailed(update.oldMessageId,
                         update.error == null ? "причина неизвестна" : update.error.message));
+        // лента историй приходит только так: запроса «покажи все истории» у Telegram нет
+        builder.addUpdateHandler(TdApi.UpdateChatActiveStories.class,
+                update -> stories.onChanged(update.activeStories));
         this.client = builder.build(authentication);
         // как только клиент есть, первым делом ставим прокси: в сети, где
         // Telegram заблокирован, без него не дойти даже до кода подтверждения
@@ -173,6 +183,7 @@ public final class RaineApp implements AutoCloseable {
         if (telegramMedia != null) {
             tools.media(telegramMedia);
         }
+        tools.storyFeed(stories);
 
         var horde = new ru.rainedev.raine.image.HordeClient(
                 config.camera().baseUrl(), config.camera().apiKey(), config.camera().models(),
@@ -212,6 +223,13 @@ public final class RaineApp implements AutoCloseable {
         always.add(tools.saveContact());
         always.add(tools.searchChats());
         always.add(tools.openById());
+        // истории живут за своим тумблером: снял — и лента, и просмотр исчезают из набора
+        if (config.storiesEnabled()) {
+            always.add(tools.viewStories());
+            always.add(tools.watchStory());
+        } else {
+            log.info("Истории выключены: ни ленту, ни отдельные она не смотрит");
+        }
 
         // рост личности: заметки о себе принимает эта же связка. Тумблер снял —
         // инструмент из набора исчезает, вместо просьбы «не пользуйся»
