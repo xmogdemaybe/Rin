@@ -9,6 +9,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.ToolCall;
 
 /**
@@ -23,7 +25,16 @@ public final class Toolbox {
     /** Ими модель завершает ход: «мне больше нечего делать». */
     public static final Set<String> FINISHING = Set.of("wait", "pause");
 
+    private static final Logger log = LoggerFactory.getLogger(Toolbox.class);
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /**
+     * Чем модель заменяет текст чужой ошибки: Telegram отвечает подробностями,
+     * в которых бывает всё про аккаунт — номер, имя сессии, чужие идентификаторы.
+     * Для решения ей довольно знать, что не вышло; подробности остаются в журнале.
+     */
+    static final String NOTHING_WORKED = "Не получилось. Попробуй позже или выбери другой путь.";
 
     public static final class PartialFailure extends LowQualityException {
         private final List<ru.rainedev.raine.llm.Message> results;
@@ -86,8 +97,8 @@ public final class Toolbox {
     /**
      * Выполняет вызовы по порядку и возвращает ответы для контекста.
      * <p>
-     * Технические ошибки не роняют ход: текст ошибки отдаётся модели, и она
-     * решает, что делать дальше. {@link LowQualityException} пробрасывается —
+     * Технические ошибки не роняют ход: модель видит, что не вышло, и решает,
+     * что делать дальше. {@link LowQualityException} пробрасывается —
      * его обрабатывает цикл.
      */
     public List<ru.rainedev.raine.llm.Message> invoke(List<ToolCall> calls) {
@@ -142,8 +153,8 @@ public final class Toolbox {
             throw e;
         } catch (RuntimeException e) {
             Fatal.check(e);
-            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            return "Не получилось: " + reason;
+            log.warn("Инструмент {} не отработал: {}", call.name(), e.toString());
+            return NOTHING_WORKED;
         }
     }
 
