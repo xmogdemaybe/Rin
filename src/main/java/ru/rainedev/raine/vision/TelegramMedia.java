@@ -82,13 +82,15 @@ public final class TelegramMedia implements MediaDescriber {
             // история в сообщение не вкладывается: в нём остаются только чат и номер,
             // а сама она живёт отдельно — без этого видно, что историю кидали,
             // а что в ней, нет
-            case TdApi.MessageStory shared -> sharedStory(shared);
+            case TdApi.MessageStory shared -> sharedStory(message, shared);
             default -> "";
         };
     }
 
-    private String sharedStory(TdApi.MessageStory shared) {
-        return described(telegram.story(shared.storyPosterChatId, shared.storyId), this::describeStory);
+    private String sharedStory(TdApi.Message message, TdApi.MessageStory shared) {
+        boolean onlyGlance = onlyGlanceIn(message);
+        return described(telegram.story(shared.storyPosterChatId, shared.storyId),
+                story -> describeStory(story, onlyGlance));
     }
 
     /**
@@ -106,8 +108,24 @@ public final class TelegramMedia implements MediaDescriber {
      * в отдельном объекте, поэтому смотрят и подписывают её по-своему.
      */
     public String describeStory(TdApi.Story story) {
+        return describeStory(story, false);
+    }
+
+    /**
+     * @param onlyGlance ролика не касаться вовсе — только заставка. Так смотрят
+     *                   в каналах, где историй много на один день
+     */
+    public String describeStory(TdApi.Story story, boolean onlyGlance) {
         return storyBlock(story, seen(story.content,
-                file -> look(file, Vision.Kind.PHOTO), video -> storyVideo(video, this::watch)));
+                file -> look(file, Vision.Kind.PHOTO),
+                video -> storyVideo(video, onlyGlance, this::watch, () -> glanceOf(video))));
+    }
+
+    /** Заставка ролика истории: один кадр вместо всего разбора. */
+    private String glanceOf(TdApi.StoryContentVideo content) {
+        return content.video == null
+                ? ""
+                : look(thumbnailOf(content.video.thumbnail), Vision.Kind.VIDEO);
     }
 
     /**
@@ -141,6 +159,24 @@ public final class TelegramMedia implements MediaDescriber {
         boolean withSound = content.video == null || !content.video.isAnimation;
         String seen = watch.apply(storyFile(content.video), withSound);
         return seen == null || seen.isBlank() ? watch.apply(storyFile(content.alternativeVideo), withSound) : seen;
+    }
+
+    /**
+     * Тот же ролик, но с решением, смотреть ли его целиком.
+     * <p>
+     * В канале историй на один день больше, чем сообщений в переписке, и каждая
+     * из них на покадровом разборе стоит обращения к зрению на каждый кадр.
+     * Видно пакету: правило учат проверять без Telegram и без зрения.
+     *
+     * @param onlyGlance довольствоваться заставкой, не трогая сам ролик
+     * @param watch      разбор файла: его номер и слушать ли звук
+     * @param glance     один кадр вместо разбора
+     */
+    static String storyVideo(TdApi.StoryContentVideo content, boolean onlyGlance,
+                             java.util.function.BiFunction<Optional<Integer>, Boolean, String> watch,
+                             java.util.function.Supplier<String> glance) {
+        return storyVideo(content,
+                (file, withSound) -> watchOrGlance(onlyGlance, () -> watch.apply(file, withSound), glance));
     }
 
     private static Optional<Integer> storyFile(TdApi.StoryVideo video) {
@@ -207,7 +243,7 @@ public final class TelegramMedia implements MediaDescriber {
      * разговора, и его смотрят целиком.
      */
     private String watchOrGlance(TdApi.Message message, Optional<Integer> video, Optional<Integer> thumbnail) {
-        return watchOrGlance(inChannel(message) && !videoInChannels,
+        return watchOrGlance(onlyGlanceIn(message),
                 () -> watch(video),
                 () -> thumbnail.map(file -> look(Optional.of(file), Vision.Kind.VIDEO)).orElse(""));
     }
@@ -218,25 +254,40 @@ public final class TelegramMedia implements MediaDescriber {
     static String watchOrGlance(boolean onlyGlance, java.util.function.Supplier<String> watch,
                                 java.util.function.Supplier<String> glance) {
         if (onlyGlance) {
-            return glance.get();
+            return orNotSupported(glance.get());
         }
         String seen = watch.get();
         if (!seen.isBlank()) {
             return seen;
         }
         // формат не поддался разбору — хотя бы заставка
-        String glanced = glance.get();
+        return orNotSupported(glance.get());
+    }
+
+    /**
+     * Пустота в разметке выглядит так, будто вложения не было вовсе, поэтому
+     * пропущенное молча не оставляют.
+     */
+    private static String orNotSupported(String glanced) {
         return glanced.isBlank()
-                // пустота в разметке выглядит так, будто вложения не было вовсе
                 ? "<video description>\nThis media type is not supported\n</video>\n"
                 : glanced;
     }
 
-    private boolean inChannel(TdApi.Message message) {
+    /**
+     * Хватит ли взгляда на заставку. В ленте канала посты пролистывают, и
+     * покадровый разбор каждого обходится дороже, чем весь остальной день
+     * переписки: каждый кадр — отдельное обращение к зрению.
+     */
+    public boolean onlyGlanceIn(TdApi.Chat chat) {
+        return !videoInChannels && chat != null && ChatKind.of(chat) == ChatKind.CHANNEL;
+    }
+
+    private boolean onlyGlanceIn(TdApi.Message message) {
         try {
-            return ChatKind.of(telegram.chatCached(message.chatId)) == ChatKind.CHANNEL;
+            return onlyGlanceIn(telegram.chatCached(message.chatId));
         } catch (RuntimeException e) {
-            return false;
+            return false;   // чата не видно — значит, и не канал
         }
     }
 

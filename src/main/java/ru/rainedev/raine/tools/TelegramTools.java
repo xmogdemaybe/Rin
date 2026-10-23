@@ -921,7 +921,8 @@ public final class TelegramTools {
                     }
                     actions.openStory(chatId, storyId);
                     try {
-                        String seen = media.describeStory(story);
+                        // в канале роликом считают заставку: там их много на день
+                        String seen = media.describeStory(story, media.onlyGlanceIn(chat));
                         log.info("{}", watched(chatId, storyId, seen));
                         return seen.isBlank()
                                 ? "You watched the story, but there was nothing to look at."
