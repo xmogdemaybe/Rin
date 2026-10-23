@@ -15,6 +15,9 @@ import ru.rainedev.raine.telegram.Telegram;
 /** Скачивает вложение из Telegram и передаёт его зрению. */
 public final class TelegramMedia implements MediaDescriber {
 
+    /** Что видно, если историю достать не удалось. */
+    private static final String UNREACHABLE = "её больше не открыть — могла протухнуть или быть скрытой";
+
     private final Telegram telegram;
     private final Vision vision;
     private final Supplier<List<Message>> context;
@@ -72,9 +75,17 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     private String sharedStory(TdApi.MessageStory shared) {
-        return telegram.story(shared.storyPosterChatId, shared.storyId)
-                .map(this::describeStory)
-                .orElse("");
+        return described(telegram.story(shared.storyPosterChatId, shared.storyId), this::describeStory);
+    }
+
+    /**
+     * История могла протухнуть или быть скрытой, и пустая строка здесь хуже
+     * честного слова: пометка «[история]» остаётся, а содержимого нет — модель
+     * додумывает его сама и отвечает так, будто смотрела.
+     */
+    static String described(Optional<TdApi.Story> story,
+                            java.util.function.Function<TdApi.Story, String> seen) {
+        return story.map(seen).orElse(UNREACHABLE);
     }
 
     /**
