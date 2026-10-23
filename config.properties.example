@@ -166,6 +166,9 @@ stories_enabled=true
 # выкладывать ли свои истории: без спроса владельца она этого не делает
 stories_posting=false
 
+# кому видна её история: contacts, everyone, close_friends
+stories_audience=contacts
+
 # спит ли она ночью
 night_sleep=true
 
