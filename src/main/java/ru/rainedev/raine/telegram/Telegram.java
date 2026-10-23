@@ -335,6 +335,22 @@ public final class Telegram {
     }
 
     /**
+     * История в сообщение не вкладывается: в нём остаются только чат и номер,
+     * а содержимое, подпись и плашки спрашиваются по ним отдельно.
+     */
+    public Optional<TdApi.Story> story(long posterChatId, int storyId) {
+        try {
+            TdApi.GetStory request = new TdApi.GetStory();
+            request.storyPosterChatId = posterChatId;
+            request.storyId = storyId;
+            return Optional.ofNullable(ask(request));
+        } catch (RuntimeException e) {
+            log.debug("Историю {} чата {} не удалось получить: {}", storyId, posterChatId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Распознаёт речь силами Telegram Premium — без внешних сервисов и оплаты
      * за минуты. Результат приходит не сразу, поэтому ждём его опросом.
      */

@@ -2,6 +2,7 @@ package ru.rainedev.raine.vision;
 
 import it.tdlight.jni.TdApi;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -62,8 +63,97 @@ public final class TelegramMedia implements MediaDescriber {
                 case PHOTO -> look(fileOf(document.document.document), Vision.Kind.PHOTO);
                 default -> "";
             };
+            // история в сообщение не вкладывается: в нём остаются только чат и номер,
+            // а сама она живёт отдельно — без этого видно, что историю кидали,
+            // а что в ней, нет
+            case TdApi.MessageStory shared -> sharedStory(shared);
             default -> "";
         };
+    }
+
+    private String sharedStory(TdApi.MessageStory shared) {
+        return telegram.story(shared.storyPosterChatId, shared.storyId)
+                .map(this::describeStory)
+                .orElse("");
+    }
+
+    /**
+     * История — не вложение: картинка, подпись и прикреплённые плашки лежат
+     * в отдельном объекте, поэтому смотрят и подписывают её по-своему.
+     */
+    public String describeStory(TdApi.Story story) {
+        return storyBlock(story, seen(story.content,
+                file -> look(file, Vision.Kind.PHOTO), this::watch));
+    }
+
+    /**
+     * Что видно в истории: фото смотрят как фото, видео — как видео, а то, что
+     * Telegram сам разобрать не смог, остаётся подписью без картинки.
+     * Видно пакету: разбирать содержимое можно без Telegram и без зрения.
+     */
+    static String seen(TdApi.StoryContent content, java.util.function.Function<Optional<Integer>, String> look,
+                       java.util.function.Function<Optional<Integer>, String> watch) {
+        return switch (content) {
+            case TdApi.StoryContentPhoto photo -> look.apply(largest(photo.photo));
+            case TdApi.StoryContentVideo video -> watch.apply(storyVideo(video));
+            case null, default -> "";
+        };
+    }
+
+    /** Основное видео, а рядом с ним запасное в H.264 — его берут, когда основного нет. */
+    static Optional<Integer> storyVideo(TdApi.StoryContentVideo content) {
+        return fileOf(content.video == null ? null : content.video.video)
+                .or(() -> fileOf(content.alternativeVideo == null ? null : content.alternativeVideo.video));
+    }
+
+    /**
+     * Подпись и плашки — чужой текст, поэтому они уходят атрибутами: ни кавычек,
+     * ни попыток открыть свой блок внутри них не останется.
+     */
+    static String storyBlock(TdApi.Story story, String seen) {
+        StringBuilder out = new StringBuilder("<story");
+        String caption = story.caption == null || story.caption.text == null ? "" : story.caption.text;
+        if (!caption.isBlank()) {
+            out.append(" caption=\"").append(Markup.attribute(caption)).append('"');
+        }
+        String attached = attached(story.areas);
+        if (!attached.isBlank()) {
+            out.append(" attached=\"").append(Markup.attribute(attached)).append('"');
+        }
+        return seen == null || seen.isBlank()
+                ? out.append(" />").toString()
+                : out.append(">\n").append(seen.strip()).append("\n</story>").toString();
+    }
+
+    /**
+     * Плашки на истории рисует сам клиент поверх картинки: ни в файле, ни в кадрах
+     * их нет. Ссылка, погода или репост поста видны только здесь.
+     */
+    static String attached(TdApi.StoryArea[] areas) {
+        if (areas == null) {
+            return "";
+        }
+        List<String> noted = new ArrayList<>();
+        for (TdApi.StoryArea area : areas) {
+            switch (area.type) {
+                case TdApi.StoryAreaTypeLink link -> noted.add("ссылка: " + link.url);
+                case TdApi.StoryAreaTypeVenue venue ->
+                        noted.add(venue.venue == null ? "место" : "место: " + venue.venue.title);
+                case TdApi.StoryAreaTypeWeather weather ->
+                        noted.add("погода: %s %.0f°".formatted(weather.emoji, weather.temperature));
+                case TdApi.StoryAreaTypeMessage ignored -> noted.add("репост сообщения из другого чата");
+                case TdApi.StoryAreaTypeSuggestedReaction reaction ->
+                        noted.add("предложенная реакция: %s (%d)"
+                                .formatted(emojiOf(reaction.reactionType), reaction.totalCount));
+                case TdApi.StoryAreaTypeUpgradedGift gift -> noted.add("подарок: " + gift.giftName);
+                case null, default -> { }
+            }
+        }
+        return String.join("; ", noted);
+    }
+
+    private static String emojiOf(TdApi.ReactionType type) {
+        return type instanceof TdApi.ReactionTypeEmoji emoji ? emoji.emoji : "";
     }
 
     /**
