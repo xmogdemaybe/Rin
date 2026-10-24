@@ -71,16 +71,16 @@ class OggOpusReaderTest {
 
     @Test
     void aPacketSpanningPagesIsStitchedBack() {
-        // пакет в 300 байт: два полных отрезка по 255 и один в 45 — страница
-        // кончается на полном отрезке, и остаток дописывается следующей
+        // пакет в 300 байт: полная строка в 255 и остаток в 45 — страница
+        // кончается на полной строке, и остаток дописывается следующей
         byte[] packet = new byte[300];
         for (int i = 0; i < packet.length; i++) {
             packet[i] = (byte) i;
         }
         ByteArrayOutputStream stream = new ByteArrayOutputStream();
         stream.writeBytes(page(0x02, 0, List.of(head(), tags())));
-        stream.writeBytes(page(0, 4800, List.of(Arrays.copyOf(packet, 255))));
-        stream.writeBytes(page(0x01, 9600, List.of(Arrays.copyOfRange(packet, 255, 300))));
+        stream.writeBytes(rawPage(0x00, 4800, new int[] {255}, Arrays.copyOf(packet, 255)));
+        stream.writeBytes(rawPage(0x01, 9600, new int[] {45}, Arrays.copyOfRange(packet, 255, 300)));
 
         List<byte[]> packets = OggOpusReader.packets(stream.toByteArray());
 
@@ -101,15 +101,16 @@ class OggOpusReaderTest {
     }
 
     private static byte[] tags() {
-        ByteBuffer buffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+        byte[] vendor = "raine".getBytes(StandardCharsets.UTF_8);
+        ByteBuffer buffer = ByteBuffer.allocate(8 + 4 + vendor.length + 4).order(ByteOrder.LITTLE_ENDIAN);
         buffer.put("OpusTags".getBytes(StandardCharsets.US_ASCII));
-        buffer.putInt(4).put("raine".getBytes(StandardCharsets.UTF_8)).putInt(0);
+        buffer.putInt(vendor.length).put(vendor).putInt(0);
         return buffer.array();
     }
 
     /**
-     * Страница целиком: подпись, флаги, позиция, таблица длин и тело.
-     * Контрольную сумму разбор не проверяет, поэтому она нулевая.
+     * Страница с целыми пакетами внутри: таблица длин составляется по правилу
+     * «255 — значит, пакет продолжается».
      */
     private static byte[] page(int flags, long granule, List<byte[]> parts) {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
@@ -124,18 +125,29 @@ class OggOpusReaderTest {
             lacing.add(part.length - written);
             body.writeBytes(Arrays.copyOfRange(part, written, part.length));
         }
-        ByteBuffer page = ByteBuffer.allocate(27 + lacing.size() + body.size()).order(ByteOrder.LITTLE_ENDIAN);
+        int[] table = new int[lacing.size()];
+        for (int i = 0; i < table.length; i++) {
+            table[i] = lacing.get(i);
+        }
+        return rawPage(flags, granule, table, body.toByteArray());
+    }
+
+    /** Страница целиком: подпись, флаги, позиция, таблица длин и тело. */
+    private static byte[] rawPage(int flags, long granule, int[] lacing, byte[] body) {
+        // контрольную сумму разбор не проверяет, поэтому она нулевая
+        ByteBuffer page = ByteBuffer.allocate(27 + lacing.length + body.length)
+                .order(ByteOrder.LITTLE_ENDIAN);
         page.put("OggS".getBytes(StandardCharsets.US_ASCII));
         page.put((byte) 0).put((byte) flags);
         page.putLong(granule);
         page.putInt(7);            // поток один
-        page.putInt(lacing.size());
-        page.putInt(0);            // контрольная сумма
-        page.put((byte) lacing.size());
+        page.putInt(lacing.length);
+        page.putInt(0);
+        page.put((byte) lacing.length);
         for (int value : lacing) {
             page.put((byte) value);
         }
-        page.put(body.toByteArray());
+        page.put(body);
         return page.array();
     }
 
