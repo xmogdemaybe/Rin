@@ -96,7 +96,7 @@ public final class ModelHearing {
         if (remembered != null) {
             return Optional.of(remembered);
         }
-        if (paidRecently(file)) {
+        if (!claim(file)) {
             return Optional.empty();
         }
         Optional<byte[]> audio = soundOf(file, circle);
@@ -104,7 +104,6 @@ public final class ModelHearing {
             return Optional.empty();
         }
         try {
-            markPaid(file);
             String heard = llm.hear(model, prompts.load("voice_to_text.md"),
                     circle ? "This is a video message circle: only the words matter, do not describe the picture."
                             : "This is a voice message.",
@@ -177,24 +176,35 @@ public final class ModelHearing {
         return file.getFileName().toString();
     }
 
-    /** @return true, если за этот файл платили недавно: эндпоинт ответил бы тем же */
-    private boolean paidRecently(Path file) {
-        Long at = paid.get(key(file));
-        if (at == null || System.currentTimeMillis() - at >= RETRY_AFTER_MILLIS) {
-            return false;
+    /**
+     * Занимает файл под прослушивание: отказывает, если за него платили меньше
+     * четверти часа назад.
+     * <p>
+     * Занятие, а не проверка с последующей отметкой: одно и то же голосовое
+     * разбирают два потока в одну секунду, и между «ещё не платили» и отметкой
+     * успевали оба — эндпоинт платил дважды за один и тот же отказ. Отметка
+     * ставится до запроса, потому что неудача в кэш не ложится и без неё за
+     * каждую перерисовку чата пришлось бы платить заново.
+     */
+    private boolean claim(Path file) {
+        long now = System.currentTimeMillis();
+        String key = key(file);
+        Long before = paid.putIfAbsent(key, now);
+        if (before == null) {
+            // отметки прожитых нужны только для паузы между попытками: иначе карта
+            // росла бы всё время, пока бот не перезапустят
+            if (paid.size() > PAID_LIMIT) {
+                paid.values().removeIf(at -> now - at >= RETRY_AFTER_MILLIS);
+            }
+            return true;
+        }
+        // срок вышел: переспросить дозволяется одному, и право на это выигрывает
+        // тот, кому удалась замена
+        if (now - before >= RETRY_AFTER_MILLIS && paid.replace(key, before, now)) {
+            return true;
         }
         log.debug("К {} уже прислушивались — не платим второй раз", file.getFileName());
-        return true;
-    }
-
-    private void markPaid(Path file) {
-        long now = System.currentTimeMillis();
-        paid.put(key(file), now);
-        // отметки прожитых нужны только для паузы между попытками: иначе карта
-        // росла бы всё время, пока бот не перезапустят
-        if (paid.size() > PAID_LIMIT) {
-            paid.values().removeIf(at -> now - at >= RETRY_AFTER_MILLIS);
-        }
+        return false;
     }
 
     /**
