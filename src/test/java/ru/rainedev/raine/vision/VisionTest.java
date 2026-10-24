@@ -104,6 +104,54 @@ class VisionTest {
     }
 
     @Test
+    void aCloserLookAtAPictureAsksAgain(@TempDir Path dir) throws IOException {
+        // в кэше лежит общий пересказ: ответа на вопрос в нём нет
+        ScriptedLlm llm = new ScriptedLlm().willSee("кот у окна").willSee("на окне рыжий кот");
+        Path photo = imageFile(dir, "фото.jpg");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+
+        vision.describe(photo, Vision.Kind.PHOTO, List.of());
+        String closer = vision.describe(photo, Vision.Kind.PHOTO,
+                List.of(Message.user("What colour is the cat?")), false);
+
+        assertEquals(2, llm.seen.get(), "второй взгляд — новый взгляд, а не строчка из кэша");
+        assertTrue(closer.contains("рыжий кот"), closer);
+        assertTrue(llm.lastContext.contains("What colour is the cat?"),
+                "вопрос должен дойти до зрения: " + llm.lastContext);
+    }
+
+    @Test
+    void aCloserLookLeavesTheRetellingInCache(@TempDir Path dir) throws IOException {
+        // узкий ответ не вытеснит общий пересказ: картинку ещё перескажут целиком
+        ScriptedLlm llm = new ScriptedLlm().willSee("кот у окна").willSee("рыжий");
+        Path photo = imageFile(dir, "кот.jpg");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+
+        vision.describe(photo, Vision.Kind.PHOTO, List.of());
+        vision.describe(photo, Vision.Kind.PHOTO, List.of(Message.user("какого цвета?")), false);
+        String later = vision.describe(photo, Vision.Kind.PHOTO, List.of());
+
+        assertTrue(later.contains("кот у окна"), "в кэше остался общий пересказ: " + later);
+        assertEquals(2, llm.seen.get(), "третий взгляд взял готовое: " + llm.seen.get());
+    }
+
+    @Test
+    void aCloserLookAtVideoFramesIsFresh(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит").willSee("кот на табуретке");
+        Path video = imageFile(dir, "ролик.mp4");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+        List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
+
+        vision.describeVideo(frames, List.of(), video);
+        String closer = vision.describeVideo(frames, List.of(Message.user("где сидит кот?")), video, true, false);
+
+        assertEquals(2, llm.seen.get(), "кадры смотрят заново: в кэше лежит прежний пересказ");
+        assertTrue(closer.contains("кот на табуретке"), closer);
+        String after = vision.describeVideo(frames, List.of(), video);
+        assertTrue(after.contains("кот сидит"), "приглядывание не затёрло пересказ: " + after);
+    }
+
+    @Test
     void videoThatCouldNotBeSeenAtAllIsEmpty(@TempDir Path dir) {
         ScriptedLlm llm = new ScriptedLlm();   // на все кадры отвечает пустотой
 

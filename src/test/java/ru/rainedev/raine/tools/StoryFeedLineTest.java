@@ -136,9 +136,11 @@ class StoryFeedLineTest {
                 "про уже открытую историю так сказать нельзя: " + answer);
         // обложкой остаются те, кого не открывали: их нельзя пересказывать
         assertTrue(answer.contains("still a cover"), answer);
-        // открытое названо номером: без слова об этом история открылась бы второй
-        // раз, а автор засчитал бы второй просмотр
-        assertTrue(answer.contains("second view"), answer);
+        // открытое названо номером и сказано смотренным: без этого деталь
+        // домысливают, вместо того чтобы глянуть ещё раз
+        assertTrue(answer.contains("already been seen"), answer);
+        assertTrue(answer.contains("with a question"),
+                "недостающую деталь просят повторным взглядом: " + answer);
         assertTrue(answer.contains("chat_id=\"2\""), "не открытая строка никуда не делась: " + answer);
         assertEquals(1, answer.split("</watched>").length - 1, "блок просмотра один и закрыт: " + answer);
     }

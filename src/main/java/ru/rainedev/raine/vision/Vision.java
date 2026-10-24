@@ -123,9 +123,19 @@ public final class Vision {
      */
     public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
                                 boolean withSound) {
+        return describeVideo(frames, context, file, withSound, true);
+    }
+
+    /**
+     * @param allowCache читать ли готовую ленту кадров и писать её в кэш. Второй
+     *                   взгляд с вопросом читает мимо кэша: там лежит общий
+     *                   пересказ, а не ответ на вопрос
+     */
+    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
+                                boolean withSound, boolean allowCache) {
         // разбор ролика — это шестнадцать обращений к зрению плюс расшифровка
         // звука; повторять их при каждом открытии чата непозволительно дорого
-        if (file != null) {
+        if (file != null && allowCache) {
             String remembered = fromCache(file);
             if (remembered != null) {
                 log.debug("Видео {} уже смотрела", file.getFileName());
@@ -138,7 +148,7 @@ public final class Vision {
                     .map(speech -> "<video transcription>\n<f track=\"audio\">\n" + Markup.body(speech)
                             + "\n</f>\n</video transcription>\n")
                     .orElse("");
-            if (!onlySound.isEmpty() && file != null) {
+            if (!onlySound.isEmpty() && file != null && allowCache) {
                 toCache(file, onlySound);
             }
             return onlySound;
@@ -177,7 +187,7 @@ public final class Vision {
         String described = "<video transcription>\n" + timeline
                 + "</video transcription instructions=\"You finished watching this video and should "
                 + "acknowledge its contents shown above.\">\n";
-        if (file != null) {
+        if (file != null && allowCache) {
             toCache(file, described);
         }
         return described;
@@ -238,7 +248,17 @@ public final class Vision {
      * @return размеченное описание или пустая строка, если посмотреть не вышло
      */
     public String describe(Path file, Kind kind, List<Message> context) {
-        String cached = fromCache(file);
+        return describe(file, kind, context, true);
+    }
+
+    /**
+     * @param allowCache читать ли готовое описание из кэша и писать туда новое.
+     *                   Второй взгляд с вопросом — нет: в кэше лежит общий
+     *                   пересказ, ответа на вопрос в нём нет, а узкий ответ не
+     *                   должен вытеснить обычный пересказ картинки
+     */
+    public String describe(Path file, Kind kind, List<Message> context, boolean allowCache) {
+        String cached = allowCache ? fromCache(file) : null;
         if (cached != null) {
             return wrap(kind, cached);
         }
@@ -273,7 +293,9 @@ public final class Vision {
                     continue;
                 }
                 if (description != null && !description.isBlank()) {
-                    toCache(file, description.strip());
+                    if (allowCache) {
+                        toCache(file, description.strip());
+                    }
                     log.info("Разглядела {}: {}", kind.tag, description.strip().lines().findFirst().orElse(""));
                     return wrap(kind, description.strip());
                 }
