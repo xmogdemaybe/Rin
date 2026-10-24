@@ -39,11 +39,11 @@ diary_min_relatedness=0.8
 # видит ли она картинки и видео
 vision_enabled=true
 
-# модель зрения для важного
-vision_model=openai/gpt-4o-mini
+# модель зрения для важного; пусто — та же, что говорит
+vision_model=
 
-# дешёвая модель зрения: стикеры, аватарки
-vision_model_cheap=qwen/qwen3.6-flash
+# дешёвая модель зрения: стикеры, аватарки; пусто — та же, что говорит
+vision_model_cheap=
 
 # кэш описаний картинок
 vision_cache_dir=cache/images
