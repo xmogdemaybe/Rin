@@ -48,6 +48,15 @@ public final class TelegramMedia implements MediaDescriber {
         return vision != null;
     }
 
+    /**
+     * Есть ли чем слушать. Зрение для этого не нужно: голосовое и кружок
+     * разбираются ушами. Без слуха предразбор качал бы файл впустую.
+     */
+    @Override
+    public boolean hears() {
+        return hearing != null && (hearing.hears(Track.VOICE) || hearing.hears(Track.CIRCLE));
+    }
+
     /** Слух подключается отдельно: голосовое слышно и без глаз. */
     public void hearing(ru.rainedev.raine.speech.ModelHearing hearing) {
         this.hearing = hearing;
