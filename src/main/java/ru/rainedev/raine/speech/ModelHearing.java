@@ -31,24 +31,41 @@ public final class ModelHearing {
     private static final int MIN_AUDIO_BYTES = 512;
 
     /**
-     * Больше не отправляют: запрос целиком, с учётом base64, упирается в потолок
-     * эндпоинта, а доплатить за него всё равно нельзя.
+     * Дольше не слушаем: wav втрое тяжелее исходного opus, и получасовой монолог
+     * в запрос целиком не влезет, сколько бы эндпоинт ни принимал.
      */
-    private static final int MAX_AUDIO_BYTES = 12_000_000;
+    private static final int MAX_AUDIO_SECONDS = 300;
 
     /**
      * Чем был файл: эндпоинт по этому слову решает, как его распаковать.
-     * Голосовые Telegram кладёт как OGG/Opus, а из кружка дорожку вынимают в
-     * ту же упаковку — на слух они неразличимы, и просить распаковщик видео
-     * незачем: в разговорном формате его всё равно нет.
+     * Голосовые Telegram кладёт как OGG/Opus, но разговорные эндпоинты признают
+     * в запросе только wav и mp3 — поэтому звук раскодирован и уложен в wav,
+     * а дорожка кружка доходит до него тем же путём.
      */
-    private static final String AUDIO_FORMAT = "ogg";
+    private static final String AUDIO_FORMAT = "wav";
+
+    /**
+     * Столько не переспрашиваем эндпоинт об одном и том же файле.
+     * <p>
+     * Одна и та же запись прилетает не раз: чат открывают снова, и история
+     * перерисовывается. Неудачное прослушивание в кэш не ложится — иначе отказ
+     * стал бы вечной «расшифровкой», — а без этой метки за каждый повтор
+     * приходилось бы платить заново.
+     */
+    private static final long RETRY_AFTER_MILLIS = 15 * 60 * 1000;
+
+    /** Столько файлов отметки переживают спокойно: больше — только за месяц работы. */
+    private static final int PAID_LIMIT = 4096;
 
     private final LlmClient llm;
     private final Prompts prompts;
     private final String model;
     private final Path cacheDir;
     private final Config.Hearing config;
+
+    /** Когда за файл уже платили. Растёт вместе с числом вложений за запуск. */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> paid
+            = new java.util.concurrent.ConcurrentHashMap<>();
 
     public ModelHearing(LlmClient llm, Prompts prompts, String model, Path cacheDir, Config.Hearing config) {
         this.llm = llm;
@@ -79,27 +96,19 @@ public final class ModelHearing {
         if (remembered != null) {
             return Optional.of(remembered);
         }
-        Optional<byte[]> sound = soundOf(file, circle);
-        if (sound.isEmpty()) {
+        if (paidRecently(file)) {
             return Optional.empty();
         }
-        byte[] audio = sound.get();
-        if (audio.length < MIN_AUDIO_BYTES) {
-            log.info("Файл {} пуст ({} байт) — слушать нечего", file.getFileName(), audio.length);
-            return Optional.empty();
-        }
-        if (audio.length > MAX_AUDIO_BYTES) {
-            // целое интервью в одно сообщение не кладут: запрос целиком в
-            // 20 мегабайт эндпоинт не примет
-            log.info("Запись {} слишком длинная, чтобы слушать её целиком ({} байт)",
-                    file.getFileName(), audio.length);
+        Optional<byte[]> audio = soundOf(file, circle);
+        if (audio.isEmpty()) {
             return Optional.empty();
         }
         try {
+            markPaid(file);
             String heard = llm.hear(model, prompts.load("voice_to_text.md"),
                     circle ? "This is a video message circle: only the words matter, do not describe the picture."
                             : "This is a voice message.",
-                    audio, AUDIO_FORMAT);
+                    audio.get(), AUDIO_FORMAT);
             if (Refusal.detected(heard)) {
                 // в кэш не кладём: иначе извинение станет вечной расшифровкой
                 log.info("Слушать отказались: {}", firstLine(heard));
@@ -120,30 +129,39 @@ public final class ModelHearing {
     }
 
     /**
-     * Что слушать: сам файл или дорожку из него.
+     * Что слушать: речь из голосового или дорожку из кружка — и то, и другое
+     * доводится до wav.
      * <p>
      * Кружок — это видео, а видео в запрос на слух не кладут: разговорная модель
-     * принимает только звук. Дорожка вынимается своими силами и в той же упаковке,
-     * что и голосовое, — поэтому слушают их одинаково.
+     * принимает только звук. Голосовое же принимается как звук, но в упаковке,
+     * которую эндпоинты не знают, — его раскодированием занимаются здесь.
      */
     private Optional<byte[]> soundOf(Path file, boolean circle) {
-        if (!circle) {
-            return read(file);
-        }
-        Optional<Path> track = VideoAudio.extract(file);
-        if (track.isEmpty()) {
-            log.debug("Из кружка {} дорожка не досталась — останется неслышанным", file.getFileName());
+        Optional<Sound> sound = circle ? VideoAudio.sound(file) : voiceOf(file);
+        if (sound.isEmpty()) {
+            if (circle) {
+                log.debug("Из кружка {} дорожка не досталась — останется неслышанным", file.getFileName());
+            }
             return Optional.empty();
         }
-        try {
-            return read(track.get());
-        } finally {
-            try {
-                Files.deleteIfExists(track.get());
-            } catch (IOException e) {
-                log.debug("Временная дорожка не удалилась: {}", e.getMessage());
-            }
+        Sound raw = sound.get();
+        if (raw.samples().length / raw.rate() > MAX_AUDIO_SECONDS) {
+            log.info("Запись {} длиннее {} с — целиком её не слушаем", file.getFileName(), MAX_AUDIO_SECONDS);
+            return Optional.empty();
         }
+        return Optional.of(Wav.of(raw.samples(), raw.rate()));
+    }
+
+    private Optional<Sound> voiceOf(Path file) {
+        Optional<byte[]> bytes = read(file);
+        if (bytes.isEmpty()) {
+            return Optional.empty();
+        }
+        if (bytes.get().length < MIN_AUDIO_BYTES) {
+            log.info("Файл {} пуст ({} байт) — слушать нечего", file.getFileName(), bytes.get().length);
+            return Optional.empty();
+        }
+        return OggOpusReader.decode(bytes.get(), MAX_AUDIO_SECONDS);
     }
 
     private Optional<byte[]> read(Path file) {
@@ -152,6 +170,30 @@ public final class ModelHearing {
         } catch (IOException e) {
             log.warn("Не удалось прочитать {}: {}", file.getFileName(), e.getMessage());
             return Optional.empty();
+        }
+    }
+
+    private static String key(Path file) {
+        return file.getFileName().toString();
+    }
+
+    /** @return true, если за этот файл платили недавно: эндпоинт ответил бы тем же */
+    private boolean paidRecently(Path file) {
+        Long at = paid.get(key(file));
+        if (at == null || System.currentTimeMillis() - at >= RETRY_AFTER_MILLIS) {
+            return false;
+        }
+        log.debug("К {} уже прислушивались — не платим второй раз", file.getFileName());
+        return true;
+    }
+
+    private void markPaid(Path file) {
+        long now = System.currentTimeMillis();
+        paid.put(key(file), now);
+        // отметки прожитых нужны только для паузы между попытками: иначе карта
+        // росла бы всё время, пока бот не перезапустят
+        if (paid.size() > PAID_LIMIT) {
+            paid.values().removeIf(at -> now - at >= RETRY_AFTER_MILLIS);
         }
     }
 

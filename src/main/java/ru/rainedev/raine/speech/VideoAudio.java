@@ -32,13 +32,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Достаёт звуковую дорожку из видео и перекладывает её в OGG/Opus —
- * в том виде, в каком её понимает распознавание речи.
+ * Достаёт звуковую дорожку из видео — сырым звуком ({@link #sound}) или в
+ * OGG/Opus ({@link #extract}), как требует вызывающий.
  * <p>
  * Всё делается своими силами: контейнер MP4 разбирается и AAC декодируется
- * чистой Java, дальше звук сводится в моно, пересчитывается под речь
- * и кодируется тем же путём, что и голосовые. Внешних программ бот не зовёт —
- * иначе на машине без них видео молча становилось бы немым.
+ * чистой Java, дальше звук сводится в моно и пересчитывается под речь.
+ * Внешних программ бот не зовёт — иначе на машине без них видео молча
+ * становилось бы немым.
  * <p>
  * Разбирается MP4 с дорожкой AAC — то, чем оказывается почти всякое видео
  * из переписки. Остальное остаётся немым, как и раньше: это не ошибка.
@@ -85,6 +85,30 @@ public final class VideoAudio {
      *         Файл временный — удалить его должен вызывающий
      */
     public static Optional<Path> extract(Path video) {
+        Optional<Sound> sound = sound(video);
+        if (sound.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            byte[] ogg = OggOpus.encode(sound.get().samples(), sound.get().rate(), BITRATE);
+            Path audio = Files.createTempFile("rin-audio-", ".ogg");
+            Files.write(audio, ogg);
+            return Optional.of(audio);
+        } catch (IOException | RuntimeException e) {
+            log.debug("Дорожка не сложилась: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Дорожка сырым звуком.
+     * <p>
+     * Нужно это там, где из видео берут только речь: разговорной модели картинку
+     * в запрос не положить, а упакованный в ogg звук она не принимает.
+     *
+     * @return отсчёты одного канала или пусто, если звука нет или формат не поддался
+     */
+    public static Optional<Sound> sound(Path video) {
         if (!looksLikeMp4(video)) {
             log.debug("Это не MP4 — звук останется неуслышанным");
             return Optional.empty();
@@ -97,7 +121,7 @@ public final class VideoAudio {
             thread.setDaemon(true);
             return thread;
         });
-        Future<Optional<Path>> parsed = worker.submit(() -> decodeToFile(video));
+        Future<Optional<Sound>> parsed = worker.submit(() -> decodeTrack(video));
         try {
             return parsed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
@@ -126,7 +150,7 @@ public final class VideoAudio {
         }
     }
 
-    private static Optional<Path> decodeToFile(Path video) {
+    private static Optional<Sound> decodeTrack(Path video) {
         short[] samples;
         int rate;
         try (FileChannelWrapper channel = NIOUtils.readableChannel(video.toFile())) {
@@ -152,21 +176,9 @@ public final class VideoAudio {
             log.debug("Звук из видео не разобрался: {}", e.getMessage());
             return Optional.empty();
         }
-
-        try {
-            byte[] ogg = OggOpus.encode(Pcm.resample(samples, rate, TARGET_RATE), TARGET_RATE, BITRATE);
-            Path audio = Files.createTempFile("rin-audio-", ".ogg");
-            Files.write(audio, ogg);
-            log.debug("Дорожка вынута: {} с", samples.length / rate);
-            return Optional.of(audio);
-        } catch (IOException | RuntimeException e) {
-            log.debug("Дорожка не сложилась: {}", e.getMessage());
-            return Optional.empty();
-        }
+        log.debug("Дорожка вынута: {} с", samples.length / rate);
+        return Optional.of(new Sound(Pcm.resample(samples, rate, TARGET_RATE), TARGET_RATE));
     }
-
-    /** Отсчёты одного канала и частота, на которой они сняты. */
-    private record Sound(short[] samples, int rate) {}
 
     /**
      * Звуковая дорожка вместе с её описанием. Описание читается один раз:

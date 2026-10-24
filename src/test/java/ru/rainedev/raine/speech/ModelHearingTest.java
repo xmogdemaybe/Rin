@@ -87,23 +87,37 @@ class ModelHearingTest {
                 "модель", cache, hearing(voiceNotes, videoNotes, cache));
     }
 
-    /** Голосовое, какое отдаёт Telegram: OGG/Opus на несколько килобайт. */
-    private static Path voiceNote(Path dir) throws IOException {
-        Path file = dir.resolve("voice-1.ogg");
-        Files.write(file, new byte[4096]);
+    /**
+     * Голосовое, каким его отдаёт Telegram: OGG/Opus на 48 кГц, а не абстрактные
+     * байты — слух учится раскодировать именно такую упаковку.
+     */
+    private static Path voiceNote(Path dir) throws Exception {
+        return voiceNote(dir, "voice-1.ogg");
+    }
+
+    private static Path voiceNote(Path dir, String name) throws Exception {
+        int rate = 48_000;
+        short[] tone = new short[rate];
+        for (int i = 0; i < tone.length; i++) {
+            tone[i] = (short) (Math.sin(2 * Math.PI * 440 * i / rate) * 8000);
+        }
+        Path file = dir.resolve(name);
+        Files.write(file, OggOpus.encode(tone, rate, 24_000));
         return file;
     }
 
     @Test
-    void aVoiceNoteIsHeardAndRemembered(@TempDir Path dir) throws IOException {
+    void aVoiceNoteIsHeardAndRemembered(@TempDir Path dir) throws Exception {
         Path cache = dir.resolve("cache");
         Ears ears = new Ears().willHear("привет, папик");
         Path voice = voiceNote(dir);
 
         assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voice, false));
-        // упаковка та же, что у присланного файла: эндпоинт по ней решает, как
-        // её распаковать, и видео ему не положить
-        assertEquals(List.of("ogg"), ears.formats);
+        // голосовое доходит распакованным: эндпоинт принимает только wav и mp3,
+        // а ogg развернул бы запрос сороковым ответом
+        assertEquals(List.of("wav"), ears.formats);
+        assertEquals("RIFF", new String(ears.sounds.get(0), 0, 4, StandardCharsets.US_ASCII));
+        assertEquals("WAVE", new String(ears.sounds.get(0), 8, 4, StandardCharsets.US_ASCII));
 
         // то же голосовое спрашивают не раз: чат открывают заново
         assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voice, false));
@@ -124,8 +138,8 @@ class ModelHearingTest {
 
         // кружок — это MP4, а видео в запрос не кладут: до модели доходит дорожка
         String head = new String(ears.sounds.get(0), 0, 4, StandardCharsets.US_ASCII);
-        assertEquals("OggS", head, "модель должна получить звук, а не контейнер видео");
-        assertEquals(List.of("ogg"), ears.formats);
+        assertEquals("RIFF", head, "модель должна получить звук, а не контейнер видео");
+        assertEquals(List.of("wav"), ears.formats);
         // и подсказка другая: в кружке есть картинка, её пересказ не нужен
         assertTrue(ears.hints.get(0).contains("circle"), ears.hints.get(0));
 
@@ -135,7 +149,7 @@ class ModelHearingTest {
     }
 
     @Test
-    void silenceIsNotSpeech(@TempDir Path dir) throws IOException {
+    void silenceIsNotSpeech(@TempDir Path dir) throws Exception {
         Path cache = dir.resolve("cache");
         Ears ears = new Ears().willHear("Silence.");
 
@@ -150,21 +164,48 @@ class ModelHearingTest {
     }
 
     @Test
-    void aRefusalIsNotRemembered(@TempDir Path dir) throws IOException {
+    void aRefusalIsNotRemembered(@TempDir Path dir) throws Exception {
         // извинение вместо услышанного непустое, и осев в кэше, оно стало бы
         // вечной расшифровкой: вложение больше никто не переспросил бы
         Path cache = dir.resolve("cache");
         Ears ears = new Ears()
                 .willHear("I'm sorry, but I can't hear any speech here.")
                 .willHear("привет");
-        ModelHearing hearing = with(ears, cache, true, true);
         Path voice = voiceNote(dir);
 
-        assertEquals(Optional.empty(), hearing.listen(voice, false));
+        assertEquals(Optional.empty(), with(ears, cache, true, true).listen(voice, false));
         assertTrue(Files.notExists(cache.resolve("voice-1.ogg.heard.md")), "извинение — не услышанное");
 
         // то же голосовое переспрашивают, и на этот раз доходит
+        assertEquals(Optional.of("привет"), with(ears, cache, true, true).listen(voice, false));
+    }
+
+    /**
+     * Одно и то же голосовое прилетает в разговор дважды за ход: его видно и в
+     * уведомлении, и в истории открываемого чата. Неудачу кэш не запоминает,
+     * так что без паузы за каждую повторную перерисовку пришлось бы платить.
+     */
+    @Test
+    void aFailedAttemptIsNotPaidForTwiceRightAway(@TempDir Path dir) throws Exception {
+        Path cache = dir.resolve("cache");
+        Ears ears = new Ears()
+                .willHear("привет")
+                .willHear("и это тоже");
+        ModelHearing hearing = with(ears, cache, true, true);
+        Path voice = voiceNote(dir);
+
         assertEquals(Optional.of("привет"), hearing.listen(voice, false));
+        // услышанное легло в кэш, и второй заход берёт его оттуда, не платя
+        assertEquals(Optional.of("привет"), hearing.listen(voice, false));
+        assertEquals(1, ears.sounds.size());
+
+        // а вот неудачу второй раз hearing не повторяет: тот же файл, тот же ответ
+        Ears moody = new Ears().willHear("");
+        ModelHearing second = with(moody, dir.resolve("cache2"), true, true);
+        Path other = voiceNote(dir, "voice-3.ogg");
+        assertEquals(Optional.empty(), second.listen(other, false));
+        assertEquals(Optional.empty(), second.listen(other, false));
+        assertEquals(1, moody.sounds.size(), "прослушанное только что не переспрашивают");
     }
 
     /** Файл мог прийти недокачанным: слушать пустоту незачем. */
