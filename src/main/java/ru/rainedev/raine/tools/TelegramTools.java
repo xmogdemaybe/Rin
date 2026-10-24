@@ -1078,9 +1078,7 @@ public final class TelegramTools {
             // в канале роликом считают заставку: там их много на день
             String seen = media.describeStory(story, media.onlyGlanceIn(chat), question);
             log.info("{}", watched(chat.id, storyId, seen));
-            return seen.isBlank()
-                    ? "You watched the story, but there was nothing to look at."
-                    : seen;
+            return seen;
         } finally {
             // закрытие не должно прятать настоящую причину: история
             // могла не открыться, и ругаться тогда на close бессмысленно
@@ -1108,18 +1106,19 @@ public final class TelegramTools {
 
     /**
      * Строчка в лог. «Действия» на шаге показывают только название тулзы, и по
-     * ним не понять, открыла она историю или отказалась; здесь видно чата,
-     * номера и что именно разгляделось.
+     * ним не понять, открылась история или нет; здесь видны чат, номер и то,
+     * что в истории нашлось.
+     * <p>
+     * Пустого просмотра здесь быть не может: блок истории содержит хотя бы
+     * тег, а если смотреть было нечего, об этом говорит его текст.
      * <p>
      * Видно пакету: текст проверяют без Telegram и без зрения.
      */
     static String watched(long chatId, int storyId, String seen) {
-        return seen.isBlank()
-                ? "Историю %d чата %d открыла — разглядывать нечего".formatted(storyId, chatId)
-                // одной строкой: многострочный просмотр тонет в логе между
-                // шагами разговора
-                : "Историю %d чата %d открыла: %s".formatted(storyId, chatId,
-                        seen.strip().replaceAll("\\s*\\n\\s*", " "));
+        // одной строкой: многострочный просмотр тонет в логе между
+        // шагами разговора
+        return "Историю %d чата %d открыла: %s".formatted(storyId, chatId,
+                seen.strip().replaceAll("\\s*\\n\\s*", " "));
     }
 
     /**

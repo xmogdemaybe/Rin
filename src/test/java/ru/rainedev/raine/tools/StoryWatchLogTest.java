@@ -8,8 +8,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Просмотр истории должен быть виден в логе: «Действия» на шаге называют только
- * тулзу, и по ним не отличить, открыла она историю и разглядела что-то или
- * пролистала впустую.
+ * тулзу, и по ним не отличить, открылась история или нет.
  */
 class StoryWatchLogTest {
 
@@ -19,16 +18,6 @@ class StoryWatchLogTest {
 
         assertTrue(note.contains("Историю 12 чата 5501583141"), note);
         assertTrue(note.contains("снег"), "без содержимого строчка бесполезна: " + note);
-    }
-
-    @Test
-    void anEmptyViewIsStillAView() {
-        // «ничего не разглядели» — тоже исход: он отличает пустую историю
-        // от несостоявшегося просмотра
-        String note = TelegramTools.watched(7L, 3, "   ");
-
-        assertTrue(note.contains("Историю 3 чата 7"), note);
-        assertTrue(note.contains("разглядывать нечего"), note);
     }
 
     @Test

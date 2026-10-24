@@ -15,8 +15,8 @@ import ru.rainedev.raine.telegram.Telegram;
 /** Скачивает вложение из Telegram и передаёт его зрению или слуху. */
 public final class TelegramMedia implements MediaDescriber {
 
-    /** Что видно, если историю достать не удалось. */
-    private static final String UNREACHABLE = "её больше не открыть — могла протухнуть или быть скрытой";
+    /** Что видно, если историю достать не удалось. Текст читает модель, поэтому он английский. */
+    private static final String UNREACHABLE = "This story could not be opened — it may have expired or been hidden.";
 
     private final Telegram telegram;
     /** Может не быть: зрение включают тумблером, а подпись истории читается и без него. */
@@ -69,7 +69,7 @@ public final class TelegramMedia implements MediaDescriber {
         if (message == null || message.content == null) {
             return "";
         }
-        // без зрения разбирать нечего, и история не в счёт: её подпись и плашки —
+        // без зрения разбирать нечего, и история не в счёт: её подпись и стикеры —
         // текст, а не картинка. Голосовое и кружок слушают ушами, а не глазами,
         // поэтому они разбираются и без зрения. Остальные вложения при
         // выключенном зрении остаются ровно тем, чем были: пометкой о типе
@@ -129,7 +129,7 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * История — не вложение: картинка, подпись и прикреплённые плашки лежат
+     * История — не вложение: картинка, подпись и прикреплённые стикеры лежат
      * в отдельном объекте, поэтому смотрят и подписывают её по-своему.
      */
     public String describeStory(TdApi.Story story) {
@@ -154,7 +154,7 @@ public final class TelegramMedia implements MediaDescriber {
      */
     public String describeStory(TdApi.Story story, boolean onlyGlance, String question) {
         // вслепую разбирать нечего, и жалобу на формат из пустоты не собрать:
-        // ролик цел, просто глаз нет — тогда остаются подпись и плашки
+        // ролик цел, просто глаз нет — тогда остаются подпись и стикеры
         String seen = sees() ? seen(story.content,
                 file -> look(file, Vision.Kind.PHOTO, question),
                 video -> storyVideo(video, onlyGlance,
@@ -274,7 +274,7 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * Подпись и плашки — чужой текст, поэтому они уходят атрибутами: ни кавычек,
+     * Подпись и стикеры — чужой текст, поэтому они уходят атрибутами: ни кавычек,
      * ни попыток открыть свой блок внутри них не останется.
      */
     static String storyBlock(TdApi.Story story, String seen) {
@@ -293,11 +293,12 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * Плашки на истории рисует сам клиент поверх картинки: ни в файле, ни в кадрах
+     * Стикеры на истории рисует сам клиент поверх картинки: ни в файле, ни в кадрах
      * их нет. Ссылка, погода или репост поста видны только здесь.
      * <p>
      * Наполненность полей Telegram оставляет за собой, а слово «null» в описании
-     * читается как часть содержания, поэтому пустоту называют самой плашкой.
+     * читалось бы как часть содержания, поэтому при пустом значении называют
+     * только тип стикера.
      */
     static String attached(TdApi.StoryArea[] areas) {
         if (areas == null) {

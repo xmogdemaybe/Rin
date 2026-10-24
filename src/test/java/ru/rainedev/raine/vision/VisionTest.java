@@ -88,31 +88,15 @@ class VisionTest {
         ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит").willSee("кот роняет чашку");
 
         String result = visionWith(llm, dir.resolve("cache")).describeVideo(
-                List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
+                () -> List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
                         new VideoFrames.Frame(1, 2, new byte[] {2})),
-                List.of());
+                List.of(), null, false, true);
 
         assertEquals(2, llm.seen.get(), "каждый кадр описывается отдельно");
         assertTrue(result.contains("from=\"0:00\" to=\"0:01\""), result);
         assertTrue(result.contains("from=\"0:01\" to=\"0:02\""), result);
         assertTrue(result.contains("кот роняет чашку"), result);
         assertTrue(result.contains("video transcription"), result);
-    }
-
-    @Test
-    void videoIsWatchedOnlyOnce(@TempDir Path dir) throws IOException {
-        // разбор ролика — это шестнадцать обращений к зрению плюс расшифровка звука;
-        // повторять их при каждом открытии чата непозволительно дорого
-        ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит").willSee("кот сидит");
-        Path video = imageFile(dir, "ролик.mp4");
-        Vision vision = visionWith(llm, dir.resolve("cache"));
-        List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
-
-        String first = vision.describeVideo(frames, List.of(), video);
-        String again = vision.describeVideo(frames, List.of(), video);
-
-        assertEquals(first, again);
-        assertEquals(1, llm.seen.get(), "второй раз смотреть незачем — описание уже есть");
     }
 
     @Test
@@ -203,13 +187,14 @@ class VisionTest {
         Vision vision = visionWith(llm, dir.resolve("cache"));
         List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
 
-        vision.describeVideo(frames, List.of(), video);
-        String closer = vision.describeVideo(frames, List.of(Message.user("где сидит кот?")), video, true, false);
+        vision.describeVideo(() -> frames, List.of(), video, false, true);
+        String closer = vision.describeVideo(() -> frames, List.of(Message.user("где сидит кот?")), video,
+                false, false);
 
         assertEquals(2, llm.seen.get(), "кадры смотрят заново: в кэше лежит прежний пересказ");
         assertTrue(closer.contains("кот на табуретке"), closer);
-        String after = vision.describeVideo(frames, List.of(), video);
-        assertTrue(after.contains("кот сидит"), "приглядывание не затёрло пересказ: " + after);
+        String after = vision.describeVideo(() -> frames, List.of(), video, false, true);
+        assertTrue(after.contains("кот сидит"), "второй взгляд не затёрл общий пересказ: " + after);
     }
 
     @Test
@@ -217,7 +202,7 @@ class VisionTest {
         ScriptedLlm llm = new ScriptedLlm();   // на все кадры отвечает пустотой
 
         String result = visionWith(llm, dir.resolve("cache")).describeVideo(
-                List.of(new VideoFrames.Frame(0, 1, new byte[] {1})), List.of());
+                () -> List.of(new VideoFrames.Frame(0, 1, new byte[] {1})), List.of(), null, false, true);
 
         assertEquals("", result);
     }
@@ -226,7 +211,8 @@ class VisionTest {
     void videoWithoutFramesIsNotAskedAbout(@TempDir Path dir) {
         ScriptedLlm llm = new ScriptedLlm().willSee("что-то");
 
-        String result = visionWith(llm, dir.resolve("cache")).describeVideo(List.of(), List.of());
+        String result = visionWith(llm, dir.resolve("cache"))
+                .describeVideo(() -> List.of(), List.of(), null, false, true);
 
         assertEquals("", result);
         assertEquals(0, llm.seen.get(), "спрашивать не о чем — незачем и платить");
@@ -391,9 +377,9 @@ class VisionTest {
         ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит").willSee("I'm unable to assist with that.");
 
         String result = visionWith(llm, dir.resolve("cache")).describeVideo(
-                List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
+                () -> List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
                         new VideoFrames.Frame(1, 2, new byte[] {2})),
-                List.of());
+                List.of(), null, false, true);
 
         assertTrue(result.contains("кот сидит"), result);
         assertFalse(result.contains("unable"), "извинение не должно попасть в ленту времени: " + result);

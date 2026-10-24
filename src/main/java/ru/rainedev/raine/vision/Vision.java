@@ -80,56 +80,22 @@ public final class Vision {
     }
 
     /**
-     * Описывает уже готовые байты картинки. Кэша здесь нет: у таких байтов
-     * нет файла, по которому их можно было бы узнать в следующий раз.
-     */
-    public String describe(byte[] image, Kind kind, List<Message> context) {
-        try {
-            String description = llm.describeImage(kind.cheap ? cheapModel : mainModel,
-                    prompts.load(kind.prompt), buildContext(context), Downscale.toFit(image));
-            if (Refusal.detected(description)) {
-                log.info("Смотреть отказались: {}", description.strip().lines().findFirst().orElse(""));
-                return "";
-            }
-            return description == null || description.isBlank() ? "" : wrap(kind, description.strip());
-        } catch (RuntimeException e) {
-            log.warn("Не удалось разглядеть кадры: {}", e.getMessage());
-            return "";
-        }
-    }
-
-    /**
      * Видео описывается покадрово, и каждая подпись помечена своим временем.
      * Склеить кадры в одну картинку было бы дешевле, но тогда пропадает
      * главное: что было раньше, а что позже. «Сначала показывает кота, потом
      * роняет чашку» — это уже рассказ, а не набор картинок.
      *
-     * @return размеченная лента подписей или пустая строка
-     */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context) {
-        return describeVideo(frames, context, null);
-    }
-
-    /**
+     * @param frames чем достают кадры: распаковку не зовут, когда описание уже готово
+     * @param context последние сообщения — без них модель описывает ролик
+     *                вообще, а не применительно к разговору
      * @param file сам файл — из него слышно звук. Без него видео немое
-     */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file) {
-        return describeVideo(frames, context, file, true);
-    }
-
-    /**
      * @param withSound слушать ли дорожку. Анимации и прочие ролики без звука не
      *                  слушают вовсе: распознавание речи на тишине не молчит, а
      *                  выдумывает субтитры, и они ушли бы в разговор как услышанное
-     */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
-                                boolean withSound) {
-        return describeVideo(frames, context, file, withSound, true);
-    }
-
-    /**
-     * @param frames   чем достают кадры: распаковку не зовут, когда описание уже готово
-     * @param allowCache читать ли готовую ленту кадров и писать её в кэш
+     * @param allowCache читать ли готовую ленту кадров и писать её в кэш. Второй
+     *                   взгляд с вопросом читает мимо кэша: там лежит общий
+     *                   пересказ, а не ответ на вопрос
+     * @return размеченная лента подписей или пустая строка
      */
     public String describeVideo(Supplier<List<VideoFrames.Frame>> frames, List<Message> context,
                                 java.nio.file.Path file, boolean withSound, boolean allowCache) {
@@ -137,17 +103,6 @@ public final class Vision {
         // ответ на который уже лежит в кэше
         String remembered = remembered(file, allowCache);
         return remembered == null ? lookFrames(frames.get(), context, file, withSound, allowCache) : remembered;
-    }
-
-    /**
-     * @param allowCache читать ли готовую ленту кадров и писать её в кэш. Второй
-     *                   взгляд с вопросом читает мимо кэша: там лежит общий
-     *                   пересказ, а не ответ на вопрос
-     */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
-                                boolean withSound, boolean allowCache) {
-        String remembered = remembered(file, allowCache);
-        return remembered == null ? lookFrames(frames, context, file, withSound, allowCache) : remembered;
     }
 
     /**
@@ -229,8 +184,8 @@ public final class Vision {
         if (!withSound || file == null || hearing == null || !hearing.hearsVideoAudio()) {
             return java.util.Optional.empty();
         }
-        // дорожку берёт слух: звук из файла вынимают раскодированием, а не
-        // временным ogg, который было кому разобрать, кроме шёпота
+        // дорожку берёт слух: он сам вынимает звук из файла и решает, есть ли
+        // там что распознавать
         return hearing.listen(file, true);
     }
 

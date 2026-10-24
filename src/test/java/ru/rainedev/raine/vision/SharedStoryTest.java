@@ -14,7 +14,7 @@ import ru.rainedev.raine.phone.MessageContent;
 import ru.rainedev.raine.phone.MessageFormatter;
 
 /**
- * История, присланная в чат, — не вложение: её содержимое, подпись и плашки
+ * История, присланная в чат, — не вложение: её содержимое, подпись и стикеры
  * приезжают отдельным объектом, и текст там чужой.
  */
 class SharedStoryTest {
@@ -41,7 +41,7 @@ class SharedStoryTest {
 
     @Test
     void attachedAreasAreReadable() {
-        // плашки рисует клиент поверх картинки: ни в файле, ни в кадрах их нет
+        // стикеры рисует клиент поверх картинки: ни в файле, ни в кадрах их нет
         String attached = TelegramMedia.attached(new TdApi.StoryArea[] {
                 area(new TdApi.StoryAreaTypeLink("https://example.com/cat")),
                 area(weather(12.4, "солнечно")),
@@ -91,7 +91,7 @@ class SharedStoryTest {
 
     @Test
     void aLocationStickerIsNamedWithoutInventingAPlace() {
-        // в такой плашке лежат координаты, а не название: выдумывать «где именно»
+        // в таком стикере лежат координаты, а не название: выдумывать «где именно»
         // незачем, а молчать — значит потерять сам факт метки
         String attached = TelegramMedia.attached(
                 new TdApi.StoryArea[] { area(new TdApi.StoryAreaTypeLocation()) });
