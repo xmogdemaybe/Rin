@@ -399,9 +399,9 @@ public final class TelegramMedia implements MediaDescriber {
         }
         return switch (message.content) {
             case TdApi.MessageVoiceNote voice when hearing.hearsVoiceNotes() ->
-                    hearing.listen(soundOf(voice.voiceNote.voice), false);
+                    soundOf(voice.voiceNote.voice).flatMap(sound -> hearing.listen(sound, false));
             case TdApi.MessageVideoNote note when hearing.hearsVideoNotes() ->
-                    hearing.listen(soundOf(note.videoNote.video), true);
+                    soundOf(note.videoNote.video).flatMap(sound -> hearing.listen(sound, true));
             default -> Optional.empty();
         };
     }
@@ -424,8 +424,8 @@ public final class TelegramMedia implements MediaDescriber {
             return false;
         }
         return switch (message.content) {
-            case TdApi.MessageVoiceNote voice -> !voice.voiceNote.isListened;
-            case TdApi.MessageVideoNote note -> !note.videoNote.isViewed && !note.isSecret;
+            case TdApi.MessageVoiceNote voice -> !voice.isListened;
+            case TdApi.MessageVideoNote note -> !note.isViewed && !note.isSecret;
             default -> false;
         };
     }
