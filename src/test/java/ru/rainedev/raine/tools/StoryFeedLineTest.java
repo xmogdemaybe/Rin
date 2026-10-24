@@ -73,6 +73,10 @@ class StoryFeedLineTest {
 
         assertTrue(answer.contains("chat_id=\"2\""), "обрезать нечего: " + answer);
         assertFalse(answer.contains("cut short"), "хвоста нет, и врать про него незачем: " + answer);
+        // лента — это обложки: без этого слова историю пересказывают по памяти,
+        // будто её смотрели
+        assertTrue(answer.contains("None of these have been seen yet"), answer);
+        assertTrue(answer.contains("watch_story"), answer);
     }
 
     @Test
