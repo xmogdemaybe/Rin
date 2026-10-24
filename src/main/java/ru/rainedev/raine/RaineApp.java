@@ -150,14 +150,19 @@ public final class RaineApp implements AutoCloseable {
         Prompts prompts = new Prompts(config.promptsDir(), config.character());
         LlmClient llm = new OpenAiCompatibleClient(config.llm(), config.embeddingModel());
 
+        // слух — не зрение: голосовое и кружок слушают ушами, и без картинок они
+        // остаются слышимыми. Telegram распознаёт речь только за премиум, остальное
+        // добирает сама модель — отдельный распознаватель для этого не нужен.
+        // Дорожка обычного ролика идёт тем же путём: картинку смотрит зрение, а
+        // слова берёт та же модель, что говорит
+        ru.rainedev.raine.speech.ModelHearing hearing = new ru.rainedev.raine.speech.ModelHearing(
+                llm, prompts, config.llm().model(), config.hearing().cacheDir(), config.hearing());
+
         // зрение подключается к разметке: описание встаёт прямо под вложением
         if (config.vision().enabled()) {
             vision = new Vision(llm, prompts, config.vision().cacheDir(),
                     config.vision().model(), config.vision().cheapModel(), config.character().name());
-            var hearing = new ru.rainedev.raine.speech.SpeechToText(config.hearing());
-            if (hearing.isAvailable()) {
-                vision.hearing(hearing);
-            }
+            vision.hearing(hearing);
         } else {
             log.info("Зрение выключено: вложения видны только по типу, из истории — только текст");
         }
@@ -180,11 +185,7 @@ public final class RaineApp implements AutoCloseable {
             log.warn("Режим только чтения: она думает, но ничего не отправляет и не открывает чаты");
         }
 
-        // слух — не зрение: голосовое и кружок слушают ушами, и без картинок они
-        // остаются слышимыми. Telegram распознаёт речь только за премиум, остальное
-        // добирает сама модель — отдельный распознаватель для этого не нужен
-        telegramMedia.hearing(new ru.rainedev.raine.speech.ModelHearing(llm, prompts,
-                config.llm().model(), config.hearing().cacheDir(), config.hearing()));
+        telegramMedia.hearing(hearing);
         telegramMedia.markHeard(actions, config.hearing().markListened());
 
         AntiRepeat antiRepeat = new AntiRepeat(llm, prompts.lazy("anti_repeat.md"), config.repeat());

@@ -77,21 +77,30 @@ public final class ModelHearing {
 
     /** Голосовые. */
     public boolean hearsVoiceNotes() {
-        return config.voiceNotes() && llm.hears();
+        return config.enabled() && config.voiceNotes() && llm.hears();
     }
 
     /** Видеокружки. */
     public boolean hearsVideoNotes() {
-        return config.videoNotes() && llm.hears();
+        return config.enabled() && config.videoNotes() && llm.hears();
     }
 
     /**
-     * @param file   голосовое или кружок, как он лежит в каталоге Telegram: по его
-     *               имени узнаётся то, что уже слушали
-     * @param circle кружок вместо голосового: это видео, и звук из него вынимают
+     * Звук из обычных роликов: картинку смотрит зрение, а слова из дорожки берёт
+     * та же модель, что говорит. Отдельного распознавателя для этого не нужно —
+     * и без рабочего адреса на нём бот делал бы вид, что слушает.
+     */
+    public boolean hearsVideoAudio() {
+        return config.enabled() && llm.hears();
+    }
+
+    /**
+     * @param file      голосовое или ролик, как он лежит в каталоге Telegram: по его
+     *                  имени узнаётся то, что уже слушали
+     * @param fromVideo звук вынимают из видеодорожки — это и кружок, и обычный ролик
      * @return сказанное словами или пусто, если не вышло
      */
-    public Optional<String> listen(Path file, boolean circle) {
+    public Optional<String> listen(Path file, boolean fromVideo) {
         String remembered = fromCache(file);
         if (remembered != null) {
             return Optional.of(remembered);
@@ -99,13 +108,13 @@ public final class ModelHearing {
         if (!claim(file)) {
             return Optional.empty();
         }
-        Optional<byte[]> audio = soundOf(file, circle);
+        Optional<byte[]> audio = soundOf(file, fromVideo);
         if (audio.isEmpty()) {
             return Optional.empty();
         }
         try {
             String heard = llm.hear(model, prompts.load("voice_to_text.md"),
-                    circle ? "This is a video message circle: only the words matter, do not describe the picture."
+                    fromVideo ? "This is the sound track of a video: only the words matter, do not describe the picture."
                             : "This is a voice message.",
                     audio.get(), AUDIO_FORMAT);
             if (Refusal.detected(heard)) {
@@ -128,18 +137,18 @@ public final class ModelHearing {
     }
 
     /**
-     * Что слушать: речь из голосового или дорожку из кружка — и то, и другое
+     * Что слушать: речь из голосового или дорожку из ролика — и то, и другое
      * доводится до wav.
      * <p>
-     * Кружок — это видео, а видео в запрос на слух не кладут: разговорная модель
+     * Ролик — это видео, а видео в запрос на слух не кладут: разговорная модель
      * принимает только звук. Голосовое же принимается как звук, но в упаковке,
      * которую эндпоинты не знают, — его раскодированием занимаются здесь.
      */
-    private Optional<byte[]> soundOf(Path file, boolean circle) {
-        Optional<Sound> sound = circle ? VideoAudio.sound(file) : voiceOf(file);
+    private Optional<byte[]> soundOf(Path file, boolean fromVideo) {
+        Optional<Sound> sound = fromVideo ? VideoAudio.sound(file) : voiceOf(file);
         if (sound.isEmpty()) {
-            if (circle) {
-                log.debug("Из кружка {} дорожка не досталась — останется неслышанным", file.getFileName());
+            if (fromVideo) {
+                log.debug("Из ролика {} дорожка не досталась — останется неслышанным", file.getFileName());
             }
             return Optional.empty();
         }
