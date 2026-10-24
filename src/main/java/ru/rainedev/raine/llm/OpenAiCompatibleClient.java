@@ -214,6 +214,40 @@ public final class OpenAiCompatibleClient implements LlmClient {
         }
     }
 
+    /** Модели этого ряда слушают звук сами — отдельный распознаватель не нужен. */
+    @Override
+    public boolean hears() {
+        return true;
+    }
+
+    @Override
+    public String hear(String model, String systemPrompt, String context, byte[] audio, String format) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("model", model);
+
+        var messages = body.putArray("messages");
+        messages.addObject().put("role", "system").put("content", systemPrompt);
+
+        // звук идёт отдельной частью сообщения, как картинка: текст подсказки
+        // и само вложение эндпоинт путает, если смешать их в одном поле
+        ObjectNode userMessage = messages.addObject();
+        userMessage.put("role", "user");
+        var parts = userMessage.putArray("content");
+        parts.addObject().put("type", "text").put("text", context);
+        parts.addObject()
+                .put("type", "input_audio")
+                .putObject("input_audio")
+                .put("data", java.util.Base64.getEncoder().encodeToString(audio))
+                .put("format", format);
+
+        String response = post("chat/completions", body, Duration.ofMinutes(3));
+        try {
+            return mapper.readValue(response, ChatResponse.class).text();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Не удалось разобрать услышанное", e);
+        }
+    }
+
     @Override
     public double[] embedding(String input) {
         ObjectNode body = mapper.createObjectNode();

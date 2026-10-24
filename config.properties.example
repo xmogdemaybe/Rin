@@ -100,6 +100,18 @@ hearing_model=openai/whisper-1
 # язык, на котором говорят в видео
 hearing_language=ru
 
+# слушать ли голосовые самой модели: без премиума это единственный способ узнать, что в них сказали
+hearing_voice_notes=true
+
+# слушать ли видеокружки самой модели
+hearing_video_notes=true
+
+# помечать ли услышанное прослушанным: галочку увидит автор сообщения
+hearing_mark_listened=true
+
+# кэш услышанного
+hearing_cache_dir=cache/hearing
+
 # может ли делать снимки
 camera_enabled=true
 

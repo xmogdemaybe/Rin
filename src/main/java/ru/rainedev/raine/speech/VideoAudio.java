@@ -1,4 +1,4 @@
-package ru.rainedev.raine.vision;
+package ru.rainedev.raine.speech;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -30,8 +30,6 @@ import org.jcodec.containers.mp4.demuxer.AbstractMP4DemuxerTrack;
 import org.jcodec.containers.mp4.demuxer.MP4Demuxer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import ru.rainedev.raine.speech.OggOpus;
-import ru.rainedev.raine.speech.Pcm;
 
 /**
  * Достаёт звуковую дорожку из видео и перекладывает её в OGG/Opus —

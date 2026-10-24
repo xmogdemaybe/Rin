@@ -180,6 +180,13 @@ public final class RaineApp implements AutoCloseable {
             log.warn("Режим только чтения: она думает, но ничего не отправляет и не открывает чаты");
         }
 
+        // слух — не зрение: голосовое и кружок слушают ушами, и без картинок они
+        // остаются слышимыми. Telegram распознаёт речь только за премиум, остальное
+        // добирает сама модель — отдельный распознаватель для этого не нужен
+        telegramMedia.hearing(new ru.rainedev.raine.speech.ModelHearing(llm, prompts,
+                config.llm().model(), config.hearing().cacheDir(), config.hearing()));
+        telegramMedia.markHeard(actions, config.hearing().markListened());
+
         AntiRepeat antiRepeat = new AntiRepeat(llm, prompts.lazy("anti_repeat.md"), config.repeat());
         tools = new TelegramTools(telegram, actions, new ChatScreen(formatter, prompts).recentDepth(config.vision().recentDepth()),
                 lockdown, antiRepeat);

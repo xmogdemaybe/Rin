@@ -128,10 +128,18 @@ public record Config(
                         String language, double speed, int sampleRate, int bitrate, Path directory) {}
 
     /**
-     * Слух: расшифровка звуковой дорожки видео. Голосовые и кружки
-     * расшифровывает сам Telegram за премиум, а обычное видео — нет.
+     * Слух.
+     * <p>
+     * Голосовые и кружки слушает сама разговорная модель — отдельный
+     * распознаватель ей не нужен, а Telegram распознаёт их только за премиум.
+     * {@code enabled} же про звуковую дорожку обычных видео: там модель
+     * картинки и звук вместе не получает, и дорожку сначала вытаскивают.
+     *
+     * @param markListened помечать ли услышанное прослушанным: галочку увидит
+     *                     автор сообщения, и решать это должен владелец
      */
-    public record Hearing(boolean enabled, String baseUrl, String apiKey, String model, String language) {}
+    public record Hearing(boolean enabled, String baseUrl, String apiKey, String model, String language,
+                          boolean voiceNotes, boolean videoNotes, boolean markListened, Path cacheDir) {}
 
     /** Генерация снимков. */
     /**
@@ -228,7 +236,14 @@ public record Config(
                         s.inherit("hearing_api_key", s.require("llm_api_key", "ключ модели"),
                                 "ключ распознавания речи"),
                         s.get("hearing_model", "openai/whisper-1", "модель распознавания речи"),
-                        s.get("hearing_language", "ru", "язык, на котором говорят в видео")),
+                        s.get("hearing_language", "ru", "язык, на котором говорят в видео"),
+                        s.flag("hearing_voice_notes", true,
+                                "слушать ли голосовые самой модели: без премиума это единственный способ узнать, что в них сказали"),
+                        s.flag("hearing_video_notes", true,
+                                "слушать ли видеокружки самой модели"),
+                        s.flag("hearing_mark_listened", true,
+                                "помечать ли услышанное прослушанным: автор сообщения увидит галочку"),
+                        s.path("hearing_cache_dir", "cache/hearing", "кэш услышанного")),
                 new Camera(
                         s.flag("camera_enabled", true, "может ли делать снимки"),
                         s.get("camera_base_url", "https://aihorde.net/api/v2/", "адрес очереди рисования"),

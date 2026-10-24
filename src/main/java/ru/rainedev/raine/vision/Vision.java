@@ -8,8 +8,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.prompt.Prompts;
+import ru.rainedev.raine.speech.VideoAudio;
 
 /**
  * Превращает картинку в описание — иначе на присланное фото Raine видит
@@ -30,21 +32,6 @@ public final class Vision {
 
     /** Меньше этого — не картинка, а недокачанный файл. */
     private static final int MIN_IMAGE_BYTES = 512;
-
-    /**
-     * Отказ смотреть — не описание. Беда в том, что он непустой и потому шёл
-     * дальше как обычный ответ: оседал в кэше навсегда (значит, картинку уже
-     * никогда не переспросят), уходил в разговор как увиденное и попадал
-     * в дневник. Из одной такой записи она вывела, что не умеет смотреть видео.
-     * <p>
-     * Смотрим только начало ответа: описание начинается с заголовка, а отказ —
-     * сразу с извинения. Иначе «I can't» внутри подписи к картинке считалось бы
-     * отказом, и настоящее описание пропадало бы.
-     */
-    private static final java.util.regex.Pattern REFUSAL = java.util.regex.Pattern.compile(
-            "^\\W*(?:i(?:'m| am)?\\s+(?:sorry|unable|afraid)|i\\s+can(?:'t|not)|sorry[,.]|as an ai"
-                    + "|извини|прост(?:и|ите)|я не могу|не могу (?:помочь|описать))",
-            java.util.regex.Pattern.CASE_INSENSITIVE);
 
     /** Что смотрим. От этого зависит и промпт, и какой моделью. */
     public enum Kind {
@@ -100,7 +87,7 @@ public final class Vision {
         try {
             String description = llm.describeImage(kind.cheap ? cheapModel : mainModel,
                     prompts.load(kind.prompt), buildContext(context), Downscale.toFit(image));
-            if (refusal(description)) {
+            if (Refusal.detected(description)) {
                 log.info("Смотреть отказались: {}", description.strip().lines().findFirst().orElse(""));
                 return "";
             }
@@ -239,7 +226,7 @@ public final class Vision {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
                 String caption = llm.describeImage(cheapModel, prompt, situation, Downscale.toFit(frame.jpeg()));
-                if (refusal(caption)) {
+                if (Refusal.detected(caption)) {
                     // кадр без подписи выпадет из ленты времени, и это честнее
                     // извинения, выданного за увиденное
                     log.debug("Кадр на {} с смотреть отказались, попытка {}", frame.from(), attempt);
@@ -292,7 +279,7 @@ public final class Vision {
             try {
                 String description = llm.describeImage(model, prompts.load(kind.prompt), buildContext(context),
                         Downscale.toFit(image));
-                if (refusal(description)) {
+                if (Refusal.detected(description)) {
                     // в кэш не кладём: иначе отказ станет вечным описанием картинки
                     log.info("Смотреть отказались ({}), попытка {} из {}: {}", model, attempt, MAX_ATTEMPTS,
                             description.strip().lines().findFirst().orElse(""));
@@ -330,13 +317,6 @@ public final class Vision {
             }
         }
         return out.append("</context>\n\nDescribe the photo.").toString();
-    }
-
-    /**
-     * @return правда, если модель не посмотрела, а извинилась
-     */
-    static boolean refusal(String answer) {
-        return answer != null && REFUSAL.matcher(answer.strip()).find();
     }
 
     /** Описание рисует модель по чужому вложению: границы блоков оно ломать не должно. */
