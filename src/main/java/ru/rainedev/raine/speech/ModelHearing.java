@@ -57,6 +57,27 @@ public final class ModelHearing {
     /** Столько файлов отметки переживают спокойно: больше — только за месяц работы. */
     private static final int PAID_LIMIT = 4096;
 
+    /**
+     * Что именно слушают: голосовое, дорожку кружка или дорожку обычного ролика.
+     * <p>
+     * Одно слово решает и распаковку, и разрешение слушать вовсе. Раньше за
+     * разрешение отвечал тот, кто зовёт, — а к кружку вели две дороги, и на
+     * второй, через зрение, спрашивалось разрешение ролика.
+     */
+    public enum Track {
+        /** Голосовое сообщение. */
+        VOICE,
+        /** Видеокружок: картинка и дорожка в одном файле. */
+        CIRCLE,
+        /** Ролик, присланный видео или файлом. */
+        VIDEO;
+
+        /** Звук вынимают из видеодорожки — это и кружок, и обычный ролик. */
+        boolean fromVideo() {
+            return this != VOICE;
+        }
+    }
+
     private final LlmClient llm;
     private final Prompts prompts;
     private final String model;
@@ -75,13 +96,28 @@ public final class ModelHearing {
         this.config = config;
     }
 
+    /**
+     * Слышит ли это вложение вовсе: общий слух, тумблер владельца и то, принимает
+     * ли модель звук.
+     * <p>
+     * Спрашивается по типу дорожки, а не тремя разными вопросами: кружок умел
+     * получить разрешение ролика, и снятый тумблер оставался неисполненным.
+     */
+    public boolean hears(Track track) {
+        return switch (track) {
+            case VOICE -> hearsVoiceNotes();
+            case CIRCLE -> hearsVideoNotes();
+            case VIDEO -> hearsVideoAudio();
+        };
+    }
+
     /** Голосовые. */
-    public boolean hearsVoiceNotes() {
+    boolean hearsVoiceNotes() {
         return config.enabled() && config.voiceNotes() && llm.hears();
     }
 
     /** Видеокружки. */
-    public boolean hearsVideoNotes() {
+    boolean hearsVideoNotes() {
         return config.enabled() && config.videoNotes() && llm.hears();
     }
 
@@ -90,22 +126,28 @@ public final class ModelHearing {
      * та же модель, что говорит. Отдельного распознавателя для этого не нужно —
      * и без рабочего адреса на нём бот делал бы вид, что слушает.
      */
-    public boolean hearsVideoAudio() {
+    boolean hearsVideoAudio() {
         return config.enabled() && llm.hears();
     }
 
     /**
-     * @param file      голосовое или ролик, как он лежит в каталоге Telegram: по его
-     *                  имени узнаётся то, что уже слушали
-     * @param fromVideo звук вынимают из видеодорожки — это и кружок, и обычный ролик
+     * @param file  голосовое или ролик, как он лежит в каталоге Telegram: по его
+     *              имени узнаётся то, что уже слушали
+     * @param track чем является звук: от него зависят и разрешение слушать,
+     *              и распаковка, и подсказка эндпоинту
      * @return сказанное словами или пусто, если не вышло
      */
-    public Optional<String> listen(Path file, boolean fromVideo) {
+    public Optional<String> listen(Path file, Track track) {
+        if (!hears(track)) {
+            // разрешение держится здесь, а не у того, кто зовёт: к кружку вели
+            // две дороги, и на одной из них оно терялось
+            return Optional.empty();
+        }
         String remembered = fromCache(file);
         if (remembered != null) {
             return Optional.of(remembered);
         }
-        Optional<byte[]> audio = soundOf(file, fromVideo);
+        Optional<byte[]> audio = soundOf(file, track);
         if (audio.isEmpty()) {
             // эндпоинт ещё не спрошен, и пауза здесь не нужна: Telegram отдаёт
             // вложение по частям, и за недокачанный файл платить нечем
@@ -116,7 +158,7 @@ public final class ModelHearing {
         }
         try {
             String heard = llm.hear(model, prompts.load("voice_to_text.md"),
-                    fromVideo ? "This is the sound track of a video: only the words matter, do not describe the picture."
+                    track.fromVideo() ? "This is the sound track of a video: only the words matter, do not describe the picture."
                             : "This is a voice message.",
                     audio.get(), AUDIO_FORMAT);
             if (Refusal.detected(heard)) {
@@ -146,10 +188,10 @@ public final class ModelHearing {
      * принимает только звук. Голосовое же принимается как звук, но в упаковке,
      * которую эндпоинты не знают, — его раскодированием занимаются здесь.
      */
-    private Optional<byte[]> soundOf(Path file, boolean fromVideo) {
-        Optional<Sound> sound = fromVideo ? VideoAudio.sound(file) : voiceOf(file);
+    private Optional<byte[]> soundOf(Path file, Track track) {
+        Optional<Sound> sound = track.fromVideo() ? VideoAudio.sound(file) : voiceOf(file);
         if (sound.isEmpty()) {
-            if (fromVideo) {
+            if (track.fromVideo()) {
                 log.debug("Из ролика {} дорожка не досталась — останется неслышанным", file.getFileName());
             }
             return Optional.empty();

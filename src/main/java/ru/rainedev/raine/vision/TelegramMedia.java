@@ -10,6 +10,7 @@ import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MediaDescriber;
+import ru.rainedev.raine.speech.ModelHearing.Track;
 import ru.rainedev.raine.telegram.Telegram;
 
 /** Скачивает вложение из Telegram и передаёт его зрению или слуху. */
@@ -87,10 +88,10 @@ public final class TelegramMedia implements MediaDescriber {
             case TdApi.MessageGift gift -> gift(gift);
             case TdApi.MessageVoiceNote ignored -> heard(message, "voice");
             case TdApi.MessageVideoNote videoNote ->
-                    // в кружке есть и картинка, и речь — берём и то, и другое;
-                    // одно и то же дважды в разговор не пойдёт: если кружок
-                    // слушает сама модель, распознаватель к дорожке не зовут
-                    watch(fileOf(videoNote.videoNote.video), !listensCircles()) + heard(message, "video_note");
+                    // у кружка есть и картинка, и речь, но дорога к звуку
+                    // должна быть одна: через зрение он слушался бы по
+                    // разрешению ролика, а тумблер кружка там не спрашивают
+                    watch(fileOf(videoNote.videoNote.video), false) + heard(message, "video_note");
             case TdApi.MessageVideo video -> video.video == null ? "" : watchOrGlance(
                     message, fileOf(video.video.video), thumbnailOf(video.video.thumbnail));
             case TdApi.MessageAnimation animation -> animation.animation == null ? "" : watchOrGlance(
@@ -447,11 +448,6 @@ public final class TelegramMedia implements MediaDescriber {
                 || message.content instanceof TdApi.MessageVideoNote;
     }
 
-    /** Слушает ли кружок сама модель — тогда распознаватель дорожки не нужен. */
-    private boolean listensCircles() {
-        return hearing != null && hearing.hearsVideoNotes();
-    }
-
     /**
      * Что модель слышит из файла сама. Пусто, если слуха нет или тумблер снят:
      * качать ради этого файл незачем.
@@ -461,10 +457,10 @@ public final class TelegramMedia implements MediaDescriber {
             return Optional.empty();
         }
         return switch (message.content) {
-            case TdApi.MessageVoiceNote voice when hearing.hearsVoiceNotes() ->
-                    soundOf(voice.voiceNote.voice).flatMap(sound -> hearing.listen(sound, false));
-            case TdApi.MessageVideoNote note when hearing.hearsVideoNotes() ->
-                    soundOf(note.videoNote.video).flatMap(sound -> hearing.listen(sound, true));
+            case TdApi.MessageVoiceNote voice when hearing.hears(Track.VOICE) ->
+                    soundOf(voice.voiceNote.voice).flatMap(sound -> hearing.listen(sound, Track.VOICE));
+            case TdApi.MessageVideoNote note when hearing.hears(Track.CIRCLE) ->
+                    soundOf(note.videoNote.video).flatMap(sound -> hearing.listen(sound, Track.CIRCLE));
             default -> Optional.empty();
         };
     }

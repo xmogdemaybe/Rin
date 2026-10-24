@@ -22,6 +22,7 @@ import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.prompt.Prompts;
+import ru.rainedev.raine.speech.ModelHearing.Track;
 
 /**
  * Слух самой модели проверяется без эндпоинта: заглушка записывает, что ей
@@ -132,7 +133,7 @@ class ModelHearingTest {
         Ears ears = new Ears().willHear("привет, папик");
         Path voice = voiceNote(dir);
 
-        assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voice, false));
+        assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voice, Track.VOICE));
         // голосовое доходит распакованным: эндпоинт принимает только wav и mp3,
         // а ogg развернул бы запрос сороковым ответом
         assertEquals(List.of("wav"), ears.formats);
@@ -140,7 +141,7 @@ class ModelHearingTest {
         assertEquals("WAVE", new String(ears.sounds.get(0), 8, 4, StandardCharsets.US_ASCII));
 
         // то же голосовое спрашивают не раз: чат открывают заново
-        assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voice, false));
+        assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voice, Track.VOICE));
         assertEquals(1, ears.sounds.size(), "второй раз прослушивать незачем");
     }
 
@@ -154,7 +155,7 @@ class ModelHearingTest {
         }
         Ears ears = new Ears().willHear("тут говорят про встречу");
 
-        assertEquals(Optional.of("тут говорят про встречу"), with(ears, cache, true, true).listen(circle, true));
+        assertEquals(Optional.of("тут говорят про встречу"), with(ears, cache, true, true).listen(circle, Track.CIRCLE));
 
         // кружок — это MP4, а видео в запрос не кладут: до модели доходит дорожка
         String head = new String(ears.sounds.get(0), 0, 4, StandardCharsets.US_ASCII);
@@ -166,8 +167,32 @@ class ModelHearingTest {
         assertTrue(ears.hints.get(0).contains("do not describe the picture"), ears.hints.get(0));
 
         // дорожка вынимается заново каждый раз, а услышанное помнится по кружку
-        assertEquals(Optional.of("тут говорят про встречу"), with(ears, cache, true, true).listen(circle, true));
+        assertEquals(Optional.of("тут говорят про встречу"), with(ears, cache, true, true).listen(circle, Track.CIRCLE));
         assertEquals(1, ears.sounds.size(), "второй раз слушать незачем");
+    }
+
+    /**
+     * Снятый тумблер «слушать кружки» обходился дорогою через зрение: кружок
+     * отдавали разбору дорожки ролика, а там спрашивают другое разрешение.
+     * Решение живёт там, где слушают, — в обход его не провести.
+     */
+    @Test
+    void aCircleIgnoredBySwitchIsNotHeardAtAll(@TempDir Path dir) throws IOException {
+        Path circle = dir.resolve("circle-2.mp4");
+        try (InputStream sample = ModelHearingTest.class.getResourceAsStream("/tone.mp4")) {
+            assertTrue(sample != null, "образец видео не найден");
+            Files.write(circle, sample.readAllBytes());
+        }
+        Ears ears = new Ears().willHear("тут говорят про встречу");
+
+        assertEquals(Optional.empty(), with(ears, dir.resolve("cache"), true, false).listen(circle, Track.CIRCLE),
+                "кружок под снятым тумблером не слушают");
+        assertTrue(ears.sounds.isEmpty(), "до эндпоинта дело не должно дойти");
+
+        // это касается только кружков: дорожка обычного ролика слушается и тогда,
+        // когда кружки сняты
+        assertEquals(Optional.of("тут говорят про встречу"),
+                with(ears, dir.resolve("cache2"), true, false).listen(circle, Track.VIDEO));
     }
 
     @Test
@@ -175,7 +200,7 @@ class ModelHearingTest {
         Path cache = dir.resolve("cache");
         Ears ears = new Ears().willHear("Silence.");
 
-        assertEquals(Optional.empty(), with(ears, cache, true, true).listen(voiceNote(dir), false));
+        assertEquals(Optional.empty(), with(ears, cache, true, true).listen(voiceNote(dir), Track.VOICE));
         assertTrue(Files.notExists(cache.resolve("voice-1.ogg.heard.md")),
                 "молчание не должно осесть в кэше как услышанное");
 
@@ -195,11 +220,11 @@ class ModelHearingTest {
                 .willHear("привет");
         Path voice = voiceNote(dir);
 
-        assertEquals(Optional.empty(), with(ears, cache, true, true).listen(voice, false));
+        assertEquals(Optional.empty(), with(ears, cache, true, true).listen(voice, Track.VOICE));
         assertTrue(Files.notExists(cache.resolve("voice-1.ogg.heard.md")), "извинение — не услышанное");
 
         // то же голосовое переспрашивают, и на этот раз доходит
-        assertEquals(Optional.of("привет"), with(ears, cache, true, true).listen(voice, false));
+        assertEquals(Optional.of("привет"), with(ears, cache, true, true).listen(voice, Track.VOICE));
     }
 
     /**
@@ -216,17 +241,17 @@ class ModelHearingTest {
         ModelHearing hearing = with(ears, cache, true, true);
         Path voice = voiceNote(dir);
 
-        assertEquals(Optional.of("привет"), hearing.listen(voice, false));
+        assertEquals(Optional.of("привет"), hearing.listen(voice, Track.VOICE));
         // услышанное легло в кэш, и второй заход берёт его оттуда, не платя
-        assertEquals(Optional.of("привет"), hearing.listen(voice, false));
+        assertEquals(Optional.of("привет"), hearing.listen(voice, Track.VOICE));
         assertEquals(1, ears.sounds.size());
 
         // а вот неудачу второй раз hearing не повторяет: тот же файл, тот же ответ
         Ears moody = new Ears().willHear("");
         ModelHearing second = with(moody, dir.resolve("cache2"), true, true);
         Path other = voiceNote(dir, "voice-3.ogg");
-        assertEquals(Optional.empty(), second.listen(other, false));
-        assertEquals(Optional.empty(), second.listen(other, false));
+        assertEquals(Optional.empty(), second.listen(other, Track.VOICE));
+        assertEquals(Optional.empty(), second.listen(other, Track.VOICE));
         assertEquals(1, moody.sounds.size(), "прослушанное только что не переспрашивают");
     }
 
@@ -237,7 +262,7 @@ class ModelHearingTest {
         Files.write(tiny, new byte[16]);
         Ears ears = new Ears().willHear("что-то");
 
-        assertEquals(Optional.empty(), with(ears, dir.resolve("cache"), true, true).listen(tiny, false));
+        assertEquals(Optional.empty(), with(ears, dir.resolve("cache"), true, true).listen(tiny, Track.VOICE));
         assertTrue(ears.sounds.isEmpty(), "эндпоинт не должен вызываться ради пустяка");
     }
 
@@ -254,12 +279,12 @@ class ModelHearingTest {
         Ears ears = new Ears().willHear("докачалось");
         ModelHearing hearing = with(ears, dir.resolve("cache"), true, true);
 
-        assertEquals(Optional.empty(), hearing.listen(voice, false), "в недокачанном файле слушать нечего");
+        assertEquals(Optional.empty(), hearing.listen(voice, Track.VOICE), "в недокачанном файле слушать нечего");
         assertTrue(ears.sounds.isEmpty(), "ради пустяка эндпоинт не зовут");
 
         voiceNote(dir, "voice-9.ogg");
 
-        assertEquals(Optional.of("докачалось"), hearing.listen(voice, false),
+        assertEquals(Optional.of("докачалось"), hearing.listen(voice, Track.VOICE),
                 "голосовое, за которое эндпоинт так и не спросили, не должно платить паузой");
         assertEquals(1, ears.sounds.size());
     }

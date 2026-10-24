@@ -12,6 +12,7 @@ import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.prompt.Prompts;
+import ru.rainedev.raine.speech.ModelHearing.Track;
 
 /**
  * Превращает картинку в описание — иначе на присланное фото Raine видит
@@ -181,12 +182,12 @@ public final class Vision {
      * @param withSound есть ли в ролике что слушать
      */
     private java.util.Optional<String> heard(java.nio.file.Path file, boolean withSound) {
-        if (!withSound || file == null || hearing == null || !hearing.hearsVideoAudio()) {
+        if (!withSound || file == null || hearing == null) {
             return java.util.Optional.empty();
         }
-        // дорожку берёт слух: он сам вынимает звук из файла и решает, есть ли
-        // там что распознавать
-        return hearing.listen(file, true);
+        // дорожку берёт слух: он сам решает, слушать ли её вовсе, вынимает звук
+        // из файла и знает, есть ли там что распознавать
+        return hearing.listen(file, Track.VIDEO);
     }
 
     private static String quietly(java.util.concurrent.Future<String> caption) {
