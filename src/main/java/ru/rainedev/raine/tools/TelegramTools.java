@@ -61,9 +61,10 @@ public final class TelegramTools {
     static final int STORY_FEED_LIMIT = 40;
 
     /**
-     * Столько свежих историй лента открывает сама за один вызов. Каждая — запрос
-     * зрению, который длится секунды, и вызов мог бы ждать дольше самого
-     * разговора. Остальные она доглядывает по списку, если сочтёт нужным.
+     * Столько историй лента открывает сама за один вызов. Считаются попытки, а не
+     * только удачные исходы: каждая — это запрос к модели зрения, длящийся
+     * секунды, и вызов мог бы ждать дольше самого разговора. Остальные она
+     * открывает по списку, если сочтёт нужным.
      */
     static final int STORY_AUTO_WATCH = 2;
 
@@ -864,43 +865,74 @@ public final class TelegramTools {
     public Tool viewStories() {
         return Tool.simple("view_stories",
                 "Shows whose stories are up right now and opens the freshest unseen ones for you: what is really "
-                        + "in an opened story is written out under the list. Anyone without a line there is still "
-                        + "a cover — open them with watch_story, taking chat_id and story_id from this list. "
-                        + "Opening a story is counted to its author as a view.",
+                        + "in an opened story is written out under the list. A line with an unseen count is still "
+                        + "a cover — open it with watch_story, taking chat_id and first_story_id from the list. "
+                        + "A line with unseen=\"0\" has been watched through already. Opening a story is counted "
+                        + "to its author as a view.",
                 arguments -> {
                     if (storyFeed == null) {
                         return "Stories are turned off.";
                     }
-                    List<String> lines = new java.util.ArrayList<>();
-                    List<String> seen = new java.util.ArrayList<>();
-                    for (ru.rainedev.raine.telegram.Stories.Entry entry : storyFeed.feed()) {
-                        TdApi.Chat chat;
-                        try {
-                            chat = telegram.chatCached(entry.chatId());
-                        } catch (RuntimeException e) {
-                            continue;   // чата не видно — значит, и истории его не её дело
-                        }
-                        if (!allowed(chat)) {
-                            continue;
-                        }
-                        lines.add(storyLine(entry, chat.title, kindOf(chat)));
-                        // открывают только там, где есть глаза: вслепую просмотр
-                        // засчитали бы автору, а за ним ничего не стоит
-                        if (entry.unseen() > 0 && seen.size() < STORY_AUTO_WATCH && media != null && media.sees()) {
-                            try {
-                                String looked = watch(chat, entry.first());
-                                if (worthTelling(looked)) {
-                                    seen.add(watchedOf(chat.id, entry.first(), chat.title, looked));
-                                }
-                            } catch (RuntimeException e) {
-                                // одна не открылась — лента остаётся обложками:
-                                // список без одной истории лучше отказа всей ленты
-                                log.debug("Историю {} чата {} не разглядела: {}", entry.first(), chat.id, e.getMessage());
-                            }
-                        }
-                    }
-                    return feedOf(lines, seen);
+                    return feedOf(storyFeed.feed(), this::cachedChat, this::allowed, this::watch,
+                            media != null && media.sees());
                 });
+    }
+
+    /** Чат по номеру; пусто — чата не видно, и его истории в ленту не идут. */
+    private java.util.Optional<TdApi.Chat> cachedChat(long chatId) {
+        try {
+            return java.util.Optional.ofNullable(telegram.chatCached(chatId));
+        } catch (RuntimeException e) {
+            log.debug("Чат {} не достать: {}", chatId, e.getMessage());
+            return java.util.Optional.empty();
+        }
+    }
+
+    /**
+     * Лента из записей Telegram: строка на каждый чат плюс до
+     * {@code STORY_AUTO_WATCH} открытий. Цикл вынесен из тела тулзы, чтобы
+     * лимит проверяли настоящим прогоном, а не числом в тесте: чаты, круг
+     * общения и открытие приходят функциями.
+     *
+     * @param chats     чем достать чат по номеру; пусто — чата не видно
+     * @param permitted чем отсеять тех, кому показывать нечего
+     * @param opener    чем открыть историю; возвращает то, что в ней разглядели
+     * @param hasEyes   есть чем смотреть: вслепую просмотр не ставят
+     */
+    static String feedOf(List<ru.rainedev.raine.telegram.Stories.Entry> entries,
+                         java.util.function.Function<Long, java.util.Optional<TdApi.Chat>> chats,
+                         java.util.function.Predicate<TdApi.Chat> permitted,
+                         java.util.function.BiFunction<TdApi.Chat, Integer, String> opener, boolean hasEyes) {
+        List<String> lines = new java.util.ArrayList<>();
+        List<String> seen = new java.util.ArrayList<>();
+        // лимит считает попытки, а не успехи: иначе лента, где половина историй
+        // протухла, открывала бы за один вызов каждую непросмотренную
+        int attempts = 0;
+        for (ru.rainedev.raine.telegram.Stories.Entry entry : entries) {
+            TdApi.Chat chat = chats.apply(entry.chatId()).orElse(null);
+            if (chat == null || !permitted.test(chat)) {
+                continue;
+            }
+            lines.add(storyLine(entry, chat.title, kindOf(chat)));
+            // открывают только там, где есть глаза: вслепую просмотр засчитали бы
+            // автору, а за ним ничего не стоит
+            if (entry.unseen() > 0 && attempts < STORY_AUTO_WATCH && hasEyes) {
+                attempts++;
+                String looked;
+                try {
+                    looked = opener.apply(chat, entry.first());
+                } catch (RuntimeException e) {
+                    // одна не открылась — лента остаётся обложками: список без
+                    // одной истории лучше отказа всей ленты
+                    log.debug("Историю {} чата {} не разглядела: {}", entry.first(), chat.id, e.getMessage());
+                    continue;
+                }
+                if (worthTelling(looked)) {
+                    seen.add(watchedOf(chat.id, entry.first(), chat.title, looked));
+                }
+            }
+        }
+        return feedOf(lines, seen);
     }
 
     /**
@@ -917,14 +949,17 @@ public final class TelegramTools {
         }
         int shown = Math.min(STORY_FEED_LIMIT, lines.size());
         String watched = seen.isEmpty()
-                ? "None of these have been seen yet. Before you say what a story shows, "
-                        + "watch it with watch_story — otherwise say that you have not looked."
+                ? "Nothing was opened here just now. A line with unseen=\"0\" is watched through: opening "
+                        + "one again would fetch nothing new. Anyone with an unseen count is still a cover — "
+                        + "what it shows has not been seen, so before saying what a story shows, watch it "
+                        + "with watch_story or say you have not looked."
                 : "These were opened just now, and this is what is really in them:\n"
                         + String.join("", seen)
                         + "The ids named there have already been seen. If a detail is missing, ask watch_story "
-                        + "again with a question instead of describing them from memory. Anyone without a line "
-                        + "there is still a cover: nothing of theirs has been seen. Say you have not looked, "
-                        + "or open one with watch_story.";
+                        + "again with a question instead of describing them from memory. A line with "
+                        + "unseen=\"0\" is watched through as well; anyone else there is still a cover: "
+                        + "nothing of theirs has been seen. Say you have not looked, or open one with "
+                        + "watch_story.";
         String answer = "These people have stories right now:\n<stories>\n"
                 + String.join("", lines.subList(0, shown)) + "</stories>\n" + watched;
         return shown == lines.size()
@@ -961,11 +996,12 @@ public final class TelegramTools {
         StringBuilder out = new StringBuilder("<story chat_id=\"").append(entry.chatId())
                 .append("\" title=\"").append(Markup.attribute(title))
                 .append("\" kind=\"").append(kind)
-                .append("\" total=\"").append(entry.total()).append('"');
-        // непросмотренные важнее прочих: смотреть начинают с них
+                .append("\" total=\"").append(entry.total())
+                .append("\" unseen=\"").append(entry.unseen()).append('"');
+        // непросмотренные важнее прочих: смотреть начинают с них. Номер дают
+        // только им: у просмотренного до конца открывать нечего
         if (entry.unseen() > 0) {
-            out.append(" unseen=\"").append(entry.unseen())
-                    .append("\" first_story_id=\"").append(entry.first()).append('"');
+            out.append(" first_story_id=\"").append(entry.first()).append('"');
         }
         return out.append("/>\n").toString();
     }
