@@ -162,27 +162,49 @@ public final class TelegramMedia implements MediaDescriber {
         return storyBlock(story, loss(seen, story.content, sees()));
     }
 
-    /** Пустота, которую нельзя оставить без слова: модель дописала бы её сама. */
-    private static final String NOTHING_SEEN =
-            "Nothing was seen this time — the picture did not come through. "
+    /** Файл был, ответа нет: модель отказалась смотреть или разбор не удался. */
+    private static final String NO_ANSWER =
+            "Looked at the picture and got no answer back — the vision model refused or the look failed. "
+                    + "Say you did not get to see it instead of describing it.";
+
+    /** История обещает картинку, а качать нечего: Telegram не прислал файл. */
+    private static final String NO_FILE =
+            "The story announced a picture but carried no file, so there was nothing to look at. "
                     + "Say you did not get to see it instead of describing it.";
 
     /**
-     * Глаза есть, картинка была, а разглядеть не вышло. Пустой блок без этого
-     * слова модель заполнила бы выдумкой и ответила так, будто смотрела, — так
-     * и случилось с историей про кота. Вслепую же не жалуются: там картинку не
-     * звали вовсе.
+     * Пустота, которую нельзя оставить без слова: модель дописала бы её сама.
+     * <p>
+     * Причины разные — разная и фраза. Файла не оказалось — винить разбор нельзя;
+     * файл был, но ответа нет — тут отказ модели или сбой, и это другой разговор.
      * <p>
      * Иначе обходятся с историей, в которой смотреть было нечего: Telegram сам
-     * не разобрал её содержимое. Сбоя не было, и жалоба на него была бы такой
-     * же выдумкой, как дорисованный кот, — пустота здесь честнее.
+     * не разобрал её содержимое. Сбоя не было, и жалоба на него была бы такой же
+     * выдумкой, как дорисованный кот, — пустота здесь честнее. Вслепую тоже не
+     * жалуются: там картинку не звали вовсе.
      * <p>
      * Видно пакету: подстановку проверяют без зрения и без Telegram.
      */
     static String loss(String seen, TdApi.StoryContent content, boolean hasEyes) {
-        boolean wasSomethingToSee = content instanceof TdApi.StoryContentPhoto
-                || content instanceof TdApi.StoryContentVideo;
-        return hasEyes && wasSomethingToSee && (seen == null || seen.isBlank()) ? NOTHING_SEEN : seen;
+        if (!hasEyes || !wasPicture(content) || (seen != null && !seen.isBlank())) {
+            return seen;
+        }
+        return hasFile(content) ? NO_ANSWER : NO_FILE;
+    }
+
+    /** История, где смотреть было бы на что: фото или ролик. */
+    private static boolean wasPicture(TdApi.StoryContent content) {
+        return content instanceof TdApi.StoryContentPhoto || content instanceof TdApi.StoryContentVideo;
+    }
+
+    /** Есть ли что скачивать: файл у фото, у ролика — основной или запасной поток. */
+    private static boolean hasFile(TdApi.StoryContent content) {
+        return switch (content) {
+            case TdApi.StoryContentPhoto photo -> largest(photo.photo).isPresent();
+            case TdApi.StoryContentVideo video ->
+                    !storyFile(video.video).isEmpty() || !storyFile(video.alternativeVideo).isEmpty();
+            case null, default -> false;
+        };
     }
 
     /**
@@ -509,23 +531,28 @@ public final class TelegramMedia implements MediaDescriber {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map(file -> vision.describeVideo(() -> VideoFrames.sample(file), asking(question), file,
-                        withSound, plain(question)))
+                .map(file -> vision.describeVideo(() -> VideoFrames.sample(file), asking(context.get(), question),
+                        file, withSound, plain(question)))
                 .orElse("");
     }
 
-    /** Разговор плюс вопрос, ради которого смотрят снова. */
-    private List<Message> asking(String question) {
-        List<Message> around = new ArrayList<>(context.get());
+    /**
+     * Разговор плюс вопрос, ради которого смотрят снова. Без вопроса это просто
+     * разговор: взгляд по умолчанию пересказывает всё.
+     * <p>
+     * Видно пакету: привязку вопроса проверяют без Telegram.
+     */
+    static List<Message> asking(List<Message> around, String question) {
+        List<Message> messages = new ArrayList<>(around);
         if (!plain(question)) {
-            around.add(Message.user("You are looking at this again, for one question. Answer only it, "
+            messages.add(Message.user("You are looking at this again, for one question. Answer only it, "
                     + "from what is really in the picture: " + question.strip()));
         }
-        return around;
+        return messages;
     }
 
     /** Обычный пересказ, а не взгляд ради вопроса — только он и живёт в кэше. */
-    private static boolean plain(String question) {
+    static boolean plain(String question) {
         return question == null || question.isBlank();
     }
 
@@ -567,7 +594,7 @@ public final class TelegramMedia implements MediaDescriber {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map((Path file) -> vision.describe(file, kind, asking(question), plain(question)))
+                .map((Path file) -> vision.describe(file, kind, asking(context.get(), question), plain(question)))
                 .orElse("");
     }
 

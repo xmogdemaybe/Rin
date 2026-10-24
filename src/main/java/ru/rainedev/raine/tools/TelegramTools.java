@@ -1068,11 +1068,10 @@ public final class TelegramTools {
             return STORY_GONE;
         }
         if (!media.sees()) {
-            // глаз нет, но подпись и плашки — текст: его читают и так.
+            // глаз нет, но подпись и стикеры — текст: его читают и так.
             // Историю не открывают: автор увидел бы просмотр, за которым
             // ничего не стоит
-            return media.describeStory(story)
-                    + "\nYou cannot see the picture — your vision is turned off.";
+            return blindStory(media.describeStory(story), question);
         }
         try {
             actions.openStory(chat.id, storyId);
@@ -1091,6 +1090,20 @@ public final class TelegramTools {
                 log.debug("Историю {} чата {} не удалось закрыть: {}", storyId, chat.id, e.getMessage());
             }
         }
+    }
+
+    /**
+     * Ответ, когда текст истории прочитали, а зрения нет: подпись и стикеры —
+     * текст, их читают и так. Вопрос про снимок назван неотвеченным явно: иначе
+     * модель решила бы, что ответ уже получен, и выдала бы его по памяти.
+     * <p>
+     * Видно пакету: сборку ответа проверяют без Telegram.
+     */
+    static String blindStory(String read, String question) {
+        return question == null || question.isBlank()
+                ? read + "\nYou cannot see the picture — your vision is turned off."
+                : read + "\nYour vision is turned off, so the picture was not looked at and your question "
+                        + "about it stays unanswered: only the caption and the stickers were read.";
     }
 
     /**

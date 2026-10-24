@@ -29,9 +29,17 @@ class VisionTest {
         volatile String lastContext = "";
         private final java.util.concurrent.atomic.AtomicInteger seen =
                 new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger failures =
+                new java.util.concurrent.atomic.AtomicInteger();
 
         ScriptedLlm willSee(String description) {
             answers.add(description);
+            return this;
+        }
+
+        /** Первый взгляд отвечает сбоем обращения, остальные — обычным ответом. */
+        ScriptedLlm failsOnce() {
+            failures.incrementAndGet();
             return this;
         }
 
@@ -50,6 +58,10 @@ class VisionTest {
             seen.incrementAndGet();
             lastModel = model;
             lastContext = context;
+            if (failures.get() > 0) {
+                failures.decrementAndGet();
+                throw new IllegalStateException("сбой обращения к модели");
+            }
             String answer = answers.poll();
             return answer == null ? "" : answer;
         }
@@ -101,6 +113,33 @@ class VisionTest {
 
         assertEquals(first, again);
         assertEquals(1, llm.seen.get(), "второй раз смотреть незачем — описание уже есть");
+    }
+
+    @Test
+    void oneFailedLookDoesNotEndThePicture(@TempDir Path dir) throws IOException {
+        // сбой обращения — не отказ модели: попытки обрывались на первой же
+        // ошибке, и одна сетевая неудача стоила всего описания картинки
+        ScriptedLlm llm = new ScriptedLlm().failsOnce().willSee("кот у окна");
+
+        String seen = visionWith(llm, dir.resolve("cache"))
+                .describe(imageFile(dir, "фото.jpg"), Vision.Kind.PHOTO, List.of());
+
+        assertTrue(seen.contains("кот у окна"), "после сбоя остаётся вторая попытка: " + seen);
+        assertEquals(2, llm.seen.get(), "сколько обращений к зрению: " + llm.seen.get());
+    }
+
+    @Test
+    void oneFailedLookDoesNotEndTheVideo(@TempDir Path dir) throws IOException {
+        // сбой обращения — не отказ модели: одна сетевая ошибка не должна
+        // выбрасывать целый кадр из ленты времени ролика
+        ScriptedLlm llm = new ScriptedLlm().failsOnce().willSee("кот сидит");
+        List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
+
+        String seen = visionWith(llm, dir.resolve("cache"))
+                .describeVideo(() -> frames, List.of(), imageFile(dir, "ролик.mp4"), false, true);
+
+        assertTrue(seen.contains("кот сидит"), "кадр не должен выпадать из-за одной ошибки: " + seen);
+        assertEquals(2, llm.seen.get(), "сколько обращений к зрению: " + llm.seen.get());
     }
 
     @Test

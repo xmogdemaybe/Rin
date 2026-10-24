@@ -241,6 +241,9 @@ public final class Vision {
             Thread.currentThread().interrupt();
             return "";
         } catch (java.util.concurrent.ExecutionException e) {
+            // кадр без подписи выпадет из ленты времени, но без строки в логе
+            // сбой неотличим от отказа смотреть
+            log.warn("Кадр не разгляделся: {}", e.getMessage());
             return "";
         }
     }
@@ -261,8 +264,9 @@ public final class Vision {
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустая подпись к кадру на {} с, попытка {}", frame.from(), attempt);
             } catch (RuntimeException e) {
-                log.warn("Кадр на {} с не разглядеть: {}", frame.from(), e.getMessage());
-                return "";
+                // сбой обращения — не отказ: пробуем, пока попытки не кончились
+                log.warn("Кадр на {} секунде не разглядеть, попытка {} из {}: {}", frame.from(), attempt,
+                        MAX_ATTEMPTS, e.getMessage());
             }
         }
         return "";
@@ -328,8 +332,10 @@ public final class Vision {
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустое описание, попытка {} из {}", attempt, MAX_ATTEMPTS);
             } catch (RuntimeException e) {
-                log.warn("Не удалось разглядеть {}: {}", file.getFileName(), e.getMessage());
-                return "";
+                // сбой обращения к модели — это не отказ: попытки нужны все,
+                // иначе одна сетевая ошибка обнуляет весь цикл
+                log.warn("Не удалось разглядеть {}, попытка {} из {}: {}", file.getFileName(), attempt,
+                        MAX_ATTEMPTS, e.getMessage());
             }
         }
         return "";
