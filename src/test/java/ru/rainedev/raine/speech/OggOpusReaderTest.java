@@ -1,5 +1,6 @@
 package ru.rainedev.raine.speech;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -85,8 +86,7 @@ class OggOpusReaderTest {
         List<byte[]> packets = OggOpusReader.packets(stream.toByteArray());
 
         assertEquals(3, packets.size(), "пакет через границу страниц — это один пакет");
-        assertEquals(300, packets.get(2).length);
-        assertEquals(45, packets.get(2)[299] & 0xFF, "хвост дописан из второй страницы");
+        assertArrayEquals(packet, packets.get(2), "хвост дописан из второй страницы");
     }
 
     /** Описание потока: один канал, разгон в 312 отсчётов, вход на 48 кГц. */

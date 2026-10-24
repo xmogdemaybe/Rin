@@ -34,11 +34,12 @@ public final class OggOpusReader {
     /** Самый длинный кадр, который вообще помещается в пакет Opus, — 120 мс. */
     private static final int MAX_FRAME = RATE * 120 / 1000;
 
-    /** Столько байт занимает заголовок страницы до таблицы длин. */
-    private static final int PAGE_HEAD = 27;
-
-    /** Страница продолжает пакет, начатый на предыдущей странице. */
-    private static final int FLAG_CONTINUED = 0x01;
+    /**
+     * Байт, на котором лежит счётчик сегментов. Заголовок страницы занимает 27
+     * байт, но таблица длин идёт после счётчика, поэтому отсчёт таблицы — на
+     * единицу дальше.
+     */
+    private static final int PAGE_HEAD = 26;
 
     /** Позиция в ogg-потоке Opus считается всегда в 48 кГц, какой бы частоты ни был звук. */
     private static final int GRANULE_RATE = 48_000;
@@ -83,6 +84,12 @@ public final class OggOpusReader {
      * на отрезке короче 255, а если страница кончилась на полном отрезке, пакет
      * продолжается на следующей.
      * <p>
+     * Признак начала страницы для этого не годится: он описывает первый пакет
+     * страницы, а не тот, что на ней оборвался, — полагаться на него значило бы
+     * резать пополам всякий пакет, уместившийся ровно в 255 байт. Накопленное
+     * дописываем молча через границы страниц и отдаём, только когда поток
+     * кончился или оборвался.
+     * <p>
      * Искать границы по самому звуку нельзя: в закодированных отсчётах что угодно
      * похоже на что угодно.
      * <p>
@@ -98,7 +105,6 @@ public final class OggOpusReader {
                 log.debug("Поток обрывается на байте {} — беру собранное", at);
                 break;
             }
-            int flags = file[at + 5] & 0xFF;
             int segments = file[at + PAGE_HEAD] & 0xFF;
             int cursor = at + PAGE_HEAD + 1 + segments;
             if (cursor > file.length) {
@@ -107,6 +113,9 @@ public final class OggOpusReader {
             for (int i = 0; i < segments; i++) {
                 int size = file[at + PAGE_HEAD + 1 + i] & 0xFF;
                 if (cursor + size > file.length) {
+                    if (current.size() > 0) {
+                        found.add(current.toByteArray());
+                    }
                     return found;
                 }
                 current.writeBytes(Arrays.copyOfRange(file, cursor, cursor + size));
@@ -116,12 +125,10 @@ public final class OggOpusReader {
                     current.reset();
                 }
             }
-            if ((flags & FLAG_CONTINUED) == 0 && current.size() > 0) {
-                // следующей страницы для этого пакета нет: то, что накоплено, и есть пакет
-                found.add(current.toByteArray());
-                current.reset();
-            }
             at = cursor;
+        }
+        if (current.size() > 0) {
+            found.add(current.toByteArray());
         }
         return found;
     }
