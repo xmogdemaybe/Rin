@@ -104,6 +104,28 @@ class VisionTest {
     }
 
     @Test
+    void aCachedVideoIsNotUnpackedAgain(@TempDir Path dir) throws IOException {
+        // раскодирование ролика дороже самого разбора: когда описание уже есть,
+        // кадры вынимать незачем
+        ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит");
+        Path video = imageFile(dir, "ролик.mp4");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+        List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
+        java.util.concurrent.atomic.AtomicInteger unpacked = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<List<VideoFrames.Frame>> sample = () -> {
+            unpacked.incrementAndGet();
+            return frames;
+        };
+
+        String first = vision.describeVideo(sample, List.of(), video, true, true);
+        String again = vision.describeVideo(sample, List.of(), video, true, true);
+
+        assertEquals(first, again);
+        assertEquals(1, unpacked.get(), "на готовом описании распаковки быть не должно: " + unpacked.get());
+        assertEquals(1, llm.seen.get(), "и зрение не должно смотреть второй раз: " + llm.seen.get());
+    }
+
+    @Test
     void aCloserLookAtAPictureAsksAgain(@TempDir Path dir) throws IOException {
         // в кэше лежит общий пересказ: ответа на вопрос в нём нет
         ScriptedLlm llm = new ScriptedLlm().willSee("кот у окна").willSee("на окне рыжий кот");

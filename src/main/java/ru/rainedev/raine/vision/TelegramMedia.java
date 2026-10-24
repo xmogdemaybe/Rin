@@ -509,8 +509,8 @@ public final class TelegramMedia implements MediaDescriber {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map(file -> vision.describeVideo(VideoFrames.sample(file), asking(question), file, withSound,
-                        plain(question)))
+                .map(file -> vision.describeVideo(() -> VideoFrames.sample(file), asking(question), file,
+                        withSound, plain(question)))
                 .orElse("");
     }
 

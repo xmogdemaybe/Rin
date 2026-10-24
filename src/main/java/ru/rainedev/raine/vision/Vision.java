@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
@@ -127,21 +128,46 @@ public final class Vision {
     }
 
     /**
+     * @param frames   чем достают кадры: распаковку не зовут, когда описание уже готово
+     * @param allowCache читать ли готовую ленту кадров и писать её в кэш
+     */
+    public String describeVideo(Supplier<List<VideoFrames.Frame>> frames, List<Message> context,
+                                java.nio.file.Path file, boolean withSound, boolean allowCache) {
+        // распаковка дороже самого разбора: незачем вынимать кадры из ролика,
+        // ответ на который уже лежит в кэше
+        String remembered = remembered(file, allowCache);
+        return remembered == null ? lookFrames(frames.get(), context, file, withSound, allowCache) : remembered;
+    }
+
+    /**
      * @param allowCache читать ли готовую ленту кадров и писать её в кэш. Второй
      *                   взгляд с вопросом читает мимо кэша: там лежит общий
      *                   пересказ, а не ответ на вопрос
      */
     public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
                                 boolean withSound, boolean allowCache) {
-        // разбор ролика — это шестнадцать обращений к зрению плюс расшифровка
-        // звука; повторять их при каждом открытии чата непозволительно дорого
-        if (file != null && allowCache) {
-            String remembered = fromCache(file);
-            if (remembered != null) {
-                log.debug("Видео {} уже смотрела", file.getFileName());
-                return remembered;
-            }
+        String remembered = remembered(file, allowCache);
+        return remembered == null ? lookFrames(frames, context, file, withSound, allowCache) : remembered;
+    }
+
+    /**
+     * Готовое описание ролика, или null, если смотреть правда нужно. Разбор — это
+     * шестнадцать обращений к зрению плюс расшифровка звука, и повторять их при
+     * каждом открытии чата непозволительно дорого.
+     */
+    private String remembered(java.nio.file.Path file, boolean allowCache) {
+        if (file == null || !allowCache) {
+            return null;
         }
+        String remembered = fromCache(file);
+        if (remembered != null) {
+            log.debug("Видео {} уже смотрела", file.getFileName());
+        }
+        return remembered;
+    }
+
+    private String lookFrames(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
+                              boolean withSound, boolean allowCache) {
         if (frames.isEmpty()) {
             // картинку разобрать не вышло, но в звуке может быть всё главное
             String onlySound = heard(file, withSound)
