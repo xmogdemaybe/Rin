@@ -241,6 +241,29 @@ class ModelHearingTest {
         assertTrue(ears.sounds.isEmpty(), "эндпоинт не должен вызываться ради пустяка");
     }
 
+    /**
+     * Занять слот под прослушивание значит заплатить за него, а до эндпоинта дело
+     * может и не дойти: Telegram отдаёт ещё не докачанный файл. Если пауза
+     * поставлена на таком проходе, докачанное голосовое остаётся неслушанным
+     * четверть часа — ровно тогда, когда слушать уже есть что.
+     */
+    @Test
+    void aVoiceNoteStillDownloadingDoesNotBurnTheSlot(@TempDir Path dir) throws Exception {
+        Path voice = dir.resolve("voice-9.ogg");
+        Files.write(voice, new byte[16]);
+        Ears ears = new Ears().willHear("докачалось");
+        ModelHearing hearing = with(ears, dir.resolve("cache"), true, true);
+
+        assertEquals(Optional.empty(), hearing.listen(voice, false), "в недокачанном файле слушать нечего");
+        assertTrue(ears.sounds.isEmpty(), "ради пустяка эндпоинт не зовут");
+
+        voiceNote(dir, "voice-9.ogg");
+
+        assertEquals(Optional.of("докачалось"), hearing.listen(voice, false),
+                "голосовое, за которое эндпоинт так и не спросили, не должно платить паузой");
+        assertEquals(1, ears.sounds.size());
+    }
+
     @Test
     void switchesChooseWhatMayBeHeard(@TempDir Path dir) {
         Path cache = dir.resolve("cache");

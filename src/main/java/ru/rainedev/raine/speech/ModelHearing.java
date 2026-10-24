@@ -105,11 +105,13 @@ public final class ModelHearing {
         if (remembered != null) {
             return Optional.of(remembered);
         }
-        if (!claim(file)) {
-            return Optional.empty();
-        }
         Optional<byte[]> audio = soundOf(file, fromVideo);
         if (audio.isEmpty()) {
+            // эндпоинт ещё не спрошен, и пауза здесь не нужна: Telegram отдаёт
+            // вложение по частям, и за недокачанный файл платить нечем
+            return Optional.empty();
+        }
+        if (!claim(file)) {
             return Optional.empty();
         }
         try {
@@ -194,6 +196,10 @@ public final class ModelHearing {
      * успевали оба — эндпоинт платил дважды за один и тот же отказ. Отметка
      * ставится до запроса, потому что неудача в кэш не ложится и без неё за
      * каждую перерисовку чата пришлось бы платить заново.
+     * <p>
+     * Берётся занятие уже с готовым звуком: недокачанное вложение Telegram
+     * докачивает за секунды, а переспросить его после занятия можно было бы
+     * только через четверть часа.
      */
     private boolean claim(Path file) {
         long now = System.currentTimeMillis();
