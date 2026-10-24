@@ -146,7 +146,7 @@ public final class TelegramMedia implements MediaDescriber {
         String seen = sees() ? seen(story.content,
                 file -> look(file, Vision.Kind.PHOTO),
                 video -> storyVideo(video, onlyGlance, this::watch, () -> glanceOf(video))) : "";
-        return storyBlock(story, loss(seen, sees()));
+        return storyBlock(story, loss(seen, story.content, sees()));
     }
 
     /** Пустота, которую нельзя оставить без слова: модель дописала бы её сама. */
@@ -155,14 +155,21 @@ public final class TelegramMedia implements MediaDescriber {
                     + "Say you did not get to see it instead of describing it.";
 
     /**
-     * Глаза есть, а разглядеть не вышло. Пустой блок без этого слова модель
-     * заполнила бы выдумкой и ответила так, будто смотрела, — так и случилось
-     * с историей про кота. Вслепую же не жалуются: там картинку не звали вовсе.
+     * Глаза есть, картинка была, а разглядеть не вышло. Пустой блок без этого
+     * слова модель заполнила бы выдумкой и ответила так, будто смотрела, — так
+     * и случилось с историей про кота. Вслепую же не жалуются: там картинку не
+     * звали вовсе.
+     * <p>
+     * Иначе обходятся с историей, в которой смотреть было нечего: Telegram сам
+     * не разобрал её содержимое. Сбоя не было, и жалоба на него была бы такой
+     * же выдумкой, как дорисованный кот, — пустота здесь честнее.
      * <p>
      * Видно пакету: подстановку проверяют без зрения и без Telegram.
      */
-    static String loss(String seen, boolean hasEyes) {
-        return hasEyes && (seen == null || seen.isBlank()) ? NOTHING_SEEN : seen;
+    static String loss(String seen, TdApi.StoryContent content, boolean hasEyes) {
+        boolean wasSomethingToSee = content instanceof TdApi.StoryContentPhoto
+                || content instanceof TdApi.StoryContentVideo;
+        return hasEyes && wasSomethingToSee && (seen == null || seen.isBlank()) ? NOTHING_SEEN : seen;
     }
 
     /** Заставка ролика истории: один кадр вместо всего разбора. */
