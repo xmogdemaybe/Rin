@@ -47,8 +47,9 @@ public final class OggOpusReader {
     private OggOpusReader() {}
 
     /**
-     * @param maxSeconds длиннее этого слушать не станем: целиком не пустит
-     *                   эндпоинт, а держать в памяти часовой монолог ни к чему
+     * @param maxSeconds сколько секунд брать: запись длиннее обрезают по нему, а
+     *                   не выбрасывают целиком — начало эндпоинт примет, а часовой
+     *                   монолог в памяти держать ни к чему
      * @return сырой звук одного канала или пусто, если файл не оказался opus-потоком
      */
     public static Optional<Sound> decode(byte[] file, int maxSeconds) {
@@ -71,11 +72,7 @@ public final class OggOpusReader {
             log.debug("В потоке нет ни одного звукового пакета");
             return Optional.empty();
         }
-        if (durationOf(file) > (long) maxSeconds * GRANULE_RATE) {
-            log.debug("Запись длиннее {} с — целиком не слушаем", maxSeconds);
-            return Optional.empty();
-        }
-        return of(head.get(), sound);
+        return of(head.get(), sound, maxSeconds);
     }
 
     /**
@@ -121,7 +118,12 @@ public final class OggOpusReader {
                 current.writeBytes(Arrays.copyOfRange(file, cursor, cursor + size));
                 cursor += size;
                 if (size < 255) {
-                    found.add(current.toByteArray());
+                    // пустой пакет — не звук: на нём кодек достраивает до 120 мс
+                    // по последнему слышанному, и эти отсчёты ушли бы в wav как
+                    // голос из записи
+                    if (current.size() > 0) {
+                        found.add(current.toByteArray());
+                    }
                     current.reset();
                 }
             }
@@ -133,32 +135,12 @@ public final class OggOpusReader {
         return found;
     }
 
-    /** Длительность потока по последней гранулярной позиции — она считается в 48 кГц. */
-    private static long durationOf(byte[] file) {
-        long last = 0;
-        int at = 0;
-        while (at + PAGE_HEAD + 1 <= file.length && isPage(file, at)) {
-            int segments = file[at + PAGE_HEAD] & 0xFF;
-            if (at + PAGE_HEAD + 1 + segments > file.length) {
-                // таблица длин оборвалась: считать дальше нечем, берём собранное
-                break;
-            }
-            long granule = ByteBuffer.wrap(file, at + 6, 8).order(ByteOrder.LITTLE_ENDIAN).getLong();
-            last = Math.max(last, granule);
-            at += PAGE_HEAD + 1 + segments + bodyOf(file, at, segments);
-        }
-        return last;
-    }
-
-    private static int bodyOf(byte[] file, int at, int segments) {
-        int body = 0;
-        for (int i = 0; i < segments; i++) {
-            body += file[at + PAGE_HEAD + 1 + i] & 0xFF;
-        }
-        return body;
-    }
-
-    private static Optional<Sound> of(Head head, List<byte[]> packets) {
+    /**
+     * Раскодирование кончается на бюджете: часовую запись в память не кладут, а
+     * начало всё равно стоит послушать. Счёт идёт до сведения каналов, поэтому
+     * стерео считает вдвое больше отсчётов.
+     */
+    private static Optional<Sound> of(Head head, List<byte[]> packets, int maxSeconds) {
         OpusDecoder decoder;
         try {
             decoder = new OpusDecoder(RATE, head.channels());
@@ -166,6 +148,10 @@ public final class OggOpusReader {
             log.debug("Раскодировать голосовое не вышло: {}", e.getMessage());
             return Optional.empty();
         }
+        // кодек разгоняется первые миллисекунды и платит за это щелчком на старте;
+        // сколько выбросить — сказано в заголовке потока, но в отсчётах 48 кГц
+        int skip = head.preSkip() * RATE / GRANULE_RATE;
+        int stop = (maxSeconds * RATE + skip) * head.channels();
         // отсчёты копят отдельными кусками и склеивают один раз: минутная запись —
         // это полторы тысячи пакетов, а прирастать массивом на каждом выходит
         // квадратичный счёт
@@ -186,6 +172,9 @@ public final class OggOpusReader {
             }
             chunks.add(Arrays.copyOf(buffer, decoded * head.channels()));
             total += decoded * head.channels();
+            if (total >= stop) {
+                break;
+            }
         }
         if (total == 0) {
             return Optional.empty();
@@ -197,10 +186,19 @@ public final class OggOpusReader {
             at += chunk.length;
         }
         short[] samples = Pcm.mono(collected, head.channels());
-        // кодек разгоняется первые миллисекунды и платит за это щелчком на старте;
-        // сколько выбросить — сказано в заголовке потока, но в отсчётах 48 кГц
-        int skip = Math.min(head.preSkip() * RATE / GRANULE_RATE, samples.length);
-        return Optional.of(new Sound(Arrays.copyOfRange(samples, skip, samples.length), RATE));
+        short[] heard = Arrays.copyOfRange(samples, Math.min(skip, samples.length), samples.length);
+        int budget = maxSeconds * RATE;
+        // хвост за бюджетом отрезают, а не выбрасывают вместе с началом: по метке
+        // модель узнает, что слов не хватает
+        boolean cut = heard.length > budget;
+        if (cut) {
+            heard = Arrays.copyOf(heard, budget);
+        }
+        if (heard.length == 0) {
+            log.debug("В бюджет {} с не попал ни один отсчёт", maxSeconds);
+            return Optional.empty();
+        }
+        return Optional.of(new Sound(heard, RATE, cut));
     }
 
     /** Страница всегда начинается с подписи; больше ничто её не отличает. */
@@ -227,6 +225,14 @@ public final class OggOpusReader {
                 }
             }
             ByteBuffer buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
+            // версия формата: RFC 7845 оставляет ей единицу и велит отбросить
+            // любую другую — с неизвестной версией раскладка байтов может быть
+            // другой, а раскодировать её наугад значит выдать за речь мусор
+            int version = buffer.get(8) & 0xFF;
+            if (version != 1) {
+                log.debug("Описание потока версии {} — не разбираем", version);
+                return Optional.empty();
+            }
             int channels = buffer.get(9) & 0xFF;
             // раскладка каналов за нулевой строчкой: под ней surround-потоки,
             // а их мы расшифровать не пытаемся

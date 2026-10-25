@@ -296,4 +296,21 @@ class TrustLedgerTest {
         assertEquals(List.of(), new TrustLedger(dir.resolve("trust.md"), 111, "", clock).entries(),
                 "файл пуст — тоже некому");
     }
+
+    @Test
+    void aBrokenDiskIsNamedWithoutItsDetails(@TempDir Path dir) throws Exception {
+        // «папка» оказывается обычным файлом: создание каталога под временный файл
+        // кончается IOException, в тексте которого лежат абсолютный путь и имя
+        // чужого файла. Ей достаточно знать, что запись не прошла, — остальное
+        // остаётся в журнале
+        Path blocker = dir.resolve("блокатор");
+        Files.writeString(blocker, "это не папка");
+        TrustLedger ledger = new TrustLedger(blocker.resolve("trust.md"), 111, "", clock);
+
+        String answer = note(ledger, "{\"id\":\"4567\",\"level\":3,\"reason\":\"помогла просто так\"}");
+
+        assertTrue(answer.contains("ledger is unchanged"), "запись не прошла — и она должна это прочесть: " + answer);
+        assertFalse(answer.contains("блокатор"), "путь и текст исключения наружу не уходят: " + answer);
+        assertFalse(answer.contains("Exception"), "сырой текст ошибки остаётся в журнале: " + answer);
+    }
 }

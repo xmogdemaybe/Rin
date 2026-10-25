@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
@@ -11,6 +12,8 @@ import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.prompt.Prompts;
+import ru.rainedev.raine.speech.ModelHearing.Track;
+import ru.rainedev.raine.storage.AtomicFiles;
 
 /**
  * Превращает картинку в описание — иначе на присланное фото Raine видит
@@ -79,69 +82,49 @@ public final class Vision {
     }
 
     /**
-     * Описывает уже готовые байты картинки. Кэша здесь нет: у таких байтов
-     * нет файла, по которому их можно было бы узнать в следующий раз.
-     */
-    public String describe(byte[] image, Kind kind, List<Message> context) {
-        try {
-            String description = llm.describeImage(kind.cheap ? cheapModel : mainModel,
-                    prompts.load(kind.prompt), buildContext(context), Downscale.toFit(image));
-            if (Refusal.detected(description)) {
-                log.info("Смотреть отказались: {}", description.strip().lines().findFirst().orElse(""));
-                return "";
-            }
-            return description == null || description.isBlank() ? "" : wrap(kind, description.strip());
-        } catch (RuntimeException e) {
-            log.warn("Не удалось разглядеть кадры: {}", e.getMessage());
-            return "";
-        }
-    }
-
-    /**
      * Видео описывается покадрово, и каждая подпись помечена своим временем.
      * Склеить кадры в одну картинку было бы дешевле, но тогда пропадает
      * главное: что было раньше, а что позже. «Сначала показывает кота, потом
      * роняет чашку» — это уже рассказ, а не набор картинок.
      *
-     * @return размеченная лента подписей или пустая строка
-     */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context) {
-        return describeVideo(frames, context, null);
-    }
-
-    /**
+     * @param frames чем достают кадры: распаковку не зовут, когда описание уже готово
+     * @param context последние сообщения — без них модель описывает ролик
+     *                вообще, а не применительно к разговору
      * @param file сам файл — из него слышно звук. Без него видео немое
-     */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file) {
-        return describeVideo(frames, context, file, true);
-    }
-
-    /**
      * @param withSound слушать ли дорожку. Анимации и прочие ролики без звука не
      *                  слушают вовсе: распознавание речи на тишине не молчит, а
      *                  выдумывает субтитры, и они ушли бы в разговор как услышанное
-     */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
-                                boolean withSound) {
-        return describeVideo(frames, context, file, withSound, true);
-    }
-
-    /**
      * @param allowCache читать ли готовую ленту кадров и писать её в кэш. Второй
      *                   взгляд с вопросом читает мимо кэша: там лежит общий
      *                   пересказ, а не ответ на вопрос
+     * @return размеченная лента подписей или пустая строка
      */
-    public String describeVideo(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
-                                boolean withSound, boolean allowCache) {
-        // разбор ролика — это шестнадцать обращений к зрению плюс расшифровка
-        // звука; повторять их при каждом открытии чата непозволительно дорого
-        if (file != null && allowCache) {
-            String remembered = fromCache(file);
-            if (remembered != null) {
-                log.debug("Видео {} уже смотрела", file.getFileName());
-                return remembered;
-            }
+    public String describeVideo(Supplier<List<VideoFrames.Frame>> frames, List<Message> context,
+                                java.nio.file.Path file, boolean withSound, boolean allowCache) {
+        // распаковка дороже самого разбора: незачем вынимать кадры из ролика,
+        // ответ на который уже лежит в кэше
+        String remembered = remembered(file, allowCache);
+        return remembered == null ? lookFrames(frames.get(), context, file, withSound, allowCache) : remembered;
+    }
+
+    /**
+     * Готовое описание ролика, или null, если смотреть правда нужно. Разбор — это
+     * шестнадцать обращений к зрению плюс расшифровка звука, и повторять их при
+     * каждом открытии чата непозволительно дорого.
+     */
+    private String remembered(java.nio.file.Path file, boolean allowCache) {
+        if (file == null || !allowCache) {
+            return null;
         }
+        String remembered = fromCache(file);
+        if (remembered != null) {
+            log.debug("Видео {} уже смотрела", file.getFileName());
+        }
+        return remembered;
+    }
+
+    private String lookFrames(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
+                              boolean withSound, boolean allowCache) {
         if (frames.isEmpty()) {
             // картинку разобрать не вышло, но в звуке может быть всё главное
             String onlySound = heard(file, withSound)
@@ -200,12 +183,12 @@ public final class Vision {
      * @param withSound есть ли в ролике что слушать
      */
     private java.util.Optional<String> heard(java.nio.file.Path file, boolean withSound) {
-        if (!withSound || file == null || hearing == null || !hearing.hearsVideoAudio()) {
+        if (!withSound || file == null || hearing == null) {
             return java.util.Optional.empty();
         }
-        // дорожку берёт слух: звук из файла вынимают раскодированием, а не
-        // временным ogg, который было кому разобрать, кроме шёпота
-        return hearing.listen(file, true);
+        // дорожку берёт слух: он сам решает, слушать ли её вовсе, вынимает звук
+        // из файла и знает, есть ли там что распознавать
+        return hearing.listen(file, Track.VIDEO);
     }
 
     private static String quietly(java.util.concurrent.Future<String> caption) {
@@ -215,6 +198,9 @@ public final class Vision {
             Thread.currentThread().interrupt();
             return "";
         } catch (java.util.concurrent.ExecutionException e) {
+            // кадр без подписи выпадет из ленты времени, но без строки в логе
+            // сбой неотличим от отказа смотреть
+            log.warn("Кадр не разгляделся: {}", e.getMessage());
             return "";
         }
     }
@@ -235,8 +221,9 @@ public final class Vision {
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустая подпись к кадру на {} с, попытка {}", frame.from(), attempt);
             } catch (RuntimeException e) {
-                log.warn("Кадр на {} с не разглядеть: {}", frame.from(), e.getMessage());
-                return "";
+                // сбой обращения — не отказ: пробуем, пока попытки не кончились
+                log.warn("Кадр на {} секунде не разглядеть, попытка {} из {}: {}", frame.from(), attempt,
+                        MAX_ATTEMPTS, e.getMessage());
             }
         }
         return "";
@@ -302,8 +289,10 @@ public final class Vision {
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустое описание, попытка {} из {}", attempt, MAX_ATTEMPTS);
             } catch (RuntimeException e) {
-                log.warn("Не удалось разглядеть {}: {}", file.getFileName(), e.getMessage());
-                return "";
+                // сбой обращения к модели — это не отказ: попытки нужны все,
+                // иначе одна сетевая ошибка обнуляет весь цикл
+                log.warn("Не удалось разглядеть {}, попытка {} из {}: {}", file.getFileName(), attempt,
+                        MAX_ATTEMPTS, e.getMessage());
             }
         }
         return "";
@@ -333,19 +322,29 @@ public final class Vision {
         return "<%s description>\n%s\n</%s>\n".formatted(kind.tag, Markup.body(description), kind.tag);
     }
 
+    /**
+     * Готовое описание или null, если смотреть правда нужно.
+     * <p>
+     * Пустое содержимое — промах, а не описание: такой файл остаётся от записи,
+     * прерванной на середине. Принятая за описание пустота выглядела бы как
+     * просмотренная картинка без единого слова о ней.
+     */
     private String fromCache(Path file) {
         try {
-            Path cached = cacheFor(file);
-            return Files.exists(cached) ? Files.readString(cached) : null;
+            String description = Files.readString(cacheFor(file));
+            return description.isBlank() ? null : description;
         } catch (IOException e) {
-            return null;
+            return null;   // файла нет или он не прочитался — смотрят заново
         }
     }
 
+    /**
+     * Замена идёт через временный файл: прежний кэш либо остаётся целым, либо
+     * уступает место целому новому — но никогда не оборванному на середине.
+     */
     private void toCache(Path file, String description) {
         try {
-            Files.createDirectories(cacheDir);
-            Files.writeString(cacheFor(file), description);
+            AtomicFiles.writeString(cacheFor(file), description);
         } catch (IOException e) {
             log.debug("Описание не сохранилось в кэш: {}", e.getMessage());
         }

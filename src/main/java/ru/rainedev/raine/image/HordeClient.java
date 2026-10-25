@@ -121,7 +121,7 @@ public final class HordeClient {
 
         JsonNode response = request("generate/async", body);
         if (!response.hasNonNull("id")) {
-            throw new IllegalStateException("Очередь не приняла заявку: " + response);
+            throw new IllegalStateException("Очередь не приняла заявку: " + ErrorNote.of(response.toString()));
         }
         return response.get("id").asText();
     }
@@ -207,7 +207,7 @@ public final class HordeClient {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Загрузка прервана", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Картинку не удалось забрать: " + e.getMessage(), e);
+            throw new IllegalStateException("Картинку не удалось забрать: " + ErrorNote.of(e.getMessage()), e);
         }
     }
 
@@ -230,7 +230,7 @@ public final class HordeClient {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Запрос прерван", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Очередь недоступна: " + e.getMessage(), e);
+            throw new IllegalStateException("Очередь недоступна: " + ErrorNote.of(e.getMessage()), e);
         }
     }
 
@@ -248,7 +248,7 @@ public final class HordeClient {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Ожидание прервано", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Очередь недоступна: " + e.getMessage(), e);
+            throw new IllegalStateException("Очередь недоступна: " + ErrorNote.of(e.getMessage()), e);
         }
     }
 

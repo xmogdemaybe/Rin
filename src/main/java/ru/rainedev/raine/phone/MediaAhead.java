@@ -9,7 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Разглядывает вложения заранее и сразу все.
+ * Разбирает вложения заранее и сразу все — и глазами, и ушами.
  * <p>
  * По одному это выходит непозволительно долго: на снимок уходит секунд восемь,
  * и десяток картинок в истории — это полторы минуты, пока собеседник смотрит
@@ -26,8 +26,12 @@ public final class MediaAhead {
 
     private MediaAhead() {}
 
+    /**
+     * Греет вложения заранее: одно разборётся и по ходу разметки, а без глаз
+     * и без слуха греть нечего.
+     */
     public static void look(MediaDescriber media, List<TdApi.Message> messages) {
-        if (!media.sees() || messages.size() < 2) {
+        if (messages.size() < 2 || (!media.sees() && !media.hears())) {
             return;
         }
         long startedAt = System.currentTimeMillis();

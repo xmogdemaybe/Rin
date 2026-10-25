@@ -9,11 +9,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
+import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.MessageContent;
 import ru.rainedev.raine.phone.MessageFormatter;
 
 /**
- * История, присланная в чат, — не вложение: её содержимое, подпись и плашки
+ * История, присланная в чат, — не вложение: её содержимое, подпись и стикеры
  * приезжают отдельным объектом, и текст там чужой.
  */
 class SharedStoryTest {
@@ -40,7 +41,7 @@ class SharedStoryTest {
 
     @Test
     void attachedAreasAreReadable() {
-        // плашки рисует клиент поверх картинки: ни в файле, ни в кадрах их нет
+        // стикеры рисует клиент поверх картинки: ни в файле, ни в кадрах их нет
         String attached = TelegramMedia.attached(new TdApi.StoryArea[] {
                 area(new TdApi.StoryAreaTypeLink("https://example.com/cat")),
                 area(weather(12.4, "солнечно")),
@@ -90,7 +91,7 @@ class SharedStoryTest {
 
     @Test
     void aLocationStickerIsNamedWithoutInventingAPlace() {
-        // в такой плашке лежат координаты, а не название: выдумывать «где именно»
+        // в таком стикере лежат координаты, а не название: выдумывать «где именно»
         // незачем, а молчать — значит потерять сам факт метки
         String attached = TelegramMedia.attached(
                 new TdApi.StoryArea[] { area(new TdApi.StoryAreaTypeLocation()) });
@@ -112,10 +113,48 @@ class SharedStoryTest {
 
         assertTrue(loss.contains("did not get to see"), loss);
         assertTrue(loss.contains("instead of describing"), loss);
+        assertTrue(loss.contains("no answer back"),
+                "файл был — значит, дело в разборе, а не в отсутствии картинки: " + loss);
         assertEquals("", TelegramMedia.loss("", photoContent(3), false),
                 "вслепую жаловаться не на что: глаз не звал картинку");
         assertEquals("снег", TelegramMedia.loss("снег", photoContent(3), true),
                 "раз разглядели — слова не трогать");
+    }
+
+    @Test
+    void aStoryWithoutAFileDoesNotBlameTheLook() {
+        // Telegram не отдал файл: говорить «разбор не удался» было бы второй
+        // ложью — разбирать было нечего
+        String loss = TelegramMedia.loss("", photoWithoutFile(), true);
+
+        assertTrue(loss.contains("no file"), loss);
+        assertTrue(loss.contains("did not get to see"), loss);
+        assertFalse(loss.contains("no answer back"),
+                "отказа модели не было, картинки просто не было: " + loss);
+    }
+
+    @Test
+    void theQuestionTravelsToTheLookAndNothingElseDoes() {
+        List<Message> asked = TelegramMedia.asking(List.of(Message.user("привет")), "какого цвета кот?");
+
+        assertEquals(2, asked.size(), String.valueOf(asked));
+        assertTrue(asked.get(1).content().contains("какого цвета кот?"), String.valueOf(asked));
+        assertTrue(asked.get(1).content().contains("Answer only it"), String.valueOf(asked));
+        assertEquals(1, TelegramMedia.asking(List.of(Message.user("привет")), "").size(),
+                "обычный пересказ не указывает модели одного вопроса");
+        assertFalse(TelegramMedia.plain("что на табличке?"), "с вопросом ответ не берётся из кэша");
+        assertTrue(TelegramMedia.plain("  "), "пустой вопрос — это обычный пересказ");
+        assertTrue(TelegramMedia.plain(null));
+    }
+
+    /** Фото истории, для которого Telegram не отдал файл. */
+    private static TdApi.StoryContentPhoto photoWithoutFile() {
+        TdApi.PhotoSize size = new TdApi.PhotoSize();
+        TdApi.Photo photo = new TdApi.Photo();
+        photo.sizes = new TdApi.PhotoSize[] { size };
+        TdApi.StoryContentPhoto content = new TdApi.StoryContentPhoto();
+        content.photo = photo;
+        return content;
     }
 
     @Test

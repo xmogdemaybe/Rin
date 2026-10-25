@@ -2,6 +2,7 @@ package ru.rainedev.raine.speech;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -22,8 +23,12 @@ class OggOpusReaderTest {
 
     /** Секунда тона на 48 кГц — с той же частоты Telegram и пишет голосовые. */
     private static byte[] oggOfOneSecond() throws Exception {
+        return oggOf(1);
+    }
+
+    private static byte[] oggOf(int seconds) throws Exception {
         int rate = 48_000;
-        short[] tone = new short[rate];
+        short[] tone = new short[rate * seconds];
         for (int i = 0; i < tone.length; i++) {
             tone[i] = (short) (Math.sin(2 * Math.PI * 440 * i / rate) * 8000);
         }
@@ -41,12 +46,27 @@ class OggOpusReaderTest {
         assertTrue(length > 15_000 && length <= 16_000, "длительность не сошлась: " + length);
         int loudest = loudest(sound.get().samples());
         assertTrue(loudest > 1000, "вместо звука получилась тишина: " + loudest);
+        assertFalse(sound.get().cut(), "целую запись нечего помечать обрезанной");
+    }
+
+    /**
+     * Запись длиннее бюджета раньше уходила пустым результатом: шестиминутное
+     * голосовое доходило до модели молчанием, хотя начало в нём есть, и
+     * раскодировать его дешевле, чем весь монолог.
+     */
+    @Test
+    void aRecordLongerThanTheBudgetIsCutAndSaysSo() throws Exception {
+        Optional<Sound> sound = OggOpusReader.decode(oggOf(3), 1);
+
+        assertTrue(sound.isPresent(), "начало записи терять незачем");
+        assertTrue(sound.get().cut(), "хвост отрезан — модель должна об этом знать");
+        assertEquals(16_000, sound.get().samples().length, "в бюджет входит ровно секунда речи");
     }
 
     @Test
-    void aTooLongRecordIsNotDecodedAtAll() throws Exception {
-        // дело не в том, чтобы срезать слово, а в том, чтобы не выкладывать
-        // в память часовой монолог: такой запрос эндпоинт всё равно не примет
+    void nothingIsHeardOfAZeroBudget() throws Exception {
+        // нулевой бюджет не значит «слушать сколько влезет»: в нём не помещается
+        // ни один отсчёт, и отдавать такое как услышанное нельзя
         assertTrue(OggOpusReader.decode(oggOfOneSecond(), 0).isEmpty());
     }
 
@@ -68,6 +88,42 @@ class OggOpusReaderTest {
         Optional<Sound> sound = OggOpusReader.decode(half, 300);
         assertTrue(sound.isPresent(), "половина записи лучше, чем ничего");
         assertTrue(sound.get().samples().length < 16_000);
+    }
+
+    /**
+     * Описание потока называет версию кодека, и RFC 7845 оставляет её одну — 1,
+     * веля отбросить любую другую. Раскодировать поток с неизвестной версией
+     * значит выдать за речь то, что кодек понял наугад: раскладка байтов в таком
+     * потоке может быть другой, а звука в нём — никакого.
+     */
+    @Test
+    void aStreamOfUnknownVersionIsRefused() throws Exception {
+        for (int version : new int[] {0, 2}) {
+            byte[] wrong = oggOfOneSecond().clone();
+            int at = indexOf(wrong, "OpusHead");
+            assertTrue(at > 0, "образец должен начинаться с описания потока");
+            wrong[at + 8] = (byte) version;
+
+            assertTrue(OggOpusReader.decode(wrong, 300).isEmpty(),
+                    "версию " + version + " в описании потока раскодировать нельзя");
+        }
+    }
+
+    /**
+     * Нулевая строка в таблице длин — разрыв в потоке: звука в ней нет. Пустой
+     * пакет Opus кодек не пропускает, а достраивает до 120 мс по последнему
+     * слышанному, и эти отсчёты легли бы в wav как голос из записи.
+     */
+    @Test
+    void anEmptySegmentIsNotAPacket() {
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        stream.writeBytes(page(0x02, 0, List.of(head(), tags())));
+        stream.writeBytes(rawPage(0x00, 4800, new int[] {0, 10, 0}, new byte[10]));
+
+        List<byte[]> packets = OggOpusReader.packets(stream.toByteArray());
+
+        assertEquals(3, packets.size(), "пустых пакетов в счёт не идёт: " + packets.size());
+        assertEquals(10, packets.get(2).length, "звук — только непустой пакет");
     }
 
     @Test

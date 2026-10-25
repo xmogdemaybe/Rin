@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import it.tdlight.jni.TdApi;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import ru.rainedev.raine.telegram.StoryAudience;
 
 /**
  * Telegram не отказывает в выкладывании истории ошибкой — он отвечает перечнем
@@ -60,6 +61,26 @@ class StoryPostingTest {
             assertFalse(refusal.contains("<"), refusal);
             assertFalse(refusal.contains(">"), refusal);
         });
+    }
+
+    /**
+     * Снимок для истории берётся из галереи, а галерея живёт отдельно от камеры:
+     * take_photo к тому же появляется в наборе только внутри открытого чата.
+     * Ссылка на него в постоянном инструменте — обещание того, чего может не быть.
+     */
+    @Test
+    void theStoryAsksForAGalleryPhotoNotForACamera() {
+        String described = TelegramTools.postStoryDescription(StoryAudience.CONTACTS);
+
+        assertTrue(described.contains("gallery"), described);
+        assertFalse(described.contains("take_photo"), "описание не требует камеру: " + described);
+        assertTrue(described.contains("the people in your contacts"), "выбор зрителя должен быть виден: " + described);
+
+        String missing = TelegramTools.missingGalleryPhoto();
+
+        assertFalse(missing.contains("take_photo"), missing);
+        assertTrue(missing.toLowerCase().contains("gallery"),
+                "просто «нет файла» — непонятно, где искать: " + missing);
     }
 
     @Test

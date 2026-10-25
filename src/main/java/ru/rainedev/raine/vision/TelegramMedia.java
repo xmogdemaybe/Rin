@@ -10,13 +10,14 @@ import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MediaDescriber;
+import ru.rainedev.raine.speech.ModelHearing.Track;
 import ru.rainedev.raine.telegram.Telegram;
 
 /** Скачивает вложение из Telegram и передаёт его зрению или слуху. */
 public final class TelegramMedia implements MediaDescriber {
 
-    /** Что видно, если историю достать не удалось. */
-    private static final String UNREACHABLE = "её больше не открыть — могла протухнуть или быть скрытой";
+    /** Что видно, если историю достать не удалось. Текст читает модель, поэтому он английский. */
+    private static final String UNREACHABLE = "This story could not be opened — it may have expired or been hidden.";
 
     private final Telegram telegram;
     /** Может не быть: зрение включают тумблером, а подпись истории читается и без него. */
@@ -47,6 +48,15 @@ public final class TelegramMedia implements MediaDescriber {
         return vision != null;
     }
 
+    /**
+     * Есть ли чем слушать. Зрение для этого не нужно: голосовое и кружок
+     * разбираются ушами. Без слуха предразбор качал бы файл впустую.
+     */
+    @Override
+    public boolean hears() {
+        return hearing != null && (hearing.hears(Track.VOICE) || hearing.hears(Track.CIRCLE));
+    }
+
     /** Слух подключается отдельно: голосовое слышно и без глаз. */
     public void hearing(ru.rainedev.raine.speech.ModelHearing hearing) {
         this.hearing = hearing;
@@ -69,7 +79,7 @@ public final class TelegramMedia implements MediaDescriber {
         if (message == null || message.content == null) {
             return "";
         }
-        // без зрения разбирать нечего, и история не в счёт: её подпись и плашки —
+        // без зрения разбирать нечего, и история не в счёт: её подпись и стикеры —
         // текст, а не картинка. Голосовое и кружок слушают ушами, а не глазами,
         // поэтому они разбираются и без зрения. Остальные вложения при
         // выключенном зрении остаются ровно тем, чем были: пометкой о типе
@@ -87,10 +97,10 @@ public final class TelegramMedia implements MediaDescriber {
             case TdApi.MessageGift gift -> gift(gift);
             case TdApi.MessageVoiceNote ignored -> heard(message, "voice");
             case TdApi.MessageVideoNote videoNote ->
-                    // в кружке есть и картинка, и речь — берём и то, и другое;
-                    // одно и то же дважды в разговор не пойдёт: если кружок
-                    // слушает сама модель, распознаватель к дорожке не зовут
-                    watch(fileOf(videoNote.videoNote.video), !listensCircles()) + heard(message, "video_note");
+                    // у кружка есть и картинка, и речь, но дорога к звуку
+                    // должна быть одна: через зрение он слушался бы по
+                    // разрешению ролика, а тумблер кружка там не спрашивают
+                    watch(fileOf(videoNote.videoNote.video), false) + heard(message, "video_note");
             case TdApi.MessageVideo video -> video.video == null ? "" : watchOrGlance(
                     message, fileOf(video.video.video), thumbnailOf(video.video.thumbnail));
             case TdApi.MessageAnimation animation -> animation.animation == null ? "" : watchOrGlance(
@@ -129,7 +139,7 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * История — не вложение: картинка, подпись и прикреплённые плашки лежат
+     * История — не вложение: картинка, подпись и прикреплённые стикеры лежат
      * в отдельном объекте, поэтому смотрят и подписывают её по-своему.
      */
     public String describeStory(TdApi.Story story) {
@@ -154,7 +164,7 @@ public final class TelegramMedia implements MediaDescriber {
      */
     public String describeStory(TdApi.Story story, boolean onlyGlance, String question) {
         // вслепую разбирать нечего, и жалобу на формат из пустоты не собрать:
-        // ролик цел, просто глаз нет — тогда остаются подпись и плашки
+        // ролик цел, просто глаз нет — тогда остаются подпись и стикеры
         String seen = sees() ? seen(story.content,
                 file -> look(file, Vision.Kind.PHOTO, question),
                 video -> storyVideo(video, onlyGlance,
@@ -162,27 +172,49 @@ public final class TelegramMedia implements MediaDescriber {
         return storyBlock(story, loss(seen, story.content, sees()));
     }
 
-    /** Пустота, которую нельзя оставить без слова: модель дописала бы её сама. */
-    private static final String NOTHING_SEEN =
-            "Nothing was seen this time — the picture did not come through. "
+    /** Файл был, ответа нет: модель отказалась смотреть или разбор не удался. */
+    private static final String NO_ANSWER =
+            "Looked at the picture and got no answer back — the vision model refused or the look failed. "
+                    + "Say you did not get to see it instead of describing it.";
+
+    /** История обещает картинку, а качать нечего: Telegram не прислал файл. */
+    private static final String NO_FILE =
+            "The story announced a picture but carried no file, so there was nothing to look at. "
                     + "Say you did not get to see it instead of describing it.";
 
     /**
-     * Глаза есть, картинка была, а разглядеть не вышло. Пустой блок без этого
-     * слова модель заполнила бы выдумкой и ответила так, будто смотрела, — так
-     * и случилось с историей про кота. Вслепую же не жалуются: там картинку не
-     * звали вовсе.
+     * Пустота, которую нельзя оставить без слова: модель дописала бы её сама.
+     * <p>
+     * Причины разные — разная и фраза. Файла не оказалось — винить разбор нельзя;
+     * файл был, но ответа нет — тут отказ модели или сбой, и это другой разговор.
      * <p>
      * Иначе обходятся с историей, в которой смотреть было нечего: Telegram сам
-     * не разобрал её содержимое. Сбоя не было, и жалоба на него была бы такой
-     * же выдумкой, как дорисованный кот, — пустота здесь честнее.
+     * не разобрал её содержимое. Сбоя не было, и жалоба на него была бы такой же
+     * выдумкой, как дорисованный кот, — пустота здесь честнее. Вслепую тоже не
+     * жалуются: там картинку не звали вовсе.
      * <p>
      * Видно пакету: подстановку проверяют без зрения и без Telegram.
      */
     static String loss(String seen, TdApi.StoryContent content, boolean hasEyes) {
-        boolean wasSomethingToSee = content instanceof TdApi.StoryContentPhoto
-                || content instanceof TdApi.StoryContentVideo;
-        return hasEyes && wasSomethingToSee && (seen == null || seen.isBlank()) ? NOTHING_SEEN : seen;
+        if (!hasEyes || !wasPicture(content) || (seen != null && !seen.isBlank())) {
+            return seen;
+        }
+        return hasFile(content) ? NO_ANSWER : NO_FILE;
+    }
+
+    /** История, где смотреть было бы на что: фото или ролик. */
+    private static boolean wasPicture(TdApi.StoryContent content) {
+        return content instanceof TdApi.StoryContentPhoto || content instanceof TdApi.StoryContentVideo;
+    }
+
+    /** Есть ли что скачивать: файл у фото, у ролика — основной или запасной поток. */
+    private static boolean hasFile(TdApi.StoryContent content) {
+        return switch (content) {
+            case TdApi.StoryContentPhoto photo -> largest(photo.photo).isPresent();
+            case TdApi.StoryContentVideo video ->
+                    !storyFile(video.video).isEmpty() || !storyFile(video.alternativeVideo).isEmpty();
+            case null, default -> false;
+        };
     }
 
     /**
@@ -252,7 +284,7 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * Подпись и плашки — чужой текст, поэтому они уходят атрибутами: ни кавычек,
+     * Подпись и стикеры — чужой текст, поэтому они уходят атрибутами: ни кавычек,
      * ни попыток открыть свой блок внутри них не останется.
      */
     static String storyBlock(TdApi.Story story, String seen) {
@@ -271,11 +303,12 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * Плашки на истории рисует сам клиент поверх картинки: ни в файле, ни в кадрах
+     * Стикеры на истории рисует сам клиент поверх картинки: ни в файле, ни в кадрах
      * их нет. Ссылка, погода или репост поста видны только здесь.
      * <p>
      * Наполненность полей Telegram оставляет за собой, а слово «null» в описании
-     * читается как часть содержания, поэтому пустоту называют самой плашкой.
+     * читалось бы как часть содержания, поэтому при пустом значении называют
+     * только тип стикера.
      */
     static String attached(TdApi.StoryArea[] areas) {
         if (areas == null) {
@@ -424,11 +457,6 @@ public final class TelegramMedia implements MediaDescriber {
                 || message.content instanceof TdApi.MessageVideoNote;
     }
 
-    /** Слушает ли кружок сама модель — тогда распознаватель дорожки не нужен. */
-    private boolean listensCircles() {
-        return hearing != null && hearing.hearsVideoNotes();
-    }
-
     /**
      * Что модель слышит из файла сама. Пусто, если слуха нет или тумблер снят:
      * качать ради этого файл незачем.
@@ -438,10 +466,10 @@ public final class TelegramMedia implements MediaDescriber {
             return Optional.empty();
         }
         return switch (message.content) {
-            case TdApi.MessageVoiceNote voice when hearing.hearsVoiceNotes() ->
-                    soundOf(voice.voiceNote.voice).flatMap(sound -> hearing.listen(sound, false));
-            case TdApi.MessageVideoNote note when hearing.hearsVideoNotes() ->
-                    soundOf(note.videoNote.video).flatMap(sound -> hearing.listen(sound, true));
+            case TdApi.MessageVoiceNote voice when hearing.hears(Track.VOICE) ->
+                    soundOf(voice.voiceNote.voice).flatMap(sound -> hearing.listen(sound, Track.VOICE));
+            case TdApi.MessageVideoNote note when hearing.hears(Track.CIRCLE) ->
+                    soundOf(note.videoNote.video).flatMap(sound -> hearing.listen(sound, Track.CIRCLE));
             default -> Optional.empty();
         };
     }
@@ -509,23 +537,28 @@ public final class TelegramMedia implements MediaDescriber {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map(file -> vision.describeVideo(VideoFrames.sample(file), asking(question), file, withSound,
-                        plain(question)))
+                .map(file -> vision.describeVideo(() -> VideoFrames.sample(file), asking(context.get(), question),
+                        file, withSound, plain(question)))
                 .orElse("");
     }
 
-    /** Разговор плюс вопрос, ради которого смотрят снова. */
-    private List<Message> asking(String question) {
-        List<Message> around = new ArrayList<>(context.get());
+    /**
+     * Разговор плюс вопрос, ради которого смотрят снова. Без вопроса это просто
+     * разговор: взгляд по умолчанию пересказывает всё.
+     * <p>
+     * Видно пакету: привязку вопроса проверяют без Telegram.
+     */
+    static List<Message> asking(List<Message> around, String question) {
+        List<Message> messages = new ArrayList<>(around);
         if (!plain(question)) {
-            around.add(Message.user("You are looking at this again, for one question. Answer only it, "
+            messages.add(Message.user("You are looking at this again, for one question. Answer only it, "
                     + "from what is really in the picture: " + question.strip()));
         }
-        return around;
+        return messages;
     }
 
     /** Обычный пересказ, а не взгляд ради вопроса — только он и живёт в кэше. */
-    private static boolean plain(String question) {
+    static boolean plain(String question) {
         return question == null || question.isBlank();
     }
 
@@ -567,7 +600,7 @@ public final class TelegramMedia implements MediaDescriber {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map((Path file) -> vision.describe(file, kind, asking(question), plain(question)))
+                .map((Path file) -> vision.describe(file, kind, asking(context.get(), question), plain(question)))
                 .orElse("");
     }
 

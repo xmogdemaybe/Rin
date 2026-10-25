@@ -6,6 +6,10 @@ package ru.rainedev.raine.speech;
  * Промежуточная ступень между тем, что пришло из чужого файла, и тем, во что
  * это приходится уложить: голосовое идёт в OGG/Opus, дорожка кружка — в AAC,
  * а разговорной модели нужен сырой звук.
+ *
+ * @param samples отсчёты одного канала
+ * @param rate    частота, на которой они сняты
+ * @param cut     оставлен ли звук короче, чем был: хвост за лимитом отсечён
  */
-public record Sound(short[] samples, int rate) {
+public record Sound(short[] samples, int rate, boolean cut) {
 }

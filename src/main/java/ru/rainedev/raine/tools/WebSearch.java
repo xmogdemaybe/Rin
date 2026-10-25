@@ -68,8 +68,11 @@ public final class WebSearch {
             Thread.currentThread().interrupt();
             return "Web search interrupted";
         } catch (Exception e) {
+            // сюда же приходит и ответ, который не разобрался: текст такой ошибки
+            // цитирует чужую страницу, а её кусок ничего не объясняет и только
+            // занимает место в контексте
             log.warn("Веб-поиск не удался: {}", e.getMessage());
-            return "Web search failed: " + e.getMessage();
+            return "Web search failed: " + ErrorNote.of(e.getMessage());
         }
     }
 

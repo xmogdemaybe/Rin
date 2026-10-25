@@ -167,8 +167,8 @@ public final class RaineApp implements AutoCloseable {
             log.info("Зрение выключено: вложения видны только по типу, из истории — только текст");
         }
         // разбор вложений подключён и без зрения: подпись истории и её плашки —
-        // текст, а не картинка. Остальные вложения при выключенном зрении
-        // остаются пометкой о типе, как было всегда
+        // текст, а не картинка, а голосовое и кружок слушают ушами. Остальные
+        // вложения при выключенном зрении остаются пометкой о типе
         telegramMedia = new TelegramMedia(telegram, vision, () -> loop == null ? List.of() : loop.context());
         telegramMedia.videoInChannels(config.vision().videoInChannels());
         MediaDescriber media = telegramMedia;
@@ -218,14 +218,13 @@ public final class RaineApp implements AutoCloseable {
         Diary diary = new Diary(config.diaryDir());
         diary.embedder(llm::embedding);
 
-        // ask доступен всегда: заглянуть в память можно в любой момент хода
-        Toolbox always = new Toolbox();
-        // в режиме только чтения действий в наборе нет вовсе: не «попробуй и
-        // получишь отказ», а чего нет — того и не попросишь
-        always.actionsAllowed(!config.readOnly());
+        // права в набор ложатся сразу: в режиме только чтения действий в нём нет
+        // вовсе — не «попробуй и получишь отказ», а чего нет, того и не попросишь
+        Toolbox always = newToolbox();
         WebSearch web = new WebSearch(config.webSearchUrl(), config.webSearchKey());
         Recall recall = new Recall(diary, llm, prompts.lazy("character_base.md"), web,
                 config.diaryMinRelatedness());
+        // ask доступен всегда: заглянуть в память можно в любой момент хода
         always.add(recall.asTool(this::currentSituation));
         if (config.behaviour().stickers()) {
             always.add(tools.stickers().list());
@@ -450,6 +449,17 @@ public final class RaineApp implements AutoCloseable {
     }
 
     /**
+     * Набор инструментов с текущими правами на действия.
+     * <p>
+     * Права в набор кладут сразу, одним и тем же выражением: иначе в режиме только
+     * чтения mutating-инструмент успевает в набор попасть, и запрет держится
+     * только на слиянии с постоянным набором — на шаг позже, чем должен.
+     */
+    private Toolbox newToolbox() {
+        return new Toolbox().actionsAllowed(!config.readOnly());
+    }
+
+    /**
      * Снимок готовится в фоне, поэтому о нём сообщают уведомлением — так же,
      * как о пришедшем сообщении. Иначе результат некуда было бы деть: ход,
      * в котором она начала съёмку, давно закончился.
@@ -462,7 +472,7 @@ public final class RaineApp implements AutoCloseable {
                         .formatted(lookAtOwnPhoto(message), message)
                 : "Your photo did not work out: " + message + ". You can try again or let it go.";
 
-        Toolbox available = new Toolbox();
+        Toolbox available = newToolbox();
         available.add(tools.open(chatId));
         loop.submit(new Notification(text, available, true).from(chatId));
         log.info("Уведомление о снимке поставлено в очередь");
@@ -485,7 +495,7 @@ public final class RaineApp implements AutoCloseable {
     private void greetCloseOnes(List<Goodnights.Receiver> receivers,
                                 java.util.function.Function<Goodnights.Receiver, String> prompt) {
         for (Goodnights.Receiver receiver : receivers) {
-            Toolbox available = new Toolbox();
+            Toolbox available = newToolbox();
             available.add(tools.open(receiver.id()));
             loop.submit(new Notification(prompt.apply(receiver), available, true)
                     .about(receiver.id()).from(receiver.id()));
@@ -501,7 +511,7 @@ public final class RaineApp implements AutoCloseable {
         if (ownerId <= 0) {
             return;
         }
-        Toolbox available = new Toolbox();
+        Toolbox available = newToolbox();
         available.add(tools.open(ownerId));
         loop.submit(new Notification(("Your prompts/character_growth.md reached its %d-line limit, so "
                 + "tonight's growth pass wrote nothing: the draft had %d lines. Open the chat with your "
@@ -519,7 +529,7 @@ public final class RaineApp implements AutoCloseable {
         if (ownerId <= 0) {
             return;
         }
-        Toolbox available = new Toolbox();
+        Toolbox available = newToolbox();
         available.add(tools.open(ownerId));
         loop.submit(new Notification(("Your working memory file %s reached its %d-character limit and had to be "
                 + "cut short: the text was %d characters, so some of your own notes no longer reach your system "
@@ -538,7 +548,7 @@ public final class RaineApp implements AutoCloseable {
         if (ownerId <= 0) {
             return;
         }
-        Toolbox available = new Toolbox();
+        Toolbox available = newToolbox();
         available.add(tools.open(ownerId));
         loop.submit(new Notification(("Your trust file holds %d lines while only the last %d reach your system "
                 + "prompt, so the people above them are invisible to you right now. Open the chat with your "
@@ -733,6 +743,12 @@ public final class RaineApp implements AutoCloseable {
         }
         String answer = "Версия %s, Java %s, дневник: %d записей"
                 .formatted(version(), Runtime.version().feature(), new Diary(config.diaryDir()).size());
+        if (config.readOnly()) {
+            // вне набора инструментов запись встречается только здесь: в безопасном
+            // режиме её никто не проглотит, поэтому снимаем вызов сами
+            log.info("Команда /version в режиме только чтения — ответ остаётся в журнале: {}", answer);
+            return true;
+        }
         actions.sendMessage(message.chatId, answer, message.id);
         log.info("Ответ на команду: {}", answer);
         return true;
@@ -762,7 +778,7 @@ public final class RaineApp implements AutoCloseable {
 
         // набор живёт вместе с уведомлением: инструменты одного чата не должны
         // оставаться доступными, когда разговор идёт уже в другом
-        Toolbox available = new Toolbox();
+        Toolbox available = newToolbox();
         available.add(tools.open(chat.id));
 
         // чат остаётся при уведомлении: не ответит — он снова повиснет

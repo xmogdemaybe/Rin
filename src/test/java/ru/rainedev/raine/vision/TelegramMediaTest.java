@@ -4,8 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import it.tdlight.jni.TdApi;
+import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import ru.rainedev.raine.config.Config;
+import ru.rainedev.raine.llm.ChatResponse;
+import ru.rainedev.raine.llm.LlmClient;
+import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.prompt.Prompts;
+import ru.rainedev.raine.speech.ModelHearing;
 
 class TelegramMediaTest {
 
@@ -57,6 +66,51 @@ class TelegramMediaTest {
     void theOwnerSwitchOverridesEverything() {
         assertFalse(TelegramMedia.shouldMarkHeard(voice(false), false));
         assertFalse(TelegramMedia.shouldMarkHeard(circle(false, false), false));
+    }
+
+    /**
+     * Предразбор греет то, что в нём вообще могут разобрать. Без зрения голосовое
+     * остаётся слышимым — уши к глазам не привязаны, — а без слуха греть нечего:
+     * ради пустого ответа качают файл и тратят очередь.
+     */
+    @Test
+    void blindMediaKnowsWhatItCanHear() {
+        TelegramMedia blind = media(true, true);
+        assertFalse(blind.sees(), "картинок не видно");
+        assertTrue(blind.hears(), "голосовое слушают ушами, а не глазами");
+
+        assertFalse(media(false, false).hears(), "под снятыми тумблерами греть нечего");
+
+        assertFalse(new TelegramMedia(null, null, () -> List.of()).hears(),
+                "неподключённый слух не греет вовсе");
+    }
+
+    /** Разметка вложений вслепую: Telegram здесь не нужен — он только качает файлы. */
+    private static TelegramMedia media(boolean voiceNotes, boolean videoNotes) {
+        TelegramMedia media = new TelegramMedia(null, null, () -> List.of());
+        media.hearing(new ModelHearing(new Ears(),
+                new Prompts(Path.of("prompts"), new Config.Character("Raine", "@raine_tyan", "RaineDev")),
+                "модель", Path.of("cache"),
+                new Config.Hearing(true, voiceNotes, videoNotes, true, Path.of("cache"))));
+        return media;
+    }
+
+    /** Модель, которая слышит, а больше ничего не умеет. */
+    private static final class Ears implements LlmClient {
+        @Override
+        public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public double[] embedding(String input) {
+            return new double[] {1};
+        }
+
+        @Override
+        public boolean hears() {
+            return true;
+        }
     }
 
     private static TdApi.Message with(TdApi.MessageContent content) {

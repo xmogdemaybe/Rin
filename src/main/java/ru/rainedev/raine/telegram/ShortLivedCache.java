@@ -69,6 +69,17 @@ final class ShortLivedCache<K, V> {
         return Optional.ofNullable(get(key, k -> compute.apply(k).orElse(null)));
     }
 
+    /**
+     * Спросить заново, не глядя на срок жизни, и запомнить то, что увидели.
+     * Нужно опросу, который ждёт перемены состояния: прежний снимок для него
+     * хуже вопроса, потому что отвечает «ничего нового», когда новое уже пришло.
+     */
+    Optional<V> refresh(K key, Function<K, Optional<V>> compute) {
+        V value = compute.apply(key).orElse(null);
+        put(key, value);
+        return Optional.ofNullable(value);
+    }
+
     void forget(K key) {
         entries.remove(key);
     }

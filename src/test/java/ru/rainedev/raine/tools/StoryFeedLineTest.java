@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import it.tdlight.jni.TdApi;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import ru.rainedev.raine.telegram.Stories;
@@ -26,11 +27,12 @@ class StoryFeedLineTest {
     }
 
     @Test
-    void aChatSheHasAlreadyReadOffersNothingToStartWith() {
+    void aChatSheHasAlreadyReadSaysSoInsteadOfGoingQuiet() {
         String line = TelegramTools.storyLine(new Stories.Entry(12L, 3, 0, 0), "Петя", "person");
 
         assertFalse(line.contains("first_story_id"), "звать смотреть нечего: всё уже просмотрено");
-        assertFalse(line.contains("unseen"), line);
+        assertTrue(line.contains("unseen=\"0\""),
+                "молчание вместо нуля читается как «обложка», и её снова открывают: " + line);
         assertTrue(line.contains("total=\"3\""), line);
     }
 
@@ -77,8 +79,10 @@ class StoryFeedLineTest {
         assertFalse(answer.contains("cut short"), "хвоста нет, и врать про него незачем: " + answer);
         // лента — это обложки, а не содержимое: без этого слова историю
         // пересказывают по памяти, будто её смотрели
-        assertTrue(answer.contains("None of these have been seen yet"), answer);
+        assertTrue(answer.contains("has not been seen"), answer);
         assertTrue(answer.contains("watch_story"), answer);
+        assertTrue(answer.contains("unseen=\"0\""),
+                "просмотренное до конца нужно отличать от обложки: " + answer);
         assertFalse(answer.contains("<watched"), "пустой блок просмотра в ответе не нужен: " + answer);
     }
 
@@ -132,7 +136,7 @@ class StoryFeedLineTest {
 
         assertTrue(answer.contains("<watched"), answer);
         assertTrue(answer.contains("кот"), answer);
-        assertFalse(answer.contains("None of these have been seen yet"),
+        assertFalse(answer.contains("Nothing was opened here just now"),
                 "про уже открытую историю так сказать нельзя: " + answer);
         // обложкой остаются те, кого не открывали: их нельзя пересказывать
         assertTrue(answer.contains("still a cover"), answer);
@@ -156,11 +160,92 @@ class StoryFeedLineTest {
     }
 
     @Test
-    void theFeedOpensOnlyAFewStoriesItself() {
-        // каждая открытая ею история — запрос зрению и просмотр для автора:
-        // за большие пределы лента ждала бы дольше разговора и обложила бы
-        // чужую жизнь просмотрами
-        assertTrue(TelegramTools.STORY_AUTO_WATCH >= 1 && TelegramTools.STORY_AUTO_WATCH <= 3,
-                "предел самопросмотра: " + TelegramTools.STORY_AUTO_WATCH);
+    void theFeedOpensNoMoreThanTheLimitEvenWhenNothingOpens() {
+        // лимит считает попытки, а не удачные исходы: иначе лента, где истории
+        // протухли или не качаются, открывала бы за вызов каждую непросмотренную
+        List<Long> attempts = new java.util.ArrayList<>();
+
+        String answer = TelegramTools.feedOf(fresh(6), StoryFeedLineTest::chatOf, chat -> true,
+                (chat, storyId) -> {
+                    attempts.add(chat.id);
+                    throw new IllegalStateException("файл не докачан");
+                }, true);
+
+        assertEquals(TelegramTools.STORY_AUTO_WATCH, attempts.size(),
+                "предел соблюдается даже на сбоях: " + attempts);
+        assertTrue(answer.contains("chat_id=\"105\""), "список остаётся полным: " + answer);
+        assertFalse(answer.contains("<watched"), "про несостоявшийся просмотр не отчитываются: " + answer);
+        assertEquals(6, answer.split("<story ").length - 1, answer);
+    }
+
+    @Test
+    void anExpiredStoryCountsAsAnAttemptToo() {
+        List<Long> attempts = new java.util.ArrayList<>();
+
+        String answer = TelegramTools.feedOf(fresh(5), StoryFeedLineTest::chatOf, chat -> true,
+                (chat, storyId) -> {
+                    attempts.add(chat.id);
+                    return TelegramTools.STORY_GONE;
+                }, true);
+
+        assertEquals(TelegramTools.STORY_AUTO_WATCH, attempts.size(), String.valueOf(attempts));
+        assertFalse(answer.contains("<watched"), "протухшую не выдают за просмотренную: " + answer);
+    }
+
+    @Test
+    void theFeedOpensNothingWithoutEyes() {
+        // вслепую просмотр ставить нельзя: автор его увидел бы, а за ним ничего
+        List<Long> attempts = new java.util.ArrayList<>();
+
+        String answer = TelegramTools.feedOf(fresh(4), StoryFeedLineTest::chatOf, chat -> true,
+                (chat, storyId) -> {
+                    attempts.add(chat.id);
+                    return "<photo description>\nкот\n</photo>";
+                }, false);
+
+        assertTrue(attempts.isEmpty(), String.valueOf(attempts));
+        assertTrue(answer.contains("chat_id=\"103\""), answer);
+    }
+
+    @Test
+    void aChatOutsideTheCircleGivesNeitherALineNorAView() {
+        List<Long> attempts = new java.util.ArrayList<>();
+
+        String answer = TelegramTools.feedOf(fresh(3), StoryFeedLineTest::chatOf, chat -> false,
+                (chat, storyId) -> {
+                    attempts.add(chat.id);
+                    return "<photo description>\nкот\n</photo>";
+                }, true);
+
+        assertTrue(attempts.isEmpty(), String.valueOf(attempts));
+        assertEquals("No one has stories up right now.", answer);
+    }
+
+    @Test
+    void anOpenedStoryIsNamedUnderTheList() {
+        String answer = TelegramTools.feedOf(fresh(1), StoryFeedLineTest::chatOf, chat -> true,
+                (chat, storyId) -> "<photo description>\nкот у окна\n</photo>", true);
+
+        assertTrue(answer.contains("<watched chat_id=\"100\" story_id=\"5\""), answer);
+        assertTrue(answer.contains("кот у окна"), answer);
+        assertTrue(answer.contains("unseen=\"1\""), "обложкой остаётся то, что не открывали: " + answer);
+    }
+
+    /** Несколько чатов, в каждом — по одной непросмотренной истории. */
+    private static List<Stories.Entry> fresh(int chats) {
+        List<Stories.Entry> entries = new java.util.ArrayList<>();
+        for (int i = 0; i < chats; i++) {
+            entries.add(new Stories.Entry(100L + i, 1, 1, 5 + i));
+        }
+        return entries;
+    }
+
+    /** Чат по номеру — то же, что достает лента, только без Telegram. */
+    private static java.util.Optional<TdApi.Chat> chatOf(long chatId) {
+        TdApi.Chat chat = new TdApi.Chat();
+        chat.id = chatId;
+        chat.title = "Чат " + chatId;
+        chat.type = new TdApi.ChatTypePrivate(chatId);
+        return java.util.Optional.of(chat);
     }
 }

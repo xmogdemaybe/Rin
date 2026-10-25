@@ -379,12 +379,23 @@ public final class Telegram {
 
     /**
      * Распознаёт речь силами Telegram Premium — без внешних сервисов и оплаты
-     * за минуты. Результат приходит не сразу, поэтому ждём его опросом.
+     * за минуты. Результат приходит не сразу, поэтому ждём его опросом: отказ
+     * распознавателя — состояние терминальное, и ждать его текста бессмысленно,
+     * а оборванный промежуточный кусок отдаём, когда время вышло: начало
+     * честнее молчания.
+     * <p>
+     * Состояние сообщения спрашивается свежим, а не из кэша: оно меняется как раз
+     * в те секунды, пока мы ждём.
      */
     public Optional<String> recognizeSpeech(long chatId, long messageId) {
-        Optional<String> cached = message(chatId, messageId).flatMap(Telegram::transcriptOf);
-        if (cached.isPresent()) {
-            return cached;
+        Wait first = freshMessage(chatId, messageId).map(Wait::of).orElse(Wait.NOTHING);
+        if (first.heard().isPresent()) {
+            return first.heard();
+        }
+        if (first.givenUp()) {
+            // отказ лежит в самом сообщении и из него не исчезнет: запускать
+            // распознавание заново — значит всякий раз терять на него полчаса
+            return Optional.empty();
         }
         if (!isPremium()) {
             return Optional.empty();
@@ -399,6 +410,7 @@ public final class Telegram {
             return Optional.empty();
         }
 
+        String promised = "";
         for (int waited = 0; waited < RECOGNITION_TIMEOUT_TICKS; waited++) {
             try {
                 Thread.sleep(RECOGNITION_TICK);
@@ -406,10 +418,21 @@ public final class Telegram {
                 Thread.currentThread().interrupt();
                 return Optional.empty();
             }
-            Optional<String> ready = message(chatId, messageId).flatMap(Telegram::transcriptOf);
-            if (ready.isPresent()) {
-                return ready;
+            Wait wait = freshMessage(chatId, messageId).map(Wait::of).orElse(Wait.NOTHING);
+            if (wait.heard().isPresent()) {
+                return wait.heard();
             }
+            if (wait.givenUp()) {
+                log.debug("Telegram отказался распознавать речь в сообщении {}", messageId);
+                return Optional.empty();
+            }
+            if (!wait.promised().isBlank()) {
+                promised = wait.promised();
+            }
+        }
+        if (!promised.isBlank()) {
+            log.debug("Распознавание речи в сообщении {} не успело, беру начало", messageId);
+            return Optional.of(promised);
         }
         log.debug("Распознавание речи не успело за отведённое время");
         return Optional.empty();
@@ -430,16 +453,32 @@ public final class Telegram {
         return premium;
     }
 
-    private static Optional<String> transcriptOf(TdApi.Message message) {
-        TdApi.SpeechRecognitionResult result = switch (message.content) {
-            case TdApi.MessageVoiceNote voice -> voice.voiceNote.speechRecognitionResult;
-            case TdApi.MessageVideoNote video -> video.videoNote.speechRecognitionResult;
-            case null, default -> null;
-        };
-        if (result instanceof TdApi.SpeechRecognitionResultText text && !text.text.isBlank()) {
-            return Optional.of(text.text);
+    /**
+     * Очередной виток ожидания расшифровки: что уже расслышано, что обещано
+     * промежуточным состоянием и есть ли смысл ждать дальше.
+     * <p>
+     * Видно пакету: разбирать состояние учат без Telegram и без таймера.
+     */
+    record Wait(Optional<String> heard, String promised, boolean givenUp) {
+
+        /** Ни расслышанного, ни отказа: сообщение ещё не ответило, ждём дальше. */
+        static final Wait NOTHING = new Wait(Optional.empty(), "", false);
+
+        static Wait of(TdApi.Message message) {
+            TdApi.SpeechRecognitionResult result = switch (message.content) {
+                case TdApi.MessageVoiceNote voice -> voice.voiceNote.speechRecognitionResult;
+                case TdApi.MessageVideoNote video -> video.videoNote.speechRecognitionResult;
+                case null, default -> null;
+            };
+            return switch (result) {
+                case TdApi.SpeechRecognitionResultText text when !text.text.isBlank() ->
+                        new Wait(Optional.of(text.text.strip()), "", false);
+                case TdApi.SpeechRecognitionResultPending pending -> new Wait(Optional.empty(),
+                        pending.partialText == null ? "" : pending.partialText.strip(), false);
+                case TdApi.SpeechRecognitionResultError ignored -> new Wait(Optional.empty(), "", true);
+                case null, default -> NOTHING;
+            };
         }
-        return Optional.empty();
     }
 
     /** Полная аватарка чата — та, что открывается по нажатию, а не миниатюра. */
@@ -815,18 +854,33 @@ public final class Telegram {
     private static final int SEND_CONFIRMATION_SECONDS = 5;
 
     public Optional<TdApi.Message> message(long chatId, long messageId) {
-        return messageCache.optional(chatId + ":" + messageId, key -> {
-            try {
-                return Optional.ofNullable(ask(new TdApi.GetMessage(chatId, messageId)));
-            } catch (RuntimeException e) {
-                return Optional.empty();
-            }
-        });
+        return messageCache.optional(messageKey(chatId, messageId), key -> askMessage(chatId, messageId));
+    }
+
+    /**
+     * Тот же вопрос, но мимо срока жизни кэша. Нужно опросу, который ждёт, пока
+     * состояние сообщения изменится: недавний снимок здесь не экономия, а задержка
+     * на весь срок — Telegram уже ответил, а она всё ещё видит прошлый ответ.
+     */
+    private Optional<TdApi.Message> freshMessage(long chatId, long messageId) {
+        return messageCache.refresh(messageKey(chatId, messageId), key -> askMessage(chatId, messageId));
+    }
+
+    private Optional<TdApi.Message> askMessage(long chatId, long messageId) {
+        try {
+            return Optional.ofNullable(ask(new TdApi.GetMessage(chatId, messageId)));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    private static String messageKey(long chatId, long messageId) {
+        return chatId + ":" + messageId;
     }
 
     /** Текст правили или сообщение удалили — прежний ответ больше не верен. */
     public void forgetMessage(long chatId, long messageId) {
-        messageCache.forget(chatId + ":" + messageId);
+        messageCache.forget(messageKey(chatId, messageId));
     }
 
     public void typing(long chatId) {

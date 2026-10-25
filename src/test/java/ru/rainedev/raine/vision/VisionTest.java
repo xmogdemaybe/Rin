@@ -29,9 +29,17 @@ class VisionTest {
         volatile String lastContext = "";
         private final java.util.concurrent.atomic.AtomicInteger seen =
                 new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger failures =
+                new java.util.concurrent.atomic.AtomicInteger();
 
         ScriptedLlm willSee(String description) {
             answers.add(description);
+            return this;
+        }
+
+        /** Первый взгляд отвечает сбоем обращения, остальные — обычным ответом. */
+        ScriptedLlm failsOnce() {
+            failures.incrementAndGet();
             return this;
         }
 
@@ -50,6 +58,10 @@ class VisionTest {
             seen.incrementAndGet();
             lastModel = model;
             lastContext = context;
+            if (failures.get() > 0) {
+                failures.decrementAndGet();
+                throw new IllegalStateException("сбой обращения к модели");
+            }
             String answer = answers.poll();
             return answer == null ? "" : answer;
         }
@@ -76,9 +88,9 @@ class VisionTest {
         ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит").willSee("кот роняет чашку");
 
         String result = visionWith(llm, dir.resolve("cache")).describeVideo(
-                List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
+                () -> List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
                         new VideoFrames.Frame(1, 2, new byte[] {2})),
-                List.of());
+                List.of(), null, false, true);
 
         assertEquals(2, llm.seen.get(), "каждый кадр описывается отдельно");
         assertTrue(result.contains("from=\"0:00\" to=\"0:01\""), result);
@@ -88,19 +100,52 @@ class VisionTest {
     }
 
     @Test
-    void videoIsWatchedOnlyOnce(@TempDir Path dir) throws IOException {
-        // разбор ролика — это шестнадцать обращений к зрению плюс расшифровка звука;
-        // повторять их при каждом открытии чата непозволительно дорого
-        ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит").willSee("кот сидит");
+    void oneFailedLookDoesNotEndThePicture(@TempDir Path dir) throws IOException {
+        // сбой обращения — не отказ модели: попытки обрывались на первой же
+        // ошибке, и одна сетевая неудача стоила всего описания картинки
+        ScriptedLlm llm = new ScriptedLlm().failsOnce().willSee("кот у окна");
+
+        String seen = visionWith(llm, dir.resolve("cache"))
+                .describe(imageFile(dir, "фото.jpg"), Vision.Kind.PHOTO, List.of());
+
+        assertTrue(seen.contains("кот у окна"), "после сбоя остаётся вторая попытка: " + seen);
+        assertEquals(2, llm.seen.get(), "сколько обращений к зрению: " + llm.seen.get());
+    }
+
+    @Test
+    void oneFailedLookDoesNotEndTheVideo(@TempDir Path dir) throws IOException {
+        // сбой обращения — не отказ модели: одна сетевая ошибка не должна
+        // выбрасывать целый кадр из ленты времени ролика
+        ScriptedLlm llm = new ScriptedLlm().failsOnce().willSee("кот сидит");
+        List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
+
+        String seen = visionWith(llm, dir.resolve("cache"))
+                .describeVideo(() -> frames, List.of(), imageFile(dir, "ролик.mp4"), false, true);
+
+        assertTrue(seen.contains("кот сидит"), "кадр не должен выпадать из-за одной ошибки: " + seen);
+        assertEquals(2, llm.seen.get(), "сколько обращений к зрению: " + llm.seen.get());
+    }
+
+    @Test
+    void aCachedVideoIsNotUnpackedAgain(@TempDir Path dir) throws IOException {
+        // раскодирование ролика дороже самого разбора: когда описание уже есть,
+        // кадры вынимать незачем
+        ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит");
         Path video = imageFile(dir, "ролик.mp4");
         Vision vision = visionWith(llm, dir.resolve("cache"));
         List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
+        java.util.concurrent.atomic.AtomicInteger unpacked = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<List<VideoFrames.Frame>> sample = () -> {
+            unpacked.incrementAndGet();
+            return frames;
+        };
 
-        String first = vision.describeVideo(frames, List.of(), video);
-        String again = vision.describeVideo(frames, List.of(), video);
+        String first = vision.describeVideo(sample, List.of(), video, true, true);
+        String again = vision.describeVideo(sample, List.of(), video, true, true);
 
         assertEquals(first, again);
-        assertEquals(1, llm.seen.get(), "второй раз смотреть незачем — описание уже есть");
+        assertEquals(1, unpacked.get(), "на готовом описании распаковки быть не должно: " + unpacked.get());
+        assertEquals(1, llm.seen.get(), "и зрение не должно смотреть второй раз: " + llm.seen.get());
     }
 
     @Test
@@ -142,13 +187,14 @@ class VisionTest {
         Vision vision = visionWith(llm, dir.resolve("cache"));
         List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
 
-        vision.describeVideo(frames, List.of(), video);
-        String closer = vision.describeVideo(frames, List.of(Message.user("где сидит кот?")), video, true, false);
+        vision.describeVideo(() -> frames, List.of(), video, false, true);
+        String closer = vision.describeVideo(() -> frames, List.of(Message.user("где сидит кот?")), video,
+                false, false);
 
         assertEquals(2, llm.seen.get(), "кадры смотрят заново: в кэше лежит прежний пересказ");
         assertTrue(closer.contains("кот на табуретке"), closer);
-        String after = vision.describeVideo(frames, List.of(), video);
-        assertTrue(after.contains("кот сидит"), "приглядывание не затёрло пересказ: " + after);
+        String after = vision.describeVideo(() -> frames, List.of(), video, false, true);
+        assertTrue(after.contains("кот сидит"), "второй взгляд не затёрл общий пересказ: " + after);
     }
 
     @Test
@@ -156,7 +202,7 @@ class VisionTest {
         ScriptedLlm llm = new ScriptedLlm();   // на все кадры отвечает пустотой
 
         String result = visionWith(llm, dir.resolve("cache")).describeVideo(
-                List.of(new VideoFrames.Frame(0, 1, new byte[] {1})), List.of());
+                () -> List.of(new VideoFrames.Frame(0, 1, new byte[] {1})), List.of(), null, false, true);
 
         assertEquals("", result);
     }
@@ -165,7 +211,8 @@ class VisionTest {
     void videoWithoutFramesIsNotAskedAbout(@TempDir Path dir) {
         ScriptedLlm llm = new ScriptedLlm().willSee("что-то");
 
-        String result = visionWith(llm, dir.resolve("cache")).describeVideo(List.of(), List.of());
+        String result = visionWith(llm, dir.resolve("cache"))
+                .describeVideo(() -> List.of(), List.of(), null, false, true);
 
         assertEquals("", result);
         assertEquals(0, llm.seen.get(), "спрашивать не о чем — незачем и платить");
@@ -215,6 +262,45 @@ class VisionTest {
 
         assertEquals(first, second);
         assertEquals(1, llm.seen.get(), "повторный взгляд на ту же картинку стоит денег и времени");
+    }
+
+    /**
+     * Пустой файл кэша остаётся от записи, прерванной на середине. Принятый за
+     * описание, он выглядел бы как просмотренная картинка без единого слова о ней.
+     */
+    @Test
+    void anEmptyCacheFileIsNotADescription(@TempDir Path dir) throws IOException {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Path photo = imageFile(dir, "photo.jpg");
+        Files.writeString(cache.resolve("photo.jpg.md"), "");
+        ScriptedLlm llm = new ScriptedLlm().willSee("Человек с котом");
+
+        String seen = visionWith(llm, cache).describe(photo, Vision.Kind.PHOTO, List.of());
+
+        assertEquals(1, llm.seen.get(), "пустой кэш не должен выглядеть описанием");
+        assertTrue(seen.contains("Человек с котом"), seen);
+    }
+
+    /**
+     * Пустой файл нужно перезаписать целиком: новый пересказ ложится поверх него
+     * через временный файл и атомарную замену, поэтому читатель видит либо прежний
+     * текст, либо новый, — и рядом с кэшем не остаётся мусора.
+     */
+    @Test
+    void aCacheRewriteReplacesTheOldFileWhole(@TempDir Path dir) throws IOException {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Files.writeString(cache.resolve("photo.jpg.md"), "");
+        ScriptedLlm llm = new ScriptedLlm().willSee("Человек с котом");
+
+        visionWith(llm, cache).describe(imageFile(dir, "photo.jpg"), Vision.Kind.PHOTO, List.of());
+
+        assertEquals("Человек с котом", Files.readString(cache.resolve("photo.jpg.md")),
+                "поверх прежнего файла должен лечь целый новый");
+        try (var left = Files.list(cache)) {
+            assertEquals(1, left.count(), "временный файл не должен остаться рядом с кэшем");
+        }
     }
 
     @Test
@@ -330,9 +416,9 @@ class VisionTest {
         ScriptedLlm llm = new ScriptedLlm().willSee("кот сидит").willSee("I'm unable to assist with that.");
 
         String result = visionWith(llm, dir.resolve("cache")).describeVideo(
-                List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
+                () -> List.of(new VideoFrames.Frame(0, 1, new byte[] {1}),
                         new VideoFrames.Frame(1, 2, new byte[] {2})),
-                List.of());
+                List.of(), null, false, true);
 
         assertTrue(result.contains("кот сидит"), result);
         assertFalse(result.contains("unable"), "извинение не должно попасть в ленту времени: " + result);

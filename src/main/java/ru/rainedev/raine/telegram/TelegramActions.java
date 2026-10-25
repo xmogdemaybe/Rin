@@ -14,7 +14,11 @@ import org.slf4j.LoggerFactory;
  */
 public interface TelegramActions {
 
-    /** @return идентификатор отправленного сообщения, 0 если отправки не было */
+    /**
+     * @return идентификатор отправленного сообщения
+     * @throws RuntimeException в безопасном режиме — молчаливый ноль здесь хуже
+     *         отказа: по нему правят сообщение, которого нет
+     */
     long sendMessage(long chatId, String text, Long replyToMessageId);
 
     void openChat(long chatId);
@@ -82,7 +86,8 @@ public interface TelegramActions {
      *
      * @param activePeriod сколько секунд история живёт
      * @param audience     кому она будет видна
-     * @return номер выложенной истории, 0 если ничего не выложено
+     * @return номер выложенной истории
+     * @throws RuntimeException в безопасном режиме
      */
     long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod,
                    StoryAudience audience);
@@ -381,15 +386,29 @@ public interface TelegramActions {
     }
 
 
-    /** Ничего не делает, только пишет в лог, что сделала бы. */
+    /**
+     * Читает молча, а на запись отказывает.
+     * <p>
+     * Молчание нужно ровно там, где иначе пострадал бы чужой глаз: чат не открыт,
+     * история не просмотрена, статус не поднят. Запись же молчать не может —
+     * ответ «отправлено, идентификатор 0» ход читает как настоящий успех, потом
+     * правит сообщение под нулём и считает себя написавшей.
+     */
     final class ReadOnly implements TelegramActions {
 
         private static final Logger log = LoggerFactory.getLogger(ReadOnly.class);
 
+        /**
+         * Отказ, а не видимость действия. Набор инструментов ловит его и отвечает
+         * «не получилось»; в журнале остаётся, чем именно пришлось поступиться.
+         */
+        private static RuntimeException refused(String what) {
+            return new IllegalStateException("Режим только чтения: действие запрещено — " + what);
+        }
+
         @Override
         public long sendMessage(long chatId, String text, Long replyToMessageId) {
-            log.info("[только чтение] в чат {} ушло бы: {}", chatId, text);
-            return 0;
+            throw refused("отправка сообщения в чат " + chatId);
         }
 
         @Override
@@ -448,55 +467,53 @@ public interface TelegramActions {
 
         @Override
         public void react(long chatId, long messageId, String emoji) {
-            log.info("[только чтение] на сообщение {} в чате {} ушла бы реакция {}", messageId, chatId, emoji);
+            throw refused("реакция на сообщение " + messageId);
         }
 
         @Override
         public void forward(long toChatId, long fromChatId, long[] messageIds) {
-            log.info("[только чтение] {} сообщений переслалось бы в чат {}", messageIds.length, toChatId);
+            throw refused("пересылка " + messageIds.length + " сообщений");
         }
 
         @Override
         public void deleteMessage(long chatId, long messageId) {
-            log.info("[только чтение] сообщение {} в чате {} удалилось бы", messageId, chatId);
+            throw refused("удаление сообщения " + messageId);
         }
 
         @Override
         public void editText(long chatId, long messageId, String text, boolean isMedia) {
-            log.info("[только чтение] сообщение {} стало бы: {}", messageId, text);
+            throw refused("правка сообщения " + messageId);
         }
 
         @Override
         public void sendSticker(long chatId, Telegram.StickerRef sticker, Long replyToMessageId) {
-            log.info("[только чтение] в чат {} ушёл бы стикер {}", chatId, sticker.emoji());
+            throw refused("отправка стикера " + sticker.emoji());
         }
 
         @Override
         public void saveSticker(Telegram.StickerRef sticker) {
-            log.info("[только чтение] стикер {} сохранился бы в избранное", sticker.fileId());
+            throw refused("сохранение стикера " + sticker.fileId());
         }
 
         @Override
         public void saveContact(long userId, String firstName, String lastName) {
-            log.info("[только чтение] в контакты записался бы {} ({})", firstName, userId);
+            throw refused("запись контакта " + firstName + " (" + userId + ")");
         }
 
         @Override
         public void sendVoice(long chatId, java.nio.file.Path file, int seconds) {
-            log.info("[только чтение] в чат {} ушло бы голосовое на {} с: {}", chatId, seconds, file);
+            throw refused("отправка голосового на " + seconds + " с");
         }
 
         @Override
         public void sendPhoto(long chatId, java.nio.file.Path file, String caption) {
-            log.info("[только чтение] в чат {} ушло бы фото {} с подписью: {}", chatId, file, caption);
+            throw refused("отправка снимка " + file.getFileName());
         }
 
         @Override
         public long postStory(long chatId, java.nio.file.Path photo, String caption, int activePeriod,
                               StoryAudience audience) {
-            log.info("[только чтение] история из {} для {} с подписью «{}» осталась бы невыложенной",
-                    photo, audience, caption);
-            return 0;
+            throw refused("выкладывание истории из " + photo.getFileName());
         }
 
         @Override
@@ -511,7 +528,7 @@ public interface TelegramActions {
 
         @Override
         public void blockAndLeave(long chatId) {
-            log.info("[только чтение] чат {} заблокировался бы", chatId);
+            throw refused("блокировка чата " + chatId);
         }
     }
 }

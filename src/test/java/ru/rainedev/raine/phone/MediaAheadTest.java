@@ -54,12 +54,34 @@ class MediaAheadTest {
         MediaAhead.look(message -> "описание", List.of());
     }
 
+    /**
+     * Голосовое слушают ушами, и глаза тут ни при чём. Если вслепую греют только
+     * картинки, расшифровка собирается по очереди внутри разметки: три голосовых
+     * в открытой истории — это три обращения к эндпоинту одно за другим.
+     */
     @Test
-    void withoutEyesNothingIsWarmedUp() {
-        // зрение выключено: гонять сеть заранее ради пустого ответа — значит
-        // отнимать время у разговора
+    void earsWithoutEyesStillWarmTheVoiceNotes() {
         AtomicInteger looks = new AtomicInteger();
-        MediaDescriber blind = new MediaDescriber() {
+
+        MediaAhead.look(withoutEyes(looks, true), List.of(voiceNote(1), voiceNote(2)));
+
+        assertEquals(2, looks.get(), "голосовые греются и без зрения");
+    }
+
+    @Test
+    void withoutEyesAndEarsNothingIsWarmedUp() {
+        // зрение выключено, слуха нет: гонять сеть заранее ради пустого ответа —
+        // значит отнимать время у разговора
+        AtomicInteger looks = new AtomicInteger();
+
+        MediaAhead.look(withoutEyes(looks, false), List.of(message(1), message(2), message(3)));
+
+        assertEquals(0, looks.get(), "вслепую и без ушей разглядывать нечего");
+    }
+
+    /** Разметка вслепую — с ушами или без них. */
+    private static MediaDescriber withoutEyes(AtomicInteger looks, boolean withEars) {
+        return new MediaDescriber() {
             @Override
             public String describe(TdApi.Message message) {
                 looks.incrementAndGet();
@@ -70,10 +92,19 @@ class MediaAheadTest {
             public boolean sees() {
                 return false;
             }
+
+            @Override
+            public boolean hears() {
+                return withEars;
+            }
         };
+    }
 
-        MediaAhead.look(blind, List.of(message(1), message(2), message(3)));
-
-        assertEquals(0, looks.get(), "вслепую разглядывать нечего");
+    private static TdApi.Message voiceNote(long id) {
+        TdApi.Message message = new TdApi.Message();
+        message.id = id;
+        message.content = new TdApi.MessageVoiceNote(
+                new TdApi.VoiceNote(3, new byte[0], "audio/ogg", null, new TdApi.File()), null, false);
+        return message;
     }
 }
