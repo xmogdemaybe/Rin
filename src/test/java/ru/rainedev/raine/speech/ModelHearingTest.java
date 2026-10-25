@@ -78,13 +78,33 @@ class ModelHearingTest {
     }
 
     private static Config.Hearing hearing(boolean voiceNotes, boolean videoNotes, Path cache) {
-        return new Config.Hearing(false, "", "", "", "ru", voiceNotes, videoNotes, true, cache);
+        return new Config.Hearing(true, voiceNotes, videoNotes, true, cache);
     }
 
     private static ModelHearing with(Ears ears, Path cache, boolean voiceNotes, boolean videoNotes) {
         return new ModelHearing(ears, new Prompts(Path.of("prompts"),
                 new Config.Character("Raine", "@raine_tyan", "RaineDev")),
                 "модель", cache, hearing(voiceNotes, videoNotes, cache));
+    }
+
+    @Test
+    void theMasterSwitchSilencesTheEars() {
+        // тумблер «слух выключен» раньше ничего не значил для голосовых: он
+        // относился к отдельному распознавателю, которого больше нет
+        ModelHearing deaf = new ModelHearing(new Ears(), new Prompts(Path.of("prompts"),
+                new Config.Character("Raine", "@raine_tyan", "RaineDev")),
+                "модель", Path.of("cache"), new Config.Hearing(false, true, true, true, Path.of("cache")));
+
+        assertFalse(deaf.hearsVoiceNotes(), "выключено — значит не слушает");
+        assertFalse(deaf.hearsVideoNotes(), "выключено — значит не слушает");
+        assertFalse(deaf.hearsVideoAudio(), "выключено — значит не слушает");
+    }
+
+    @Test
+    void aVideoTrackIsHeardByTheChatModel() {
+        // дорожка ролика идёт тем же ухом, что голосовое: отдельного адреса под
+        // распознавание больше нет, и без него бот делал бы вид, что слушает
+        assertTrue(with(new Ears(), Path.of("cache"), true, true).hearsVideoAudio());
     }
 
     /**
@@ -140,8 +160,10 @@ class ModelHearingTest {
         String head = new String(ears.sounds.get(0), 0, 4, StandardCharsets.US_ASCII);
         assertEquals("RIFF", head, "модель должна получить звук, а не контейнер видео");
         assertEquals(List.of("wav"), ears.formats);
-        // и подсказка другая: в кружке есть картинка, её пересказ не нужен
-        assertTrue(ears.hints.get(0).contains("circle"), ears.hints.get(0));
+        // и подсказка другая: это дорожка ролика, а не голосовое — картинку
+        // пересказывать не нужно, её смотрит зрение
+        assertTrue(ears.hints.get(0).contains("sound track of a video"), ears.hints.get(0));
+        assertTrue(ears.hints.get(0).contains("do not describe the picture"), ears.hints.get(0));
 
         // дорожка вынимается заново каждый раз, а услышанное помнится по кружку
         assertEquals(Optional.of("тут говорят про встречу"), with(ears, cache, true, true).listen(circle, true));

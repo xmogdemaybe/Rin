@@ -11,7 +11,6 @@ import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.prompt.Prompts;
-import ru.rainedev.raine.speech.VideoAudio;
 
 /**
  * Превращает картинку в описание — иначе на присланное фото Raine видит
@@ -63,7 +62,7 @@ public final class Vision {
     private final String characterName;
 
     /** Слух подключается отдельно: без него видео остаётся немым. */
-    private ru.rainedev.raine.speech.SpeechToText hearing;
+    private ru.rainedev.raine.speech.ModelHearing hearing;
 
     public Vision(LlmClient llm, Prompts prompts, Path cacheDir,
                   String mainModel, String cheapModel, String characterName) {
@@ -75,7 +74,7 @@ public final class Vision {
         this.characterName = characterName;
     }
 
-    public void hearing(ru.rainedev.raine.speech.SpeechToText hearing) {
+    public void hearing(ru.rainedev.raine.speech.ModelHearing hearing) {
         this.hearing = hearing;
     }
 
@@ -191,24 +190,12 @@ public final class Vision {
      * @param withSound есть ли в ролике что слушать
      */
     private java.util.Optional<String> heard(java.nio.file.Path file, boolean withSound) {
-        if (!withSound || file == null || hearing == null || !hearing.isAvailable()) {
+        if (!withSound || file == null || hearing == null || !hearing.hearsVideoAudio()) {
             return java.util.Optional.empty();
         }
-        java.util.Optional<java.nio.file.Path> audio = VideoAudio.extract(file);
-        if (audio.isEmpty()) {
-            return java.util.Optional.empty();
-        }
-        try {
-            java.util.Optional<String> speech = hearing.listen(audio.get());
-            speech.ifPresent(text -> log.info("Услышано в видео: {}", text));
-            return speech;
-        } finally {
-            try {
-                java.nio.file.Files.deleteIfExists(audio.get());
-            } catch (java.io.IOException e) {
-                log.debug("Временная дорожка не удалилась: {}", e.getMessage());
-            }
-        }
+        // дорожку берёт слух: звук из файла вынимают раскодированием, а не
+        // временным ogg, который было кому разобрать, кроме шёпота
+        return hearing.listen(file, true);
     }
 
     private static String quietly(java.util.concurrent.Future<String> caption) {

@@ -5,7 +5,6 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,8 +31,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Достаёт звуковую дорожку из видео — сырым звуком ({@link #sound}) или в
- * OGG/Opus ({@link #extract}), как требует вызывающий.
+ * Достаёт звуковую дорожку из видео — сырым звуком, каким его понимает
+ * разговорная модель.
  * <p>
  * Всё делается своими силами: контейнер MP4 разбирается и AAC декодируется
  * чистой Java, дальше звук сводится в моно и пересчитывается под речь.
@@ -49,9 +48,6 @@ public final class VideoAudio {
 
     /** Речь распознаётся и с такой частоты, а файл выходит втрое легче. */
     private static final int TARGET_RATE = 16_000;
-
-    /** Больше на речь тратить незачем. */
-    private static final int BITRATE = 24_000;
 
     /**
      * Дальше этого времени звук не берём: ролик из переписки — это минуты,
@@ -79,26 +75,6 @@ public final class VideoAudio {
     private static final List<String> KNOWN_BOXES = List.of("ftyp", "moov", "mdat", "free", "skip", "wide");
 
     private VideoAudio() {}
-
-    /**
-     * @return файл с дорожкой или пусто, если звука нет или формат не поддался.
-     *         Файл временный — удалить его должен вызывающий
-     */
-    public static Optional<Path> extract(Path video) {
-        Optional<Sound> sound = sound(video);
-        if (sound.isEmpty()) {
-            return Optional.empty();
-        }
-        try {
-            byte[] ogg = OggOpus.encode(sound.get().samples(), sound.get().rate(), BITRATE);
-            Path audio = Files.createTempFile("rin-audio-", ".ogg");
-            Files.write(audio, ogg);
-            return Optional.of(audio);
-        } catch (IOException | RuntimeException e) {
-            log.debug("Дорожка не сложилась: {}", e.getMessage());
-            return Optional.empty();
-        }
-    }
 
     /**
      * Дорожка сырым звуком.

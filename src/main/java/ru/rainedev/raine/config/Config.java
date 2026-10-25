@@ -138,8 +138,8 @@ public record Config(
      * @param markListened помечать ли услышанное прослушанным: галочку увидит
      *                     автор сообщения, и решать это должен владелец
      */
-    public record Hearing(boolean enabled, String baseUrl, String apiKey, String model, String language,
-                          boolean voiceNotes, boolean videoNotes, boolean markListened, Path cacheDir) {}
+    public record Hearing(boolean enabled, boolean voiceNotes, boolean videoNotes,
+                          boolean markListened, Path cacheDir) {}
 
     /** Генерация снимков. */
     /**
@@ -235,13 +235,8 @@ public record Config(
                         s.integer("voice_bitrate", 24000, "битрейт голосового сообщения"),
                         s.path("voice_dir", "data/voice_messages", "куда складывать записанные голосовые")),
                 new Hearing(
-                        s.flag("hearing_enabled", true, "расшифровывать ли звук из присланных видео"),
-                        s.inherit("hearing_base_url", s.require("llm_base_url", "адрес модели"),
-                                "адрес распознавания речи"),
-                        s.inherit("hearing_api_key", s.require("llm_api_key", "ключ модели"),
-                                "ключ распознавания речи"),
-                        s.get("hearing_model", "openai/whisper-1", "модель распознавания речи"),
-                        s.get("hearing_language", "ru", "язык, на котором говорят в видео"),
+                        s.flag("hearing_enabled", true,
+                                "расшифровывать ли звук из присланных видео: роль слушает та же модель, что говорит"),
                         s.flag("hearing_voice_notes", true,
                                 "слушать ли голосовые самой модели: без премиума это единственный способ узнать, что в них сказали"),
                         s.flag("hearing_video_notes", true,
