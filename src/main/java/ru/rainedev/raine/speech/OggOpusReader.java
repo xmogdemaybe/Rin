@@ -118,7 +118,12 @@ public final class OggOpusReader {
                 current.writeBytes(Arrays.copyOfRange(file, cursor, cursor + size));
                 cursor += size;
                 if (size < 255) {
-                    found.add(current.toByteArray());
+                    // пустой пакет — не звук: на нём кодек достраивает до 120 мс
+                    // по последнему слышанному, и эти отсчёты ушли бы в wav как
+                    // голос из записи
+                    if (current.size() > 0) {
+                        found.add(current.toByteArray());
+                    }
                     current.reset();
                 }
             }
@@ -220,6 +225,14 @@ public final class OggOpusReader {
                 }
             }
             ByteBuffer buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
+            // версия формата: RFC 7845 оставляет ей единицу и велит отбросить
+            // любую другую — с неизвестной версией раскладка байтов может быть
+            // другой, а раскодировать её наугад значит выдать за речь мусор
+            int version = buffer.get(8) & 0xFF;
+            if (version != 1) {
+                log.debug("Описание потока версии {} — не разбираем", version);
+                return Optional.empty();
+            }
             int channels = buffer.get(9) & 0xFF;
             // раскладка каналов за нулевой строчкой: под ней surround-потоки,
             // а их мы расшифровать не пытаемся

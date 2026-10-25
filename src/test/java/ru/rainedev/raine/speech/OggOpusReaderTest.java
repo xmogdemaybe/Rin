@@ -90,6 +90,42 @@ class OggOpusReaderTest {
         assertTrue(sound.get().samples().length < 16_000);
     }
 
+    /**
+     * Описание потока называет версию кодека, и RFC 7845 оставляет её одну — 1,
+     * веля отбросить любую другую. Раскодировать поток с неизвестной версией
+     * значит выдать за речь то, что кодек понял наугад: раскладка байтов в таком
+     * потоке может быть другой, а звука в нём — никакого.
+     */
+    @Test
+    void aStreamOfUnknownVersionIsRefused() throws Exception {
+        for (int version : new int[] {0, 2}) {
+            byte[] wrong = oggOfOneSecond().clone();
+            int at = indexOf(wrong, "OpusHead");
+            assertTrue(at > 0, "образец должен начинаться с описания потока");
+            wrong[at + 8] = (byte) version;
+
+            assertTrue(OggOpusReader.decode(wrong, 300).isEmpty(),
+                    "версию " + version + " в описании потока раскодировать нельзя");
+        }
+    }
+
+    /**
+     * Нулевая строка в таблице длин — разрыв в потоке: звука в ней нет. Пустой
+     * пакет Opus кодек не пропускает, а достраивает до 120 мс по последнему
+     * слышанному, и эти отсчёты легли бы в wav как голос из записи.
+     */
+    @Test
+    void anEmptySegmentIsNotAPacket() {
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        stream.writeBytes(page(0x02, 0, List.of(head(), tags())));
+        stream.writeBytes(rawPage(0x00, 4800, new int[] {0, 10, 0}, new byte[10]));
+
+        List<byte[]> packets = OggOpusReader.packets(stream.toByteArray());
+
+        assertEquals(3, packets.size(), "пустых пакетов в счёт не идёт: " + packets.size());
+        assertEquals(10, packets.get(2).length, "звук — только непустой пакет");
+    }
+
     @Test
     void aPacketSpanningPagesIsStitchedBack() {
         // пакет в 300 байт: полная строка в 255 и остаток в 45 — страница

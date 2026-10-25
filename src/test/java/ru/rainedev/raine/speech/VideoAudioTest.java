@@ -2,6 +2,7 @@ package ru.rainedev.raine.speech;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -9,6 +10,9 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -104,6 +108,40 @@ class VideoAudioTest {
         } finally {
             Files.deleteIfExists(video);
         }
+    }
+
+    /**
+     * Разбор, который не слышит прерывания, — это не только потерянный ответ:
+     * он держит открытый файл. Отмена задания сама по себе дескриптор не
+     * освобождает, поэтому по дедлайне закрывают и канал.
+     */
+    @Test
+    void aParseThatIgnoresInterruptionStillLetsGoOfTheFile() {
+        AtomicBoolean closed = new AtomicBoolean();
+        AtomicReference<AutoCloseable> opened = new AtomicReference<>();
+        opened.set(() -> closed.set(true));
+
+        Optional<Sound> taken = VideoAudio.guard(1, () -> {
+            while (!closed.get()) {
+                // этот разбор прерываний не замечает: ждёт, пока у него отберут файл
+                Thread.onSpinWait();
+            }
+            return Optional.of(new Sound(new short[] {1}, RATE, false));
+        }, opened);
+
+        assertTrue(taken.isEmpty(), "сорванный разбор не отдаёт дорожку");
+        assertTrue(closed.get(), "файл обязан быть закрыт, иначе дескриптор повиснет до конца работы");
+    }
+
+    /** Разбор, уложившийся в срок, обязан вернуться целиком. */
+    @Test
+    void aFinishedParseIsNotSwallowedByTheDeadline() {
+        Sound sound = new Sound(new short[] {1, 2, 3}, RATE, false);
+
+        Optional<Sound> taken = VideoAudio.guard(60, () -> Optional.of(sound), new AtomicReference<>());
+
+        assertTrue(taken.isPresent(), "готовый результат не должен теряться");
+        assertSame(sound, taken.get());
     }
 
     @Test

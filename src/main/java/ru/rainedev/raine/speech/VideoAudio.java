@@ -10,12 +10,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import net.sourceforge.jaad.SampleBuffer;
 import net.sourceforge.jaad.aac.Decoder;
 import org.jcodec.codecs.mpeg4.mp4.EsdsBox;
@@ -56,6 +58,13 @@ public final class VideoAudio {
      */
     private static final int TIMEOUT_SECONDS = 60;
 
+    /**
+     * Сколько секунд ждём, пока отменённый разбор отдаст файл. Обычно он выходит
+     * сразу, как только заметит прерывание или закрытый канал; столько остаётся
+     * на редкий случай, где не выходит никуда.
+     */
+    private static final int STOP_GRACE_SECONDS = 5;
+
     /** Длина заголовка ADTS без контрольной суммы. */
     private static final int ADTS_HEADER = 7;
 
@@ -90,18 +99,37 @@ public final class VideoAudio {
         }
         // разбор идёт в стороне от общего потока: чужой файл может оказаться
         // таким, что библиотека на нём зациклится, и ждать её вечно мы не станем
+        AtomicReference<AutoCloseable> opened = new AtomicReference<>();
+        return guard(TIMEOUT_SECONDS, () -> decodeTrack(video, maxSeconds, opened), opened);
+    }
+
+    /**
+     * Разбор с дедлайном.
+     * <p>
+     * Прерывание слышит только тот, кто на него смотрит, а библиотека внутри
+     * своего цикла его не замечает вовсе. Поэтому по истечении срока отменяют не
+     * только ожидание, но и канал, который разбор держит открытым: один лишь
+     * cancel оставил бы дескриптор файла висеть до конца работы бота, и таких
+     * накопилось бы по числу битых роликов.
+     * <p>
+     * Видно пакету: так проверяют и то, что готовый результат возвращается, и то,
+     * что разбор, который прерываний не слушает, всё равно отдаёт файл.
+     *
+     * @param opened сюда разбор отмечает свой канал, как только его открыл
+     */
+    static Optional<Sound> guard(int timeoutSeconds, Callable<Optional<Sound>> parse,
+                                 AtomicReference<AutoCloseable> opened) {
         ExecutorService worker = Executors.newSingleThreadExecutor(task -> {
             Thread thread = new Thread(task, "video-audio");
             // если разбор всё-таки завис, он не помешает боту остановиться
             thread.setDaemon(true);
             return thread;
         });
-        Future<Optional<Sound>> parsed = worker.submit(() -> decodeTrack(video, maxSeconds));
+        Future<Optional<Sound>> pending = worker.submit(parse);
         try {
-            return parsed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            return pending.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            parsed.cancel(true);
-            log.debug("Разбор звука не уложился в {} с — слушать не будем", TIMEOUT_SECONDS);
+            log.debug("Разбор звука не уложился в {} с — слушать не будем", timeoutSeconds);
             return Optional.empty();
         } catch (ExecutionException e) {
             log.debug("Звук из видео не разобрался: {}", e.getCause().getMessage());
@@ -110,7 +138,38 @@ public final class VideoAudio {
             Thread.currentThread().interrupt();
             return Optional.empty();
         } finally {
+            pending.cancel(true);
+            close(opened);
             worker.shutdownNow();
+            awaitStop(worker);
+        }
+    }
+
+    /**
+     * Дать прерванному разбору договорить: он выходит из цикла, лишь заметив
+     * прерывание или закрытый канал, и только тогда файл освобождён по-настоящему.
+     * Не дождались — говорим прямо, а не делаем вид, что дескриптор вернулся.
+     */
+    private static void awaitStop(ExecutorService worker) {
+        try {
+            if (!worker.awaitTermination(STOP_GRACE_SECONDS, TimeUnit.SECONDS)) {
+                log.warn("Разбор звука не остановился и после отмены — файл, возможно, всё ещё открыт");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Канал мог и не открыться: разбор до него не дошёл. */
+    private static void close(AtomicReference<AutoCloseable> opened) {
+        AutoCloseable channel = opened.get();
+        if (channel == null) {
+            return;
+        }
+        try {
+            channel.close();
+        } catch (Exception e) {
+            log.debug("Канал разбора не закрылся: {}", e.getMessage());
         }
     }
 
@@ -125,9 +184,14 @@ public final class VideoAudio {
         }
     }
 
-    private static Optional<Sound> decodeTrack(Path video, int maxSeconds) {
+    /**
+     * @param opened сюда отмечаем канал, едва он открыт: ждущий разбор с дедлайном
+     *               закрывает его сам, если разбор до своей остановки не дошёл
+     */
+    private static Optional<Sound> decodeTrack(Path video, int maxSeconds, AtomicReference<AutoCloseable> opened) {
         Sound taken;
         try (FileChannelWrapper channel = NIOUtils.readableChannel(video.toFile())) {
+            opened.set(channel);
             Optional<Aac> track = audioTrack(MP4Demuxer.createMP4Demuxer(channel));
             if (track.isEmpty()) {
                 log.debug("В видео нет разбираемой звуковой дорожки");
@@ -225,6 +289,13 @@ public final class VideoAudio {
 
         Packet packet;
         while ((packet = track.nextFrame()) != null) {
+            if (Thread.currentThread().isInterrupted()) {
+                // половина дорожки не годится за целую: недослышанное ушло бы в
+                // разговор как дослышанное. Прерывание смотрим здесь сами —
+                // библиотека его не смотрит и крутила бы цикл, держа файл открытым
+                log.debug("Разбор дорожки прерван — слушать не будем");
+                return null;
+            }
             byte[] encoded = new byte[packet.getData().remaining()];
             packet.getData().duplicate().get(encoded);
             try {
