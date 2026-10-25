@@ -1144,10 +1144,8 @@ public final class TelegramTools {
      */
     public Tool postStory(StoryAudience audience) {
         return Tool.named("post_story")
-                .describedAs(("Posts a story from your gallery. It stays up for a day and is visible to "
-                        + "%s. Take the photo with take_photo first, or reuse one you already have. "
-                        + "Only one story of yours can be up at a time.").formatted(audience.described()))
-                .requiredString("photo", "Filename from your gallery, the one take_photo returned")
+                .describedAs(postStoryDescription(audience))
+                .requiredString("photo", "Filename of a photo that lies in your gallery")
                 .optionalString("caption", "Optional short caption under the photo")
                 .mutating()
                 .build(arguments -> {
@@ -1157,7 +1155,7 @@ public final class TelegramTools {
                     }
                     java.nio.file.Path photo = fileInside(gallery, name);
                     if (photo == null) {
-                        return "There is no such photo. Take one with take_photo first.";
+                        return missingGalleryPhoto();
                     }
                     // история принадлежит чату, а свой чат — это чат с собой
                     long chatId = telegram.myChatId();
@@ -1177,6 +1175,24 @@ public final class TelegramTools {
                     log.info("История {} выложена из снимка {} для {}", storyId, name, audience);
                     return "Story posted — visible to %s. It will be up for a day.".formatted(audience.described());
                 });
+    }
+
+    /**
+     * Слова post_story. Камеры среди них нет: галерея живёт независимо от
+     * генератора снимков, а take_photo к тому же появляется в наборе только внутри
+     * открытого чата — постоянный инструмент не может на него ссылаться.
+     * <p>
+     * Видно пакету: тексты проверяют без Telegram.
+     */
+    static String postStoryDescription(StoryAudience audience) {
+        return ("Posts a story from your gallery: any photo that already lies there. It stays up for a day "
+                + "and is visible to %s. Only one story of yours can be up at a time.")
+                .formatted(audience.described());
+    }
+
+    /** Файла с таким именем в галерее нет — и сказать надо именно про галерею. */
+    static String missingGalleryPhoto() {
+        return "There is no photo with that name in your gallery.";
     }
 
     /**
