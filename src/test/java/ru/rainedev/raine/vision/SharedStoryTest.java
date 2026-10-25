@@ -105,6 +105,28 @@ class SharedStoryTest {
     }
 
     @Test
+    void aLookThatFailedIsNamedAtOnce() {
+        // зрение включено, а слов нет: эндпоинт отверг картинку, и молчать после
+        // этого — значит оставить модели чистый лист, который она заполнит сама
+        String loss = TelegramMedia.loss("", photoContent(3), true);
+
+        assertTrue(loss.contains("did not get to see"), loss);
+        assertTrue(loss.contains("instead of describing"), loss);
+        assertEquals("", TelegramMedia.loss("", photoContent(3), false),
+                "вслепую жаловаться не на что: глаз не звал картинку");
+        assertEquals("снег", TelegramMedia.loss("снег", photoContent(3), true),
+                "раз разглядели — слова не трогать");
+    }
+
+    @Test
+    void anEmptyStoryIsNotCalledAFailure() {
+        // содержимое Telegram не разобрал сам: смотреть было нечего, никакого
+        // сбоя не случилось — и выдуманная жалоба на него была бы второй ложью
+        assertEquals("", TelegramMedia.loss("", new TdApi.StoryContentUnsupported(), true));
+        assertEquals("", TelegramMedia.loss("", null, true));
+    }
+
+    @Test
     void theDescriptionIsWrappedIntoTheBlock() {
         String block = TelegramMedia.storyBlock(story("гуляла"), "<photo description>\nснег\n</photo>\n");
 

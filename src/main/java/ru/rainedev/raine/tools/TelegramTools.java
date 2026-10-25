@@ -881,7 +881,11 @@ public final class TelegramTools {
         int shown = Math.min(STORY_FEED_LIMIT, lines.size());
         StringBuilder out = new StringBuilder("These people have stories right now:\n<stories>\n")
                 .append(String.join("", lines.subList(0, shown)))
-                .append("</stories>");
+                .append("</stories>\n")
+                // список — это обложки, а не содержимое: без этого слова модель
+                // описывает историю по памяти и отвечает так, будто смотрела
+                .append("None of these have been seen yet. Before you say what a story shows, ")
+                .append("watch it with watch_story — otherwise say that you have not looked.");
         return shown == lines.size()
                 ? out.toString()
                 : out + "\nThe list is cut short: %d more are up but not shown here."
