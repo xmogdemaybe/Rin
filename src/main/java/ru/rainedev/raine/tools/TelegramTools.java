@@ -230,6 +230,9 @@ public final class TelegramTools {
                         + "name them and describe their appearance as specifically as you can. Example: "
                         + "\"Selfie with her sister: anime young female, gold eyes, white hair, "
                         + "white dress, black socks\".")
+                // съёмка — действие: чат сразу показывает «загружает фото…»,
+                // а сам снимок в безопасном режиме некуда отправить
+                .mutating()
                 .build(arguments -> {
                     String wish = arguments.path("photo_desc").asText("").strip();
                     if (wish.isEmpty()) {
