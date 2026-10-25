@@ -187,7 +187,9 @@ public final class ReliabilityChecks {
             Files.writeString(file, Files.readString(file).replace("llm_model=old", "llm_model=new").replace("sleep_consolidation=false", "sleep_consolidation=true"));
             Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() + 2000));
             var checkOnce = LiveConfig.class.getDeclaredMethod("checkOnce"); checkOnce.setAccessible(true); checkOnce.invoke(live);
-            check(live.restartRequired().equals(List.of("llm")), "restart-only fields were not identified");
+            // зрение без своего имени берёт разговорное, поэтому смена llm_model
+            // трогает и его — оба блока требуют перезапуска
+            check(live.restartRequired().equals(List.of("vision", "llm")), "restart-only fields were not identified");
             check(live.current().sleepConsolidation(), "hot setting not picked up");
         }
     }
