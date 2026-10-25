@@ -144,12 +144,26 @@ public final class ImageGenerator {
                 onReady.accept(take(wish));
             } catch (RuntimeException e) {
                 log.warn("Снимок не получился: {}", e.getMessage());
-                onFailure.accept(e.getMessage());
+                onFailure.accept(failureFor(e));
             } finally {
                 busy.set(false);
             }
         });
         return true;
+    }
+
+    /**
+     * Чем неудача объясняется ей самой. Свои формулировки — отзыв о снимке и
+     * ответ очереди — уходят целиком: из них видно, что править. У ошибки без
+     * текста брать нечего, и «null» в уведомлении был бы не объяснением, а мусором.
+     * <p>
+     * Видно пакету: текст проверяют без очереди.
+     */
+    static String failureFor(Throwable failure) {
+        String message = failure.getMessage();
+        return message == null || message.isBlank()
+                ? "Съёмка оборвалась без внятной причины."
+                : message;
     }
 
     /** @return файл в галерее */

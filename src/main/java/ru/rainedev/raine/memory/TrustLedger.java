@@ -194,7 +194,7 @@ public final class TrustLedger {
             // атомарная запись: файл либо цел, либо не пострадал; наверх не кидаем —
             // ход не должен ломаться из-за диска
             log.error("Доверие: не записать {} — {}", file, e.getMessage());
-            return "The write did not go through: " + e.getMessage() + ". The ledger is unchanged.";
+            return "The write did not go through — the file would not take it. The ledger is unchanged.";
         }
         lastChange.put(userId, Instant.now(clock));
         log.info("Доверие: id {}{} теперь {}", userId, name.isEmpty() ? "" : " (" + name + ")",
