@@ -285,9 +285,9 @@ class ModelHearingTest {
     }
 
     /**
-     * Файл кэша пишется не атомарно: посреди записи его можно застать пустым или
-     * оборванным. Принятая за услышанное пустота ставила бы автору отметку
-     * «прослушано» и отдавала бы в разговор пустую расшифровку.
+     * Пустой файл кэша остаётся от записи, прерванной на середине. Принятая за
+     * услышанное пустота ставила бы автору отметку «прослушано» и отдавала бы в
+     * разговор пустую расшифровку.
      */
     @Test
     void anEmptyCacheFileIsNotAnAnswer(@TempDir Path dir) throws Exception {
@@ -300,6 +300,27 @@ class ModelHearingTest {
         assertEquals(Optional.of("привет"), with(ears, cache, true, true).listen(voice, Track.VOICE),
                 "пустой кэш — промах, а не услышанное");
         assertEquals(1, ears.sounds.size(), "прослушивание должно состояться, а не отразиться пустотой");
+    }
+
+    /**
+     * Оборванную запись нужно перезаписать целиком, а не половинами: новый ответ
+     * ложится поверх существующего файла через временный, поэтому читатель видит
+     * либо прежний текст, либо новый, — и рядом с кэшем не остаётся мусора.
+     */
+    @Test
+    void aCacheRewriteReplacesTheOldFileWhole(@TempDir Path dir) throws Exception {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Files.writeString(cache.resolve("voice-1.ogg.heard.md"), "");
+        Ears ears = new Ears().willHear("привет, папик");
+
+        assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voiceNote(dir), Track.VOICE));
+
+        assertEquals("привет, папик", Files.readString(cache.resolve("voice-1.ogg.heard.md")),
+                "поверх прежнего файла должен лечь целый новый");
+        try (var left = Files.list(cache)) {
+            assertEquals(1, left.count(), "временный файл не должен остаться рядом с кэшем");
+        }
     }
 
     /**

@@ -13,6 +13,7 @@ import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.prompt.Prompts;
 import ru.rainedev.raine.speech.ModelHearing.Track;
+import ru.rainedev.raine.storage.AtomicFiles;
 
 /**
  * Превращает картинку в описание — иначе на присланное фото Raine видит
@@ -324,9 +325,9 @@ public final class Vision {
     /**
      * Готовое описание или null, если смотреть правда нужно.
      * <p>
-     * Пустое содержимое — промах, а не описание: файл пишется не атомарно, и его
-     * можно застать ещё не заполненным. Принятая за описание пустота выглядела бы
-     * как просмотренная картинка без единого слова о ней.
+     * Пустое содержимое — промах, а не описание: такой файл остаётся от записи,
+     * прерванной на середине. Принятая за описание пустота выглядела бы как
+     * просмотренная картинка без единого слова о ней.
      */
     private String fromCache(Path file) {
         try {
@@ -337,10 +338,13 @@ public final class Vision {
         }
     }
 
+    /**
+     * Замена идёт через временный файл: прежний кэш либо остаётся целым, либо
+     * уступает место целому новому — но никогда не оборванному на середине.
+     */
     private void toCache(Path file, String description) {
         try {
-            Files.createDirectories(cacheDir);
-            Files.writeString(cacheFor(file), description);
+            AtomicFiles.writeString(cacheFor(file), description);
         } catch (IOException e) {
             log.debug("Описание не сохранилось в кэш: {}", e.getMessage());
         }

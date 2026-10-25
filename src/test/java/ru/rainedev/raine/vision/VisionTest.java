@@ -265,9 +265,8 @@ class VisionTest {
     }
 
     /**
-     * Файл кэша пишется не атомарно: посреди записи его можно застать пустым или
-     * оборванным. Принятый за описание, он выглядел бы как просмотренная картинка
-     * без единого слова о ней.
+     * Пустой файл кэша остаётся от записи, прерванной на середине. Принятый за
+     * описание, он выглядел бы как просмотренная картинка без единого слова о ней.
      */
     @Test
     void anEmptyCacheFileIsNotADescription(@TempDir Path dir) throws IOException {
@@ -281,6 +280,27 @@ class VisionTest {
 
         assertEquals(1, llm.seen.get(), "пустой кэш не должен выглядеть описанием");
         assertTrue(seen.contains("Человек с котом"), seen);
+    }
+
+    /**
+     * Пустой файл нужно перезаписать целиком: новый пересказ ложится поверх него
+     * через временный файл и атомарную замену, поэтому читатель видит либо прежний
+     * текст, либо новый, — и рядом с кэшем не остаётся мусора.
+     */
+    @Test
+    void aCacheRewriteReplacesTheOldFileWhole(@TempDir Path dir) throws IOException {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Files.writeString(cache.resolve("photo.jpg.md"), "");
+        ScriptedLlm llm = new ScriptedLlm().willSee("Человек с котом");
+
+        visionWith(llm, cache).describe(imageFile(dir, "photo.jpg"), Vision.Kind.PHOTO, List.of());
+
+        assertEquals("Человек с котом", Files.readString(cache.resolve("photo.jpg.md")),
+                "поверх прежнего файла должен лечь целый новый");
+        try (var left = Files.list(cache)) {
+            assertEquals(1, left.count(), "временный файл не должен остаться рядом с кэшем");
+        }
     }
 
     @Test

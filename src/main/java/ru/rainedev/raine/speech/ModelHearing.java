@@ -11,6 +11,7 @@ import ru.rainedev.raine.config.Config;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.prompt.Prompts;
+import ru.rainedev.raine.storage.AtomicFiles;
 
 /**
  * Слух самой модели.
@@ -331,9 +332,9 @@ public final class ModelHearing {
     /**
      * Одна и та же запись прилетает не раз: чат открывают снова и снова.
      * <p>
-     * Пустое содержимое — промах, а не услышанное. Файл пишется не атомарно, и
-     * его можно застать ещё не заполненным; принятая за расшифровку пустота
-     * отдала бы её в разговор и поставила бы автору отметку «прослушано».
+     * Пустое содержимое — промах, а не услышанное: такой файл остаётся от записи,
+     * прерванной на середине, а принятая за расшифровку пустота отдала бы её в
+     * разговор и поставила бы автору отметку «прослушано».
      */
     private String fromCache(Path file) {
         try {
@@ -344,10 +345,13 @@ public final class ModelHearing {
         }
     }
 
+    /**
+     * Замена идёт через временный файл: прежний кэш либо остаётся целым, либо
+     * уступает место целому новому — но никогда не оборванному на середине.
+     */
     private void toCache(Path file, String heard) {
         try {
-            Files.createDirectories(cacheDir);
-            Files.writeString(cacheFor(file), heard);
+            AtomicFiles.writeString(cacheFor(file), heard);
         } catch (IOException e) {
             log.debug("Услышанное не сохранилось в кэш: {}", e.getMessage());
         }
