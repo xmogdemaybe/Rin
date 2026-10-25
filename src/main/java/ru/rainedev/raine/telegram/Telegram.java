@@ -383,9 +383,12 @@ public final class Telegram {
      * распознавателя — состояние терминальное, и ждать его текста бессмысленно,
      * а оборванный промежуточный кусок отдаём, когда время вышло: начало
      * честнее молчания.
+     * <p>
+     * Состояние сообщения спрашивается свежим, а не из кэша: оно меняется как раз
+     * в те секунды, пока мы ждём.
      */
     public Optional<String> recognizeSpeech(long chatId, long messageId) {
-        Wait first = message(chatId, messageId).map(Wait::of).orElse(Wait.NOTHING);
+        Wait first = freshMessage(chatId, messageId).map(Wait::of).orElse(Wait.NOTHING);
         if (first.heard().isPresent()) {
             return first.heard();
         }
@@ -415,7 +418,7 @@ public final class Telegram {
                 Thread.currentThread().interrupt();
                 return Optional.empty();
             }
-            Wait wait = message(chatId, messageId).map(Wait::of).orElse(Wait.NOTHING);
+            Wait wait = freshMessage(chatId, messageId).map(Wait::of).orElse(Wait.NOTHING);
             if (wait.heard().isPresent()) {
                 return wait.heard();
             }
@@ -851,18 +854,33 @@ public final class Telegram {
     private static final int SEND_CONFIRMATION_SECONDS = 5;
 
     public Optional<TdApi.Message> message(long chatId, long messageId) {
-        return messageCache.optional(chatId + ":" + messageId, key -> {
-            try {
-                return Optional.ofNullable(ask(new TdApi.GetMessage(chatId, messageId)));
-            } catch (RuntimeException e) {
-                return Optional.empty();
-            }
-        });
+        return messageCache.optional(messageKey(chatId, messageId), key -> askMessage(chatId, messageId));
+    }
+
+    /**
+     * Тот же вопрос, но мимо срока жизни кэша. Нужно опросу, который ждёт, пока
+     * состояние сообщения изменится: недавний снимок здесь не экономия, а задержка
+     * на весь срок — Telegram уже ответил, а она всё ещё видит прошлый ответ.
+     */
+    private Optional<TdApi.Message> freshMessage(long chatId, long messageId) {
+        return messageCache.refresh(messageKey(chatId, messageId), key -> askMessage(chatId, messageId));
+    }
+
+    private Optional<TdApi.Message> askMessage(long chatId, long messageId) {
+        try {
+            return Optional.ofNullable(ask(new TdApi.GetMessage(chatId, messageId)));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    private static String messageKey(long chatId, long messageId) {
+        return chatId + ":" + messageId;
     }
 
     /** Текст правили или сообщение удалили — прежний ответ больше не верен. */
     public void forgetMessage(long chatId, long messageId) {
-        messageCache.forget(chatId + ":" + messageId);
+        messageCache.forget(messageKey(chatId, messageId));
     }
 
     public void typing(long chatId) {
