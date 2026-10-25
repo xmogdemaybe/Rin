@@ -60,6 +60,20 @@ public final class TelegramTools {
     /** Столько строк ленты историй уходит в ответ разом: дальше — простыня. */
     static final int STORY_FEED_LIMIT = 40;
 
+    /**
+     * Столько свежих историй лента открывает сама за один вызов. Каждая — запрос
+     * зрению, который длится секунды, и вызов мог бы ждать дольше самого
+     * разговора. Остальные она доглядывает по списку, если сочтёт нужным.
+     */
+    static final int STORY_AUTO_WATCH = 2;
+
+    /**
+     * История протухла — её уже не видно. В ленте она остаётся обложкой:
+     * развёрнуть её значило бы отчитаться просмотром, которого не было.
+     * Видно пакету: лента сверяется с этим словом.
+     */
+    static final String STORY_GONE = "That story is gone — they expire after a day or two.";
+
     /** Длиннее превью в списке чатов не нужно. */
     private static final int PREVIEW_LENGTH = 80;
 
@@ -838,20 +852,27 @@ public final class TelegramTools {
     }
 
     /**
-     * Лента историй: кто сейчас что выложил.
+     * Лента историй: кто сейчас что выложил — и что правда видно на свежих.
      * <p>
      * Наружу выходят только чаты из круга общения: иначе список рассказал бы,
      * кто именно выложил историю, тому, с кем говорить не разрешено.
+     * <p>
+     * Несколько первых непросмотренных открываются здесь же: обложка ничего не
+     * рассказывает, и без просмотра оставалось бы выбирать — молчать о чужой
+     * жизни или выдумывать её.
      */
     public Tool viewStories() {
         return Tool.simple("view_stories",
-                "Shows whose stories are up right now: how many of them you have not seen and which one to start "
-                        + "with. Watching a story is a separate call — take chat_id and story_id from this list.",
+                "Shows whose stories are up right now and opens the freshest unseen ones for you: what is really "
+                        + "in an opened story is written out under the list. Anyone without a line there is still "
+                        + "a cover — open them with watch_story, taking chat_id and story_id from this list. "
+                        + "Opening a story is counted to its author as a view.",
                 arguments -> {
                     if (storyFeed == null) {
                         return "Stories are turned off.";
                     }
                     List<String> lines = new java.util.ArrayList<>();
+                    List<String> seen = new java.util.ArrayList<>();
                     for (ru.rainedev.raine.telegram.Stories.Entry entry : storyFeed.feed()) {
                         TdApi.Chat chat;
                         try {
@@ -863,8 +884,22 @@ public final class TelegramTools {
                             continue;
                         }
                         lines.add(storyLine(entry, chat.title, kindOf(chat)));
+                        // открывают только там, где есть глаза: вслепую просмотр
+                        // засчитали бы автору, а за ним ничего не стоит
+                        if (entry.unseen() > 0 && seen.size() < STORY_AUTO_WATCH && media != null && media.sees()) {
+                            try {
+                                String looked = watch(chat, entry.first());
+                                if (worthTelling(looked)) {
+                                    seen.add(watchedOf(chat.id, entry.first(), chat.title, looked));
+                                }
+                            } catch (RuntimeException e) {
+                                // одна не открылась — лента остаётся обложками:
+                                // список без одной истории лучше отказа всей ленты
+                                log.debug("Историю {} чата {} не разглядела: {}", entry.first(), chat.id, e.getMessage());
+                            }
+                        }
                     }
-                    return feedOf(lines);
+                    return feedOf(lines, seen);
                 });
     }
 
@@ -872,24 +907,50 @@ public final class TelegramTools {
      * Ответ ленты из готовых строк. Telegram пополняет её весь день, и список
      * мог бы разрастись до сотен чатов — тогда он занял бы полконтекста.
      * Показываем начало, а остаток называем вслух: молчаливый обрезок модель
-     * прочла бы как «больше никого нет». Видно пакету: склейку проверяют без Telegram.
+     * прочла бы как «больше никого нет». Открытые истории названы здесь же:
+     * без этого слова обложку пересказывают по памяти, будто её смотрели.
+     * Видно пакету: склейку проверяют без Telegram.
      */
-    static String feedOf(List<String> lines) {
+    static String feedOf(List<String> lines, List<String> seen) {
         if (lines.isEmpty()) {
             return "No one has stories up right now.";
         }
         int shown = Math.min(STORY_FEED_LIMIT, lines.size());
-        StringBuilder out = new StringBuilder("These people have stories right now:\n<stories>\n")
-                .append(String.join("", lines.subList(0, shown)))
-                .append("</stories>\n")
-                // список — это обложки, а не содержимое: без этого слова модель
-                // описывает историю по памяти и отвечает так, будто смотрела
-                .append("None of these have been seen yet. Before you say what a story shows, ")
-                .append("watch it with watch_story — otherwise say that you have not looked.");
+        String watched = seen.isEmpty()
+                ? "None of these have been seen yet. Before you say what a story shows, "
+                        + "watch it with watch_story — otherwise say that you have not looked."
+                : "These were opened just now, and this is what is really in them:\n"
+                        + String.join("", seen)
+                        + "The ids named there have been seen: opening one again would count a second view "
+                        + "to its author. Anyone without a line there is still a cover: nothing of theirs has "
+                        + "been seen. Say you have not looked, or open one with watch_story.";
+        String answer = "These people have stories right now:\n<stories>\n"
+                + String.join("", lines.subList(0, shown)) + "</stories>\n" + watched;
         return shown == lines.size()
-                ? out.toString()
-                : out + "\nThe list is cut short: %d more are up but not shown here."
+                ? answer
+                : answer + "\nThe list is cut short: %d more are up but not shown here."
                         .formatted(lines.size() - shown);
+    }
+
+    /**
+     * Развёрнутая история в ответе ленты: чья она и что в ней видно. Номер рядом
+     * с чатом нужен, чтобы её не открыли второй раз — автор засчитал бы и этот
+     * просмотр. Видно пакету: разметку проверяют без Telegram.
+     */
+    static String watchedOf(long chatId, int storyId, String title, String seen) {
+        return "<watched chat_id=\"" + chatId + "\" story_id=\"" + storyId
+                + "\" title=\"" + Markup.attribute(title) + "\">\n" + seen.strip() + "\n</watched>\n";
+    }
+
+    /**
+     * Стоит ли показывать историю развёрнуто. Протухшую не стоят: лента
+     * отчиталась бы просмотром, за которым ничего не было, а обложка и так
+     * скажет, что человек что-то выкладывал.
+     * <p>
+     * Видно пакету: решение проверяют без Telegram.
+     */
+    static boolean worthTelling(String seen) {
+        return !seen.equals(STORY_GONE);
     }
 
     /** Строка ленты. Видно пакету: круг общения и разметку проверяют без Telegram. */
@@ -907,11 +968,8 @@ public final class TelegramTools {
     }
 
     /**
-     * Просмотр одной истории: открыть, разглядеть, закрыть. Автор видит просмотр
-     * ровно так же, как если бы историю открыли в обычном клиенте.
-     * <p>
-     * Смотрят между открытием и закрытием: разбор фото или ролика занимает
-     * несколько секунд, и это честная длина просмотра, а не мгновенный пролист.
+     * Просмотр одной истории. Лента открывает их тем же путём, поэтому тело
+     * одно: в двух копиях закрытие истории и отметка в логе разъехались бы.
      */
     public Tool watchStory() {
         return Tool.named("watch_story")
@@ -941,36 +999,46 @@ public final class TelegramTools {
                         log.info("История чата {} вне круга общения — не смотрю", chatId);
                         return "No such chat.";
                     }
-                    TdApi.Story story = telegram.story(chatId, storyId).orElse(null);
-                    if (story == null) {
-                        // истории живут сутки-двое: к этому моменту она могла протухнуть
-                        return "That story is gone — they expire after a day or two.";
-                    }
-                    if (!media.sees()) {
-                        // глаз нет, но подпись и плашки — текст: его читают и так.
-                        // Историю не открывают: автор увидел бы просмотр, за которым
-                        // ничего не стоит
-                        return media.describeStory(story)
-                                + "\nYou cannot see the picture — your vision is turned off.";
-                    }
-                    try {
-                        actions.openStory(chatId, storyId);
-                        // в канале роликом считают заставку: там их много на день
-                        String seen = media.describeStory(story, media.onlyGlanceIn(chat));
-                        log.info("{}", watched(chatId, storyId, seen));
-                        return seen.isBlank()
-                                ? "You watched the story, but there was nothing to look at."
-                                : seen;
-                    } finally {
-                        // закрытие не должно прятать настоящую причину: история
-                        // могла не открыться, и ругаться тогда на close бессмысленно
-                        try {
-                            actions.closeStory(chatId, storyId);
-                        } catch (RuntimeException e) {
-                            log.debug("Историю {} чата {} не удалось закрыть: {}", storyId, chatId, e.getMessage());
-                        }
-                    }
+                    return watch(chat, storyId);
                 });
+    }
+
+    /**
+     * Открыть, разглядеть и закрыть одну историю.
+     * <p>
+     * Смотрят между открытием и закрытием: разбор фото или ролика занимает
+     * несколько секунд, и это честная длина просмотра, а не мгновенный пролист.
+     */
+    private String watch(TdApi.Chat chat, int storyId) {
+        TdApi.Story story = telegram.story(chat.id, storyId).orElse(null);
+        if (story == null) {
+            // истории живут сутки-двое: к этому моменту она могла протухнуть
+            return STORY_GONE;
+        }
+        if (!media.sees()) {
+            // глаз нет, но подпись и плашки — текст: его читают и так.
+            // Историю не открывают: автор увидел бы просмотр, за которым
+            // ничего не стоит
+            return media.describeStory(story)
+                    + "\nYou cannot see the picture — your vision is turned off.";
+        }
+        try {
+            actions.openStory(chat.id, storyId);
+            // в канале роликом считают заставку: там их много на день
+            String seen = media.describeStory(story, media.onlyGlanceIn(chat));
+            log.info("{}", watched(chat.id, storyId, seen));
+            return seen.isBlank()
+                    ? "You watched the story, but there was nothing to look at."
+                    : seen;
+        } finally {
+            // закрытие не должно прятать настоящую причину: история
+            // могла не открыться, и ругаться тогда на close бессмысленно
+            try {
+                actions.closeStory(chat.id, storyId);
+            } catch (RuntimeException e) {
+                log.debug("Историю {} чата {} не удалось закрыть: {}", storyId, chat.id, e.getMessage());
+            }
+        }
     }
 
     /**
