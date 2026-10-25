@@ -2,6 +2,7 @@ package ru.rainedev.raine.speech;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -22,8 +23,12 @@ class OggOpusReaderTest {
 
     /** Секунда тона на 48 кГц — с той же частоты Telegram и пишет голосовые. */
     private static byte[] oggOfOneSecond() throws Exception {
+        return oggOf(1);
+    }
+
+    private static byte[] oggOf(int seconds) throws Exception {
         int rate = 48_000;
-        short[] tone = new short[rate];
+        short[] tone = new short[rate * seconds];
         for (int i = 0; i < tone.length; i++) {
             tone[i] = (short) (Math.sin(2 * Math.PI * 440 * i / rate) * 8000);
         }
@@ -41,12 +46,27 @@ class OggOpusReaderTest {
         assertTrue(length > 15_000 && length <= 16_000, "длительность не сошлась: " + length);
         int loudest = loudest(sound.get().samples());
         assertTrue(loudest > 1000, "вместо звука получилась тишина: " + loudest);
+        assertFalse(sound.get().cut(), "целую запись нечего помечать обрезанной");
+    }
+
+    /**
+     * Запись длиннее бюджета раньше уходила пустым результатом: шестиминутное
+     * голосовое доходило до модели молчанием, хотя начало в нём есть, и
+     * раскодировать его дешевле, чем весь монолог.
+     */
+    @Test
+    void aRecordLongerThanTheBudgetIsCutAndSaysSo() throws Exception {
+        Optional<Sound> sound = OggOpusReader.decode(oggOf(3), 1);
+
+        assertTrue(sound.isPresent(), "начало записи терять незачем");
+        assertTrue(sound.get().cut(), "хвост отрезан — модель должна об этом знать");
+        assertEquals(16_000, sound.get().samples().length, "в бюджет входит ровно секунда речи");
     }
 
     @Test
-    void aTooLongRecordIsNotDecodedAtAll() throws Exception {
-        // дело не в том, чтобы срезать слово, а в том, чтобы не выкладывать
-        // в память часовой монолог: такой запрос эндпоинт всё равно не примет
+    void nothingIsHeardOfAZeroBudget() throws Exception {
+        // нулевой бюджет не значит «слушать сколько влезет»: в нём не помещается
+        // ни один отсчёт, и отдавать такое как услышанное нельзя
         assertTrue(OggOpusReader.decode(oggOfOneSecond(), 0).isEmpty());
     }
 

@@ -50,12 +50,6 @@ public final class VideoAudio {
     private static final int TARGET_RATE = 16_000;
 
     /**
-     * Дальше этого времени звук не берём: ролик из переписки — это минуты,
-     * а держать в памяти дорожку от часового фильма ни к чему.
-     */
-    private static final int MAX_SECONDS = 600;
-
-    /**
      * Дольше этого разбор не идёт ни при каких условиях: на битом контейнере
      * библиотека способна уйти в вечный цикл (проверено на файле, который
      * видео только притворяется).
@@ -82,9 +76,14 @@ public final class VideoAudio {
      * Нужно это там, где из видео берут только речь: разговорной модели картинку
      * в запрос не положить, а упакованный в ogg звук она не принимает.
      *
+     * @param maxSeconds сколько секунд дорожки брать: ролик из переписки — это
+     *                   минуты, а держать в памяти дорожку от часового фильма
+     *                   ни к чему. Лимит спрашивают снаружи и до тяжёлой работы:
+     *                   проверять её после декодирования значит платить за то,
+     *                   что потом выбросить
      * @return отсчёты одного канала или пусто, если звука нет или формат не поддался
      */
-    public static Optional<Sound> sound(Path video) {
+    public static Optional<Sound> sound(Path video, int maxSeconds) {
         if (!looksLikeMp4(video)) {
             log.debug("Это не MP4 — звук останется неуслышанным");
             return Optional.empty();
@@ -97,7 +96,7 @@ public final class VideoAudio {
             thread.setDaemon(true);
             return thread;
         });
-        Future<Optional<Sound>> parsed = worker.submit(() -> decodeTrack(video));
+        Future<Optional<Sound>> parsed = worker.submit(() -> decodeTrack(video, maxSeconds));
         try {
             return parsed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
@@ -126,16 +125,15 @@ public final class VideoAudio {
         }
     }
 
-    private static Optional<Sound> decodeTrack(Path video) {
-        short[] samples;
-        int rate;
+    private static Optional<Sound> decodeTrack(Path video, int maxSeconds) {
+        Sound taken;
         try (FileChannelWrapper channel = NIOUtils.readableChannel(video.toFile())) {
             Optional<Aac> track = audioTrack(MP4Demuxer.createMP4Demuxer(channel));
             if (track.isEmpty()) {
                 log.debug("В видео нет разбираемой звуковой дорожки");
                 return Optional.empty();
             }
-            Sound sound = decode(track.get());
+            Sound sound = decode(track.get(), maxSeconds);
             if (sound == null || sound.samples().length == 0) {
                 return Optional.empty();
             }
@@ -145,15 +143,15 @@ public final class VideoAudio {
                 log.debug("Дорожка оказалась тишиной — слушать нечего");
                 return Optional.empty();
             }
-            samples = sound.samples();
-            rate = sound.rate();
+            taken = sound;
         } catch (IOException | RuntimeException e) {
             // неподдержанный контейнер — обычное дело, разговор из-за этого не ломаем
             log.debug("Звук из видео не разобрался: {}", e.getMessage());
             return Optional.empty();
         }
-        log.debug("Дорожка вынута: {} с", samples.length / rate);
-        return Optional.of(new Sound(Pcm.resample(samples, rate, TARGET_RATE), TARGET_RATE));
+        log.debug("Дорожка вынута: {} с", taken.samples().length / taken.rate());
+        return Optional.of(new Sound(Pcm.resample(taken.samples(), taken.rate(), TARGET_RATE),
+                TARGET_RATE, taken.cut()));
     }
 
     /**
@@ -214,7 +212,7 @@ public final class VideoAudio {
         return Arrays.copyOfRange(frame, header, frame.length);
     }
 
-    private static Sound decode(Aac audio) throws IOException {
+    private static Sound decode(Aac audio, int maxSeconds) throws IOException {
         AbstractMP4DemuxerTrack track = audio.track();
         Decoder decoder = Decoder.create(audio.description());
         SampleBuffer buffer = new SampleBuffer();
@@ -223,6 +221,7 @@ public final class VideoAudio {
         List<short[]> chunks = new ArrayList<>();
         int total = 0;
         int rate = 0;
+        boolean cut = false;
 
         Packet packet;
         while ((packet = track.nextFrame()) != null) {
@@ -243,8 +242,9 @@ public final class VideoAudio {
                     Math.max(1, buffer.getChannels()));
             chunks.add(chunk);
             total += chunk.length;
-            if (total >= (long) rate * MAX_SECONDS) {
-                log.debug("Дорожка длиннее {} с — слушаем только начало", MAX_SECONDS);
+            if (reachedLimit(total, rate, maxSeconds)) {
+                log.debug("Дорожка длиннее {} с — берём только начало", maxSeconds);
+                cut = true;
                 break;
             }
         }
@@ -257,7 +257,21 @@ public final class VideoAudio {
             System.arraycopy(chunk, 0, samples, offset, chunk.length);
             offset += chunk.length;
         }
-        return new Sound(samples, rate);
+        return new Sound(samples, rate, cut);
+    }
+
+    /**
+     * Довольно ли уже вынутых отсчётов: набралось ли запрошенное число секунд.
+     * <p>
+     * Частота появляется только после первого раскодированного кадра, и до неё
+     * отсчётов просто нет: без этой оговорки условие делало бы истинным любое
+     * число при нулевой частоте, разбор обрывался на первом же чанке, а в лог
+     * писалось, что дорожка длиннее лимита.
+     * <p>
+     * Видно пакету: считать это учат без видео и без библиотеки.
+     */
+    static boolean reachedLimit(int total, int rate, int maxSeconds) {
+        return rate > 0 && total >= (long) rate * maxSeconds;
     }
 
     /**

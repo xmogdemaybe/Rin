@@ -22,6 +22,9 @@ class VideoAudioTest {
     /** На эту частоту дорожка пересчитывается. */
     private static final int RATE = 16_000;
 
+    /** Столько секунд дорожки просят: лимит приходит снаружи, а не живёт здесь. */
+    private static final int BUDGET = 90;
+
     private static Path fixture() throws IOException {
         Path video = Files.createTempFile("raine-test-video-", ".mp4");
         try (InputStream source = VideoAudioTest.class.getResourceAsStream("/tone.mp4")) {
@@ -35,7 +38,7 @@ class VideoAudioTest {
     void theSoundItselfSurvivesTheWholeWay() throws Exception {
         Path video = fixture();
         try {
-            Sound sound = VideoAudio.sound(video).orElseThrow();
+            Sound sound = VideoAudio.sound(video, BUDGET).orElseThrow();
             short[] samples = sound.samples();
 
             int loudest = 0;
@@ -48,11 +51,43 @@ class VideoAudioTest {
             }
             double seconds = samples.length / (double) sound.rate();
             assertEquals(2, seconds, 0.2, "дорожка должна быть длиной с ролик");
+            assertFalse(sound.cut(), "короткую дорожку не надо помечать обрезанной");
             assertTrue(loudest > 1000, "вместо звука вышла тишина, громкость: " + loudest);
             assertEquals(440, crossings / seconds, 15, "тон уехал — где-то перепутана частота");
         } finally {
             Files.deleteIfExists(video);
         }
+    }
+
+    /**
+     * Лимит теперь спрашивают до тяжёлой работы, а не после: раньше дорожку
+     * декодировали целиком, а выбрасывал её уже слух. Двухсекундный ролик играет
+     * роль длинного: с маленьким бюджетом он оборван, а не потерян.
+     */
+    @Test
+    void aTrackLongerThanTheBudgetIsCutNotThrownAway() throws IOException {
+        Path video = fixture();
+        try {
+            Sound sound = VideoAudio.sound(video, 1).orElseThrow();
+
+            assertTrue(sound.cut(), "дорожка оборвана по лимиту — модель должна об этом знать");
+            assertEquals(1, sound.samples().length / (double) sound.rate(), 0.1,
+                    "взято ровно столько, сколько просят");
+        } finally {
+            Files.deleteIfExists(video);
+        }
+    }
+
+    /**
+     * До первого раскодированного кадра частоты нет, и срез, посчитанный по
+     * нулевой частоте, срабатывал на любом числе отсчётов: цикл выходил после
+     * первого же чанка, а в лог писалось «дорожка длиннее лимита».
+     */
+    @Test
+    void theBudgetIsCountedOnlyAfterTheRateIsKnown() {
+        assertFalse(VideoAudio.reachedLimit(100_000, 0, BUDGET), "без частоты отсчёты ещё не секунды");
+        assertTrue(VideoAudio.reachedLimit(1024, 1024, 1));
+        assertFalse(VideoAudio.reachedLimit(1023, 1024, 1), "недобранной секунды превышением не считают");
     }
 
     @Test
@@ -61,7 +96,7 @@ class VideoAudioTest {
         // 44,1 кГц ушли бы в запрос вдвое большим количеством байт
         Path video = fixture();
         try {
-            Sound sound = VideoAudio.sound(video).orElseThrow();
+            Sound sound = VideoAudio.sound(video, BUDGET).orElseThrow();
 
             assertEquals(RATE, sound.rate(), "частота должна быть речевой");
             assertEquals(2, sound.samples().length / (double) sound.rate(), 0.2,
@@ -77,7 +112,7 @@ class VideoAudioTest {
         try {
             Files.write(file, "это не видео".getBytes(StandardCharsets.UTF_8));
 
-            assertFalse(VideoAudio.sound(file).isPresent(), "из мусора не должно получиться дорожки");
+            assertFalse(VideoAudio.sound(file, BUDGET).isPresent(), "из мусора не должно получиться дорожки");
         } finally {
             Files.deleteIfExists(file);
         }
@@ -85,7 +120,7 @@ class VideoAudioTest {
 
     @Test
     void missingFileIsNotAnError() {
-        assertFalse(VideoAudio.sound(Path.of("/net/takogo/video.mp4")).isPresent());
+        assertFalse(VideoAudio.sound(Path.of("/net/takogo/video.mp4"), BUDGET).isPresent());
     }
 
     @Test

@@ -31,10 +31,18 @@ public final class ModelHearing {
     private static final int MIN_AUDIO_BYTES = 512;
 
     /**
-     * Дольше не слушаем: wav втрое тяжелее исходного opus, и получасовой монолог
-     * в запрос целиком не влезет, сколько бы эндпоинт ни принимал.
+     * Сколько секунд записи слушаем.
+     * <p>
+     * wav без сжатия — два байта на отсчёт: девяносто секунд речи с 16 кГц — это
+     * около трёх мегабайт, а в base64 — четыре мегабайта тела запроса при таймауте
+     * в три минуты. Раньше бюджет стоял в 300 с, и запись длиннее выбрасывалась
+     * целиком: шестиминутное голосовое доходило до модели пустым местом. Длинное
+     * теперь обрезают до бюджета — начало слышно, и его не выдают за целое.
      */
-    private static final int MAX_AUDIO_SECONDS = 300;
+    private static final int MAX_AUDIO_SECONDS = 90;
+
+    /** Пометка о том, что дослушано не до конца — её читает модель, поэтому она английская. */
+    private static final String CUT_NOTE = "[the recording is longer than %d s — only its beginning was heard]";
 
     /**
      * Чем был файл: эндпоинт по этому слову решает, как его распаковать.
@@ -147,8 +155,8 @@ public final class ModelHearing {
         if (remembered != null) {
             return Optional.of(remembered);
         }
-        Optional<byte[]> audio = soundOf(file, track);
-        if (audio.isEmpty()) {
+        Optional<Take> take = soundOf(file, track);
+        if (take.isEmpty()) {
             // эндпоинт ещё не спрошен, и пауза здесь не нужна: Telegram отдаёт
             // вложение по частям, и за недокачанный файл платить нечем
             return Optional.empty();
@@ -160,7 +168,7 @@ public final class ModelHearing {
             String heard = llm.hear(model, prompts.load("voice_to_text.md"),
                     track.fromVideo() ? "This is the sound track of a video: only the words matter, do not describe the picture."
                             : "This is a voice message.",
-                    audio.get(), AUDIO_FORMAT);
+                    take.get().audio(), AUDIO_FORMAT);
             if (Refusal.detected(heard)) {
                 // в кэш не кладём: иначе извинение станет вечной расшифровкой
                 log.info("Слушать отказались: {}", firstLine(heard));
@@ -171,9 +179,12 @@ public final class ModelHearing {
                 log.debug("В {} слов не услышано", file.getFileName());
                 return Optional.empty();
             }
-            toCache(file, said);
-            log.info("Услышано: {}", firstLine(said));
-            return Optional.of(said);
+            // пометка об обрезке ложится и в кэш: перечитанное позже должно
+            // оставаться таким же неполным, каким оно услышано
+            String words = withNote(said, take.get().cut());
+            toCache(file, words);
+            log.info("Услышано: {}", firstLine(words));
+            return Optional.of(words);
         } catch (RuntimeException e) {
             log.warn("Прослушать {} не вышло: {}", file.getFileName(), e.getMessage());
             return Optional.empty();
@@ -187,9 +198,13 @@ public final class ModelHearing {
      * Ролик — это видео, а видео в запрос на слух не кладут: разговорная модель
      * принимает только звук. Голосовое же принимается как звук, но в упаковке,
      * которую эндпоинты не знают, — его раскодированием занимаются здесь.
+     * <p>
+     * Бюджет уходит распаковщикам до тяжёлой работы, и спрашивают его один раз:
+     * проверка после декодирования значила бы, что дорогую работу уже оплатили,
+     * чтобы потом её выбросить.
      */
-    private Optional<byte[]> soundOf(Path file, Track track) {
-        Optional<Sound> sound = track.fromVideo() ? VideoAudio.sound(file) : voiceOf(file);
+    private Optional<Take> soundOf(Path file, Track track) {
+        Optional<Sound> sound = track.fromVideo() ? VideoAudio.sound(file, MAX_AUDIO_SECONDS) : voiceOf(file);
         if (sound.isEmpty()) {
             if (track.fromVideo()) {
                 log.debug("Из ролика {} дорожка не досталась — останется неслышанным", file.getFileName());
@@ -197,12 +212,11 @@ public final class ModelHearing {
             return Optional.empty();
         }
         Sound raw = sound.get();
-        if (raw.samples().length / raw.rate() > MAX_AUDIO_SECONDS) {
-            log.info("Запись {} длиннее {} с — целиком её не слушаем", file.getFileName(), MAX_AUDIO_SECONDS);
-            return Optional.empty();
-        }
-        return Optional.of(Wav.of(raw.samples(), raw.rate()));
+        return Optional.of(new Take(Wav.of(raw.samples(), raw.rate()), raw.cut()));
     }
+
+    /** Звук, готовый к запросу, и метка о том, что его обрезали по бюджету. */
+    private record Take(byte[] audio, boolean cut) {}
 
     private Optional<Sound> voiceOf(Path file) {
         Optional<byte[]> bytes = read(file);
@@ -270,6 +284,17 @@ public final class ModelHearing {
      */
     static boolean silence(String heard) {
         return heard.replaceAll("[^\\p{L}]", "").equalsIgnoreCase("silence");
+    }
+
+    /**
+     * Что отдано услышанным: слова и, если запись обрезана, явная пометка об
+     * этом. Молча отдать начало часового монолога значит выдать обрыв за целое,
+     * и модель стала бы досказывать речь сама.
+     * <p>
+     * Видно пакету: собирать это учат без эндпоинта и без длинной записи.
+     */
+    static String withNote(String words, boolean cut) {
+        return cut ? words + "\n" + CUT_NOTE.formatted(MAX_AUDIO_SECONDS) : words;
     }
 
     private static String firstLine(String text) {
