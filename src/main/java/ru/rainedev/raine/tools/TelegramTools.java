@@ -591,8 +591,8 @@ public final class TelegramTools {
                         // номер, который отдаётся модели, — настоящий: по временному
                         // не поправить и не удалить только что отправленное
                         long temporary = actions.sendMessage(chatId, slip.text(), quoted);
-                        long sent = temporary == 0 ? 0 : telegram.confirmedId(temporary);
-                        if (temporary != 0 && sent == 0) {
+                        long sent = telegram.confirmedId(temporary);
+                        if (sent == 0) {
                             return "The message could not be sent. Something is wrong with the connection "
                                     + "or the account.";
                         }
@@ -1169,9 +1169,6 @@ public final class TelegramTools {
                     }
                     long storyId = actions.postStory(chatId, photo,
                             arguments.path("caption").asText("").strip(), STORY_PERIOD, audience);
-                    if (storyId == 0) {
-                        return "Nothing was posted.";
-                    }
                     log.info("История {} выложена из снимка {} для {}", storyId, name, audience);
                     return "Story posted — visible to %s. It will be up for a day.".formatted(audience.described());
                 });
@@ -1663,7 +1660,7 @@ public final class TelegramTools {
             return;
         }
 
-        if (sentMessageId != 0 && random.nextBoolean()) {
+        if (random.nextBoolean()) {
             actions.editText(chatId, sentMessageId, correct, false);
             log.info("Опечатка исправлена правкой сообщения");
             return;
