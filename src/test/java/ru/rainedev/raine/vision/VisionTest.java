@@ -264,6 +264,25 @@ class VisionTest {
         assertEquals(1, llm.seen.get(), "повторный взгляд на ту же картинку стоит денег и времени");
     }
 
+    /**
+     * Файл кэша пишется не атомарно: посреди записи его можно застать пустым или
+     * оборванным. Принятый за описание, он выглядел бы как просмотренная картинка
+     * без единого слова о ней.
+     */
+    @Test
+    void anEmptyCacheFileIsNotADescription(@TempDir Path dir) throws IOException {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Path photo = imageFile(dir, "photo.jpg");
+        Files.writeString(cache.resolve("photo.jpg.md"), "");
+        ScriptedLlm llm = new ScriptedLlm().willSee("Человек с котом");
+
+        String seen = visionWith(llm, cache).describe(photo, Vision.Kind.PHOTO, List.of());
+
+        assertEquals(1, llm.seen.get(), "пустой кэш не должен выглядеть описанием");
+        assertTrue(seen.contains("Человек с котом"), seen);
+    }
+
     @Test
     void knowsHerOwnAppearanceAndTheConversation(@TempDir Path dir) throws IOException {
         ScriptedLlm llm = new ScriptedLlm().willSee("описание");

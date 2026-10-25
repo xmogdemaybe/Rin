@@ -321,12 +321,19 @@ public final class Vision {
         return "<%s description>\n%s\n</%s>\n".formatted(kind.tag, Markup.body(description), kind.tag);
     }
 
+    /**
+     * Готовое описание или null, если смотреть правда нужно.
+     * <p>
+     * Пустое содержимое — промах, а не описание: файл пишется не атомарно, и его
+     * можно застать ещё не заполненным. Принятая за описание пустота выглядела бы
+     * как просмотренная картинка без единого слова о ней.
+     */
     private String fromCache(Path file) {
         try {
-            Path cached = cacheFor(file);
-            return Files.exists(cached) ? Files.readString(cached) : null;
+            String description = Files.readString(cacheFor(file));
+            return description.isBlank() ? null : description;
         } catch (IOException e) {
-            return null;
+            return null;   // файла нет или он не прочитался — смотрят заново
         }
     }
 

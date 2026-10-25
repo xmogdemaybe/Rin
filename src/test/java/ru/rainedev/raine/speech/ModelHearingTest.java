@@ -247,6 +247,62 @@ class ModelHearingTest {
     }
 
     /**
+     * Промпт просит называть тишину одним словом, но модель часто формулирует
+     * иначе — «No speech detected.». Такой ответ не проходил ни как тишина, ни
+     * как отказ: он ложился в кэш и становился вечной «расшифровкой».
+     */
+    @Test
+    void otherWordsForNoSpeechAreNotSpeechEither(@TempDir Path dir) throws Exception {
+        Path cache = dir.resolve("cache");
+        Ears ears = new Ears().willHear("No speech detected.");
+
+        assertEquals(Optional.empty(), with(ears, cache, true, true).listen(voiceNote(dir), Track.VOICE));
+        assertTrue(Files.notExists(cache.resolve("voice-1.ogg.heard.md")),
+                "«нет речи» не должно осесть в кэше как услышанное");
+
+        assertTrue(ModelHearing.silence("No speech detected."));
+        assertTrue(ModelHearing.silence("no speech"));
+        assertFalse(ModelHearing.silence("There is no speech, but he says привет"), "это уже сказанное");
+    }
+
+    /**
+     * Промпт просит ставить скобки там, где слово не разобралось, — но ответ,
+     * целиком закрытый в скобки, это уже описание записи, а не речь: оно не
+     * должно становиться услышанным и оседать в кэше.
+     */
+    @Test
+    void aWholeAnswerInBracketsIsNotTranscription(@TempDir Path dir) throws Exception {
+        Path cache = dir.resolve("cache");
+        Ears ears = new Ears().willHear("[голоса на фоне]").willHear("привет [...] папик");
+        ModelHearing hearing = with(ears, cache, true, true);
+
+        assertEquals(Optional.empty(), hearing.listen(voiceNote(dir, "voice-5.ogg"), Track.VOICE));
+        assertTrue(Files.notExists(cache.resolve("voice-5.ogg.heard.md")), "описание записи — не услышанное");
+
+        // скобка внутри слов ничего не ломает: так помечается неразобранное место
+        assertEquals(Optional.of("привет [...] папик"),
+                hearing.listen(voiceNote(dir, "voice-6.ogg"), Track.VOICE));
+    }
+
+    /**
+     * Файл кэша пишется не атомарно: посреди записи его можно застать пустым или
+     * оборванным. Принятая за услышанное пустота ставила бы автору отметку
+     * «прослушано» и отдавала бы в разговор пустую расшифровку.
+     */
+    @Test
+    void anEmptyCacheFileIsNotAnAnswer(@TempDir Path dir) throws Exception {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Path voice = voiceNote(dir);
+        Files.writeString(cache.resolve("voice-1.ogg.heard.md"), "");
+        Ears ears = new Ears().willHear("привет");
+
+        assertEquals(Optional.of("привет"), with(ears, cache, true, true).listen(voice, Track.VOICE),
+                "пустой кэш — промах, а не услышанное");
+        assertEquals(1, ears.sounds.size(), "прослушивание должно состояться, а не отразиться пустотой");
+    }
+
+    /**
      * Одно и то же голосовое прилетает в разговор дважды за ход: его видно и в
      * уведомлении, и в истории открываемого чата. Неудачу кэш не запоминает,
      * так что без паузы за каждую повторную перерисовку пришлось бы платить.

@@ -3,6 +3,7 @@ package ru.rainedev.raine.speech;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -175,7 +176,7 @@ public final class ModelHearing {
                 return Optional.empty();
             }
             String said = heard == null ? "" : heard.strip();
-            if (said.isEmpty() || silence(said)) {
+            if (said.isEmpty() || silence(said) || descriptionOnly(said)) {
                 log.debug("В {} слов не услышано", file.getFileName());
                 return Optional.empty();
             }
@@ -279,11 +280,37 @@ public final class ModelHearing {
     }
 
     /**
-     * Молчание модель описывает одним словом, и без этого правила оно ушло бы
+     * Как модель называет молчание.
+     * <p>
+     * Промпт просит одно слово, но эндпоинт отвечает и своими формулировками —
+     * «No speech detected.». Без этого списка такая фраза уходила в разговор как
+     * сказанное и оседала в кэше вечной «расшифровкой».
+     */
+    private static final List<String> NO_SPEECH = List.of("silence", "no speech", "no speech detected");
+
+    /**
+     * Молчание модель описывает словами, и без этого правила оно ушло бы
      * в разговор как сказанное. Видно пакету: проверять можно без эндпоинта.
+     * <p>
+     * Фраза целиком, а не слово внутри неё: «there is no speech, but he says
+     * привет» — уже услышанное.
      */
     static boolean silence(String heard) {
-        return heard.replaceAll("[^\\p{L}]", "").equalsIgnoreCase("silence");
+        String words = heard.toLowerCase().replaceAll("[^\\p{L} ]", " ").replaceAll(" +", " ").strip();
+        return NO_SPEECH.contains(words);
+    }
+
+    /**
+     * Ответ, целиком закрытый в скобки, — описание записи, а не речь из неё.
+     * Скобками промпт помечает то, что не разобралось, поэтому всё в скобках
+     * значит, что слов не было вовсе. В кэше такое осталось бы расшифровкой
+     * навсегда, а автору поставилась бы отметка «прослушано».
+     * <p>
+     * Видно пакету: проверять можно без эндпоинта.
+     */
+    static boolean descriptionOnly(String heard) {
+        String words = heard.strip();
+        return words.length() > 1 && words.startsWith("[") && words.endsWith("]");
     }
 
     /**
@@ -301,13 +328,19 @@ public final class ModelHearing {
         return text == null ? "" : text.strip().lines().findFirst().orElse("");
     }
 
-    /** Одна и та же запись прилетает не раз: чат открывают снова и снова. */
+    /**
+     * Одна и та же запись прилетает не раз: чат открывают снова и снова.
+     * <p>
+     * Пустое содержимое — промах, а не услышанное. Файл пишется не атомарно, и
+     * его можно застать ещё не заполненным; принятая за расшифровку пустота
+     * отдала бы её в разговор и поставила бы автору отметку «прослушано».
+     */
     private String fromCache(Path file) {
         try {
-            Path cached = cacheFor(file);
-            return Files.exists(cached) ? Files.readString(cached) : null;
+            String heard = Files.readString(cacheFor(file));
+            return heard.isBlank() ? null : heard;
         } catch (IOException e) {
-            return null;
+            return null;   // файла нет или он не прочитался — слушают заново
         }
     }
 
