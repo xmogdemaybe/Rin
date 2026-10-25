@@ -141,11 +141,24 @@ public final class TelegramMedia implements MediaDescriber {
      *                   в каналах, где историй много на один день
      */
     public String describeStory(TdApi.Story story, boolean onlyGlance) {
+        return describeStory(story, onlyGlance, null);
+    }
+
+    /**
+     * Тот же взгляд вторым проходом — ради одного вопроса.
+     * <p>
+     * Кэш при этом не трогают: в нём лежит общий пересказ, и ответа на вопрос в
+     * нём нет. Сам пересказ от вопроса не портится: узкий ответ в кэш не пишется.
+     *
+     * @param question на что именно смотреть; пусто — обычный пересказ
+     */
+    public String describeStory(TdApi.Story story, boolean onlyGlance, String question) {
         // вслепую разбирать нечего, и жалобу на формат из пустоты не собрать:
         // ролик цел, просто глаз нет — тогда остаются подпись и плашки
         String seen = sees() ? seen(story.content,
-                file -> look(file, Vision.Kind.PHOTO),
-                video -> storyVideo(video, onlyGlance, this::watch, () -> glanceOf(video))) : "";
+                file -> look(file, Vision.Kind.PHOTO, question),
+                video -> storyVideo(video, onlyGlance,
+                        (file, sound) -> watch(file, sound, question), () -> glanceOf(video, question))) : "";
         return storyBlock(story, loss(seen, story.content, sees()));
     }
 
@@ -172,11 +185,15 @@ public final class TelegramMedia implements MediaDescriber {
         return hasEyes && wasSomethingToSee && (seen == null || seen.isBlank()) ? NOTHING_SEEN : seen;
     }
 
-    /** Заставка ролика истории: один кадр вместо всего разбора. */
-    private String glanceOf(TdApi.StoryContentVideo content) {
+    /**
+     * Заставка ролика истории: один кадр вместо всего разбора.
+     *
+     * @param question взгляд ради одного вопроса; пусто — обычный пересказ
+     */
+    private String glanceOf(TdApi.StoryContentVideo content, String question) {
         return content.video == null
                 ? ""
-                : look(thumbnailOf(content.video.thumbnail), Vision.Kind.VIDEO);
+                : look(thumbnailOf(content.video.thumbnail), Vision.Kind.VIDEO, question);
     }
 
     /**
@@ -480,12 +497,36 @@ public final class TelegramMedia implements MediaDescriber {
      *                  ушли бы в разговор как услышанное
      */
     private String watch(Optional<Integer> fileId, boolean withSound) {
+        return watch(fileId, withSound, null);
+    }
+
+    /**
+     * @param question взгляд ради одного вопроса: он идёт мимо кэша, где лежит
+     *                 общий пересказ, и в кэш не пишется
+     */
+    private String watch(Optional<Integer> fileId, boolean withSound, String question) {
         if (!sees()) {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map(file -> vision.describeVideo(VideoFrames.sample(file), context.get(), file, withSound))
+                .map(file -> vision.describeVideo(VideoFrames.sample(file), asking(question), file, withSound,
+                        plain(question)))
                 .orElse("");
+    }
+
+    /** Разговор плюс вопрос, ради которого смотрят снова. */
+    private List<Message> asking(String question) {
+        List<Message> around = new ArrayList<>(context.get());
+        if (!plain(question)) {
+            around.add(Message.user("You are looking at this again, for one question. Answer only it, "
+                    + "from what is really in the picture: " + question.strip()));
+        }
+        return around;
+    }
+
+    /** Обычный пересказ, а не взгляд ради вопроса — только он и живёт в кэше. */
+    private static boolean plain(String question) {
+        return question == null || question.isBlank();
     }
 
     private String gift(TdApi.MessageGift message) {
@@ -514,11 +555,19 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     private String look(Optional<Integer> fileId, Vision.Kind kind) {
+        return look(fileId, kind, null);
+    }
+
+    /**
+     * @param question взгляд ради одного вопроса: мимо кэша, где лежит общий
+     *                 пересказ, и не оставляя в нём узкий ответ
+     */
+    private String look(Optional<Integer> fileId, Vision.Kind kind, String question) {
         if (!sees()) {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map((Path file) -> vision.describe(file, kind, context.get()))
+                .map((Path file) -> vision.describe(file, kind, asking(question), plain(question)))
                 .orElse("");
     }
 

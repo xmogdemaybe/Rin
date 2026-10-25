@@ -921,9 +921,10 @@ public final class TelegramTools {
                         + "watch it with watch_story — otherwise say that you have not looked."
                 : "These were opened just now, and this is what is really in them:\n"
                         + String.join("", seen)
-                        + "The ids named there have been seen: opening one again would count a second view "
-                        + "to its author. Anyone without a line there is still a cover: nothing of theirs has "
-                        + "been seen. Say you have not looked, or open one with watch_story.";
+                        + "The ids named there have already been seen. If a detail is missing, ask watch_story "
+                        + "again with a question instead of describing them from memory. Anyone without a line "
+                        + "there is still a cover: nothing of theirs has been seen. Say you have not looked, "
+                        + "or open one with watch_story.";
         String answer = "These people have stories right now:\n<stories>\n"
                 + String.join("", lines.subList(0, shown)) + "</stories>\n" + watched;
         return shown == lines.size()
@@ -934,8 +935,10 @@ public final class TelegramTools {
 
     /**
      * Развёрнутая история в ответе ленты: чья она и что в ней видно. Номер рядом
-     * с чатом нужен, чтобы её не открыли второй раз — автор засчитал бы и этот
-     * просмотр. Видно пакету: разметку проверяют без Telegram.
+     * с чатом нужен, чтобы она различала, что уже смотрела: без этого второй
+     * взгляд берётся из памяти и дорисовывает картинку.
+     * <p>
+     * Видно пакету: разметку проверяют без Telegram.
      */
     static String watchedOf(long chatId, int storyId, String title, String seen) {
         return "<watched chat_id=\"" + chatId + "\" story_id=\"" + storyId
@@ -974,9 +977,13 @@ public final class TelegramTools {
     public Tool watchStory() {
         return Tool.named("watch_story")
                 .describedAs("Watches one story: opens it, looks at the photo or the video, reads the caption and "
-                        + "anything attached to it. The author sees that you have watched it.")
+                        + "anything attached to it. The author sees that you have watched it. With a question it "
+                        + "becomes a closer look: the same picture is examined again and answers only that, so a "
+                        + "detail the first pass missed is worth asking for.")
                 .requiredInteger("chat_id", "Chat id of the person, from view_stories")
                 .requiredInteger("story_id", "Story id, from view_stories")
+                .optionalString("question", "What exactly to look for — «what does the sign say», «how many "
+                        + "people are there». Leave empty for a plain retelling.")
                 .build(arguments -> {
                     long chatId = Numbers.longAt(arguments, "chat_id", 0);
                     int storyId = storyIdAt(arguments);
@@ -999,7 +1006,7 @@ public final class TelegramTools {
                         log.info("История чата {} вне круга общения — не смотрю", chatId);
                         return "No such chat.";
                     }
-                    return watch(chat, storyId);
+                    return watch(chat, storyId, arguments.path("question").asText("").strip());
                 });
     }
 
@@ -1010,6 +1017,15 @@ public final class TelegramTools {
      * несколько секунд, и это честная длина просмотра, а не мгновенный пролист.
      */
     private String watch(TdApi.Chat chat, int storyId) {
+        return watch(chat, storyId, "");
+    }
+
+    /**
+     * @param question взгляд ради одного вопроса; пусто — обычный пересказ.
+     *                 Такой взгляд не берёт готовое описание из кэша: там лежит
+     *                 пересказ общий, ответа на вопрос в нём нет
+     */
+    private String watch(TdApi.Chat chat, int storyId, String question) {
         TdApi.Story story = telegram.story(chat.id, storyId).orElse(null);
         if (story == null) {
             // истории живут сутки-двое: к этому моменту она могла протухнуть
@@ -1025,7 +1041,7 @@ public final class TelegramTools {
         try {
             actions.openStory(chat.id, storyId);
             // в канале роликом считают заставку: там их много на день
-            String seen = media.describeStory(story, media.onlyGlanceIn(chat));
+            String seen = media.describeStory(story, media.onlyGlanceIn(chat), question);
             log.info("{}", watched(chat.id, storyId, seen));
             return seen.isBlank()
                     ? "You watched the story, but there was nothing to look at."
