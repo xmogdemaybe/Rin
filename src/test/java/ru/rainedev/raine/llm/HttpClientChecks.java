@@ -33,7 +33,8 @@ public final class HttpClientChecks {
             return new Reply(status, body, request, HttpHeaders.of(Map.of("Retry-After", List.of(retryAfter)), (a, b) -> true));
         }
         OpenAiCompatibleClient client() {
-            return new OpenAiCompatibleClient(new Config.Llm("http://example.invalid/", "test", "fake-key", 0, ""),
+            return new OpenAiCompatibleClient(new Config.Llm("http://example.invalid/", "test", "fake-key", 0, "",
+                    "", "http://example.invalid/", "fake-key"),
                     "embedding-test", this, delays::add);
         }
     }

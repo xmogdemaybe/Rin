@@ -64,7 +64,8 @@ public record Config(
      *
      * @param proxy HTTP-прокси для запросов к ИИ: host:port; пусто — напрямую
      */
-    public record Llm(String baseUrl, String model, String apiKey, double temperature, String proxy) {}
+    public record Llm(String baseUrl, String model, String apiKey, double temperature, String proxy,
+                      String fallbackModel, String fallbackBaseUrl, String fallbackApiKey) {}
 
     /**
      * Модели зрения. Дешёвая для потокового — стикеры и аватарки, основная
@@ -263,7 +264,12 @@ public record Config(
                         s.require("llm_api_key", "ключ модели"),
                         s.fraction("llm_temperature", 0.2, "температура модели"),
                         s.get("llm_proxy", "",
-                                "HTTP-прокси для запросов к ИИ: host:port; пусто — напрямую")),
+                                "HTTP-прокси для запросов к ИИ: host:port; пусто — напрямую"),
+                        s.get("fallback_model", "", "резерв разговорной модели при квоте; пусто — без резерва").strip(),
+                        s.inherit("fallback_base_url", s.require("llm_base_url", "адрес модели"),
+                                "адрес резервной модели; пусто — основной адрес"),
+                        s.inherit("fallback_api_key", s.require("llm_api_key", "ключ модели"),
+                                "ключ резервной модели; пусто — основной ключ")),
                 s.get("embedding_model", "openai/text-embedding-3-large", "модель для векторов памяти"),
                 new Character(
                         s.get("character_name", "Rin", "имя"),
