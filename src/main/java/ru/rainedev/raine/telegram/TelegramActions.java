@@ -60,8 +60,14 @@ public interface TelegramActions {
 
     void react(long chatId, long messageId, String emoji);
 
-    /** Все сообщения разом: в Telegram это одна связка, а не несколько пересылок. */
-    void forward(long toChatId, long fromChatId, long[] messageIds);
+    /**
+     * Все сообщения разом: в Telegram это одна связка, а не несколько пересылок.
+     *
+     * @return сколько сообщений Telegram действительно переслал
+     * @throws RuntimeException в безопасном режиме — молчаливый ноль здесь хуже
+     *         отказа: по нему повторяют пересылку и дублируют то, что уже дошло
+     */
+    int forward(long toChatId, long fromChatId, long[] messageIds);
 
     void deleteMessage(long chatId, long messageId);
 
@@ -215,7 +221,7 @@ public interface TelegramActions {
         }
 
         @Override
-        public void forward(long toChatId, long fromChatId, long[] messageIds) {
+        public int forward(long toChatId, long fromChatId, long[] messageIds) {
             TdApi.ForwardMessages request = new TdApi.ForwardMessages();
             request.chatId = toChatId;
             request.fromChatId = fromChatId;
@@ -224,7 +230,24 @@ public interface TelegramActions {
             // от своего имени
             request.sendCopy = false;
             request.removeCaption = false;
-            ask(request);
+            return forwarded(ask(request));
+        }
+
+        /**
+         * Вместо сообщения, которое переслать не удалось, Telegram возвращает null —
+         * и связка из пяти постов может дойти наполовину без единой ошибки.
+         */
+        static int forwarded(TdApi.Messages answer) {
+            if (answer == null || answer.messages == null) {
+                return 0;
+            }
+            int count = 0;
+            for (TdApi.Message message : answer.messages) {
+                if (message != null) {
+                    count++;
+                }
+            }
+            return count;
         }
 
         @Override
@@ -471,7 +494,7 @@ public interface TelegramActions {
         }
 
         @Override
-        public void forward(long toChatId, long fromChatId, long[] messageIds) {
+        public int forward(long toChatId, long fromChatId, long[] messageIds) {
             throw refused("пересылка " + messageIds.length + " сообщений");
         }
 

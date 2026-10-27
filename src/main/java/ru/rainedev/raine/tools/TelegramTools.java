@@ -1389,10 +1389,20 @@ public final class TelegramTools {
 
     /** Пересылка — поделиться чужим постом, не пересказывая его. */
     public Tool forward(long fromChatId) {
+        return forward(fromChatId, chatId -> telegram.chatCached(chatId), userId -> telegram.isContact(userId),
+                (chatId, messageId) -> telegram.message(chatId, messageId).isPresent());
+    }
+
+    /** Ленивые зависимости позволяют проверить обработчик без клиента Telegram. */
+    Tool forward(long fromChatId, java.util.function.LongFunction<TdApi.Chat> chats,
+                 java.util.function.LongPredicate contacts,
+                 java.util.function.BiPredicate<Long, Long> messageExists) {
         return Tool.named("forward_message")
                 .describedAs("Forwards a message from this chat to another one — to a friend, a group, or to your "
                         + "saved messages. Use it when you find something worth sharing. You can add a comment; "
-                        + "it goes as a separate message after the forward, the way people do it.")
+                        + "it goes as a separate message after the forward, the way people do it. Telegram may "
+                        + "refuse some or all of them: the answer says how many went through, and those must not "
+                        + "be forwarded again.")
                 .requiredString("message_id", "Id of the message to forward, or several ids separated by commas")
                 .requiredInteger("to_chat_id", "Id of the destination chat. Use your own chat id to save it "
                         + "for yourself.")
@@ -1410,30 +1420,91 @@ public final class TelegramTools {
                         return "That is too much to share at once. Forward up "
                                 + MAX_IDS_IN_ONE_GO + " messages, and say what they are about.";
                     }
-                    // получатель тоже должен быть в круге общения: иначе переписку
-                    // можно переслать кому угодно в обход ограничения
-                    if (!allowed(telegram.chatCached(toChatId))) {
-                        log.info("Пересылка в чат {} вне круга общения отклонена", toChatId);
-                        return "You cannot forward anything to that chat.";
-                    }
-                    // проверяем до отправки: переслать половину и упасть хуже,
-                    // чем не пересылать вовсе
-                    for (long id : ids) {
-                        if (telegram.message(fromChatId, id).isEmpty()) {
-                            return "Message " + id + " is not in this chat.";
+                    try {
+                        // круг общения проверяется с обеих сторон: инструмент доживает
+                        // до конца хода, а сужает круг владелец на ходу
+                        if (!allowed(chats.apply(fromChatId), contacts)) {
+                            log.info("Пересылка из чата {} вне круга общения отклонена", fromChatId);
+                            return "This chat is outside your circle — you cannot take messages from it. "
+                                    + "Nothing was forwarded.";
                         }
+                        // получатель тоже должен быть в круге общения: иначе переписку
+                        // можно переслать кому угодно в обход ограничения
+                        if (!allowed(chats.apply(toChatId), contacts)) {
+                            log.info("Пересылка в чат {} вне круга общения отклонена", toChatId);
+                            return "You cannot forward anything to that chat.";
+                        }
+                        // проверяем до отправки: переслать половину и упасть хуже,
+                        // чем не пересылать вовсе
+                        for (long id : ids) {
+                            if (!messageExists.test(fromChatId, id)) {
+                                return "Message " + id + " is not in this chat.";
+                            }
+                        }
+                    } catch (RuntimeException e) {
+                        Fatal.check(e);
+                        return forwardingError(toChatId, "The forward was not sent: Telegram did not answer "
+                                + "while it was being checked. Nothing was forwarded.", e.getMessage());
                     }
-                    actions.forward(toChatId, fromChatId, ids.stream().mapToLong(Long::longValue).toArray());
-                    log.info("Переслано сообщений: {} в чат {}", ids.size(), toChatId);
+
+                    int asked = ids.size();
+                    int forwarded;
+                    try {
+                        forwarded = actions.forward(toChatId, fromChatId,
+                                ids.stream().mapToLong(Long::longValue).toArray());
+                    } catch (RuntimeException e) {
+                        Fatal.check(e);
+                        // отказ и таймаут приходят одним интерфейсом: ни тот, ни другой
+                        // не доказывает, что Telegram ничего не переслал
+                        return forwardingError(toChatId, "Telegram refused the forward or did not answer in time. "
+                                + "Check the destination chat; do not forward these messages again blindly.",
+                                e.getMessage());
+                    }
+                    if (forwarded == 0) {
+                        return forwardingError(toChatId, "Telegram forwarded none of the " + asked
+                                + " message(s) and gave no reason. Nothing was sent, and no comment was added.", null);
+                    }
+                    if (forwarded < asked) {
+                        // половина связки — не успех: повторить «остальное» вслепую
+                        // значит продублировать то, что уже дошло
+                        return forwardingError(toChatId, "Telegram forwarded " + forwarded + " of " + asked
+                                + " messages and refused the rest. What went through is already there — "
+                                + "do not forward again. No comment was added.", null);
+                    }
+                    log.info("Переслано сообщений: {} в чат {}", forwarded, toChatId);
 
                     String comment = arguments.path("comment").asText("").strip();
-                    if (!comment.isEmpty()) {
-                        rhythm.sleepBefore(comment.length(), () -> actions.typing(toChatId));
-                        actions.sendMessage(toChatId, comment.replace("—", "-"), null);
-                        log.info("Комментарий к пересылке: {}", comment);
+                    if (comment.isEmpty()) {
+                        return asked == 1 ? "Message forwarded." : "Forwarded " + forwarded + " messages.";
                     }
-                    return "Message forwarded.";
+                    try {
+                        rhythm.sleepBefore(comment.length(), () -> actions.typing(toChatId));
+                        if (actions.sendMessage(toChatId, comment.replace("—", "-"), null) == 0) {
+                            return forwardingError(toChatId, wentThrough(forwarded) + "but the comment was not sent. "
+                                            + "Do not forward again; say it as a plain message if you still want to.",
+                                    "Telegram returned no message id.");
+                        }
+                        log.info("Комментарий к пересылке: {}", comment);
+                    } catch (RuntimeException e) {
+                        Fatal.check(e);
+                        // пересылка уже принята: чинить надо только комментарий,
+                        // а повторный вызов удвоит чужой пост у получателя
+                        return forwardingError(toChatId, wentThrough(forwarded) + "but the comment was not sent. "
+                                + "Do not forward again — the messages are already there.", e.getMessage());
+                    }
+                    return wentThrough(forwarded) + "your comment went right after it.";
                 });
+    }
+
+    private static String wentThrough(int count) {
+        return count == 1 ? "Message forwarded, " : "Forwarded " + count + " messages, ";
+    }
+
+    /** Чужой ответ Telegram в журнал и в контекст идёт только короткой выжимкой. */
+    private static String forwardingError(long chatId, String status, String reason) {
+        String note = ErrorNote.of(reason);
+        log.warn("Пересылка в чат {}: {}{}", chatId, status, note.isEmpty() ? "" : " " + note);
+        return note.isEmpty() ? status : status + " " + note;
     }
 
     /** Правка уже отправленного — вместо второго сообщения «*опечатка». */
@@ -1743,8 +1814,15 @@ public final class TelegramTools {
     }
 
     private boolean allowed(TdApi.Chat chat) {
+        // лямбда, а не ссылка на метод: ссылка разыменовала бы telegram сразу,
+        // а каналы и пересылку проверяют в том числе без клиента Telegram
+        return allowed(chat, userId -> telegram.isContact(userId));
+    }
+
+    /** Признак контакта подставляется: инструмент учат без клиента Telegram. */
+    private boolean allowed(TdApi.Chat chat, java.util.function.LongPredicate contacts) {
         long userId = chat.type instanceof TdApi.ChatTypePrivate priv ? priv.userId : 0;
-        return lockdown.allows(chat, userId != 0 && telegram.isContact(userId));
+        return lockdown.allows(chat, userId != 0 && contacts.test(userId));
     }
 
     /**
