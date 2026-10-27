@@ -30,7 +30,7 @@ public final class Fatal {
         if (!isHopeless(error)) {
             return false;
         }
-        log.error("Дальше работать нельзя: {}", messageOf(error));
+        log.error("Дальше работать нельзя: {}", ErrorNote.of(messageOf(error)));
         Consumer<Throwable> handler = onFatal;
         if (handler != null) {
             handler.accept(error);

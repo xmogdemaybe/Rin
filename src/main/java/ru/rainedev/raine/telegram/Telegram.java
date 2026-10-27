@@ -78,9 +78,13 @@ public final class Telegram {
     }
 
     public Telegram(SimpleTelegramClient client, String characterName) {
+        this(client, characterName, client.getMeAsync().join().id);
+    }
+
+    Telegram(SimpleTelegramClient client, String characterName, long myId) {
         this.client = client;
         this.characterName = characterName;
-        this.myId = client.getMeAsync().join().id;
+        this.myId = myId;
     }
 
     public long myId() {
@@ -811,7 +815,7 @@ public final class Telegram {
 
     /** Отправка не удалась — знать об этом важнее, чем молча идти дальше. */
     public void onSendFailed(long temporaryId, String reason) {
-        log.warn("Сообщение не отправилось: {}", reason);
+        log.warn("Сообщение не отправилось: {}", ru.rainedev.raine.core.ErrorNote.of(reason));
         note(temporaryId, 0L);
     }
 

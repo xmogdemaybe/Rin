@@ -196,6 +196,7 @@ public final class RaineApp implements AutoCloseable {
         // галерея — папка из настроек, а не часть генератора: снимки, которые в
         // ней уже лежат, можно выкладывать и тогда, когда рисовать нечем
         tools.gallery(config.camera().gallery());
+        tools.channelsPosting(config.channelsPostingEnabled());
 
         var horde = new ru.rainedev.raine.image.HordeClient(
                 config.camera().baseUrl(), config.camera().apiKey(), config.camera().models(),

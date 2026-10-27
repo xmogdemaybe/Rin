@@ -104,12 +104,12 @@ public final class ChatScreen {
             case CHANNEL -> """
 
                     <instructions>
-                    You are in telegram channel (also known as supergroup) called "%s".
-                    Pay close attention to these messages. Acquire context from them. You can't respond in telegram \
-                    channels (#send_telegram_message tool is not available). Instead, do what you usually do when \
-                    reading newsletters: reflect and reason on them.
+                    You are in a Telegram channel called "%s".
+                    Read these posts for context and reflect on them. The #send_telegram_message tool is not available.
+                    You can publish a new text post only through #post_to_channel if it is available. \
+                    Telegram may refuse publication if this account lacks permission. This is not a conversation reply.
                     Some channels have reactions enabled. In that case, you can sometimes react with \
-                    #react_with_emoji to express your feelings about a message, but you can't send a full reply.
+                    #react_with_emoji to express your feelings about a message.
 
                     Forwarding posts:
                     If you find a post genuinely interesting, funny, or relevant to someone you know — you can forward \

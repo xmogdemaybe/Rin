@@ -4,6 +4,8 @@ import it.tdlight.jni.TdApi;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.ErrorNote;
+import ru.rainedev.raine.core.Fatal;
 import ru.rainedev.raine.core.LowQualityException;
 import ru.rainedev.raine.core.Numbers;
 import ru.rainedev.raine.core.Tool;
@@ -99,6 +101,8 @@ public final class TelegramTools {
     private final Telegram telegram;
     private final TelegramActions actions;
     private final ChatScreen screen;
+    private volatile boolean channelsPostingEnabled;
+    private volatile long writingChatId;
     private java.nio.file.Path gallery = java.nio.file.Path.of("data/gallery");
     private java.nio.file.Path voiceDir = java.nio.file.Path.of("data/voice_messages");
     private java.util.function.Supplier<String> speechPrompt =
@@ -152,6 +156,7 @@ public final class TelegramTools {
 
     /** Ход закончен: выходим из всех чатов, куда заходили. */
     public void closeOpened() {
+        writingChatId = 0;
         for (Long chatId : opened) {
             try {
                 actions.stopTyping(chatId);
@@ -378,6 +383,7 @@ public final class TelegramTools {
         return Tool.named("open")
                 .describedAs(openingDescription(title))
                 .buildContextual((arguments, addTool) -> {
+            writingChatId = 0;
             TdApi.Chat chat = telegram.chat(chatId);
             if (!allowed(chat)) {
                 // проверка и здесь, а не только на входящих: найдя человека поиском,
@@ -413,24 +419,9 @@ public final class TelegramTools {
                         + "You cannot write to them. Go back to a chat you already have.";
             }
 
-            // в канале отвечать нечем — инструмента отправки там просто нет,
-            // но реагировать и пересылать можно
             addTool.accept(searchMessages(chatId, view));
             addTool.accept(messagesAround(chatId, view));
-            if (rendered.kind() != ChatKind.CHANNEL) {
-                addTool.accept(send(chatId));
-                if (voice != null && voice.isAvailable()) {
-                    addTool.accept(recordAudio(chatId));
-                }
-                if (camera != null && camera.isAvailable()) {
-                    addTool.accept(takePhoto(chatId));
-                }
-                if (behaviour.stickers()) {
-                    addTool.accept(stickers.send(chatId));
-                }
-                addTool.accept(editMessage(chatId));
-                addTool.accept(deleteMessage(chatId));
-            }
+            addWritingTools(rendered.kind(), chatId, addTool);
             addTool.accept(chatPhoto(chatId));
             addTool.accept(react(chatId));
             if (behaviour.stickers()) {
@@ -447,6 +438,115 @@ public final class TelegramTools {
             }
             return rendered.text();
         });
+    }
+
+    void addWritingTools(ChatKind kind, long chatId, java.util.function.Consumer<Tool> addTool) {
+        writingChatId = chatId;
+        if (kind == ChatKind.CHANNEL) {
+            if (channelsPostingEnabled) {
+                addTool.accept(postToChannel(chatId));
+            }
+            return;
+        }
+        addTool.accept(send(chatId));
+        if (voice != null && voice.isAvailable()) {
+            addTool.accept(recordAudio(chatId));
+        }
+        if (camera != null && camera.isAvailable()) {
+            addTool.accept(takePhoto(chatId));
+        }
+        if (behaviour.stickers()) {
+            addTool.accept(stickers.send(chatId));
+        }
+        addTool.accept(editMessage(chatId));
+        addTool.accept(deleteMessage(chatId));
+    }
+
+    /** Разрешение владельца при запуске; само по себе не даёт прав в Telegram. */
+    public void channelsPosting(boolean enabled) {
+        channelsPostingEnabled = enabled;
+    }
+
+    /** Один текстовый пост в уже открытый канал, без повадок разговорной отправки. */
+    public Tool postToChannel(long chatId) {
+        return postToChannel(chatId, () -> telegram.chatCached(chatId), id -> telegram.confirmedId(id));
+    }
+
+    Tool postToChannel(long chatId, java.util.function.Supplier<TdApi.Chat> chat,
+                       java.util.function.LongUnaryOperator confirmedId) {
+        return Tool.named("post_to_channel")
+                .describedAs("Publishes one text-only post to the currently opened existing channel. "
+                        + "One call = one post, at most 4096 UTF-16 characters. Telegram may refuse publication. "
+                        + "If delivery is unconfirmed, check the channel and do not duplicate the post.")
+                .requiredString("text", "Non-blank post text, at most 4096 UTF-16 characters")
+                .mutating()
+                .build(arguments -> {
+                    if (!channelsPostingEnabled) {
+                        return "Channel posting is disabled. Nothing sent.";
+                    }
+                    // Набор сохраняет старую тулзу при переходе из канала в личку.
+                    if (writingChatId != chatId) {
+                        return "Open this channel before posting. Nothing sent.";
+                    }
+                    var value = arguments == null ? null : arguments.get("text");
+                    if (value == null || !value.isTextual() || value.textValue().isBlank()
+                            || value.textValue().length() > 4096) {
+                        return "Text must be a non-blank string of at most 4096 UTF-16 characters. Nothing sent.";
+                    }
+                    try {
+                        TdApi.Chat target = chat.get();
+                        if (target == null || target.id != chatId || ChatKind.of(target) != ChatKind.CHANNEL) {
+                            return "This is not the opened channel. Nothing sent.";
+                        }
+                        if (!allowed(target)) {
+                            return "This channel is outside the allowed circle. Nothing sent.";
+                        }
+                    } catch (RuntimeException e) {
+                        Fatal.check(e);
+                        return channelPostingError(chatId,
+                                "Channel check failed before sending. Nothing sent.", e.getMessage());
+                    }
+
+                    long temporaryId;
+                    try {
+                        temporaryId = actions.sendMessage(chatId, value.textValue(), null);
+                    } catch (RuntimeException e) {
+                        Fatal.check(e);
+                        // Таймаут не доказывает, что Telegram не принял запрос.
+                        return channelPostingError(chatId,
+                                "Send failed before acceptance was confirmed. Delivery is unknown; "
+                                        + "check the channel and do not duplicate the post.", e.getMessage());
+                    }
+                    if (temporaryId == 0) {
+                        return channelPostingError(chatId,
+                                "Delivery is unknown; check the channel and do not duplicate the post.",
+                                "Telegram returned no message id.");
+                    }
+                    long finalId;
+                    try {
+                        finalId = confirmedId.applyAsLong(temporaryId);
+                    } catch (RuntimeException e) {
+                        Fatal.check(e);
+                        return channelPostingError(chatId,
+                                "Post accepted, but confirmation failed. Delivery is unknown; "
+                                        + "check the channel and do not duplicate the post.", e.getMessage());
+                    }
+                    if (finalId == 0) {
+                        return channelPostingError(chatId, "Telegram reported that the post failed.",
+                                "The post was not published.");
+                    }
+                    if (finalId == temporaryId) {
+                        return "Post accepted, but delivery is not yet confirmed (temporary message_id="
+                                + temporaryId + "). Check the channel; do not duplicate the post.";
+                    }
+                    return "Post published. message_id=" + finalId;
+                });
+    }
+
+    private static String channelPostingError(long chatId, String status, String reason) {
+        String note = ErrorNote.of(reason);
+        log.warn("Публикация в канале {}: {} {}", chatId, status, note);
+        return status + " " + note;
     }
 
     /**

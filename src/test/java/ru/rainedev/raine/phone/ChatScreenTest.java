@@ -34,18 +34,23 @@ class ChatScreenTest {
         assertTrue(result.text().startsWith("You switched to the chat \"John\""), result.text());
         assertTrue(result.text().contains("привет"), result.text());
         assertTrue(result.text().contains("private chat with John"), result.text());
+        assertFalse(result.text().contains("#post_to_channel"), result.text());
     }
 
     @Test
-    void channelForbidsReplying() {
+    void channelAllowsOnlyOptionalPostingNotConversationReplies() {
         TdApi.ChatTypeSupergroup type = new TdApi.ChatTypeSupergroup();
         type.isChannel = true;
 
         ChatScreen.Screen result = screen.render(chat(2L, "Новости", type), List.of(message(1L, "пост")), view);
 
         assertEquals(ChatKind.CHANNEL, result.kind());
-        assertTrue(result.text().contains("can't respond in telegram channels"), result.text());
+        assertTrue(result.text().contains("#send_telegram_message tool is not available"), result.text());
+        assertTrue(result.text().contains("only through #post_to_channel if it is available"), result.text());
+        assertTrue(result.text().contains("Telegram may refuse"), result.text());
         assertTrue(result.text().contains("#forward_message"), result.text());
+        assertTrue(result.text().contains("#react_with_emoji"), result.text());
+        assertFalse(result.text().contains("can't respond in telegram channels"), result.text());
     }
 
     @Test
@@ -57,6 +62,7 @@ class ChatScreenTest {
 
         assertEquals(ChatKind.GROUP, result.kind());
         assertTrue(result.text().contains("group chat called \"Тусовка\""), result.text());
+        assertFalse(result.text().contains("#post_to_channel"), result.text());
     }
 
     @Test

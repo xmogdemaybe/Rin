@@ -81,8 +81,7 @@ public final class Lockdown {
         if (mode == Mode.NONE || chat == null) {
             return mode == Mode.NONE;
         }
-        // каналы — это лента новостей: ответить туда нельзя, и написать ей оттуда
-        // тоже. Читать их не запрещаем даже в самом строгом режиме
+        // Доступ к каналам разрешается отдельно даже в самом строгом режиме.
         if (ChatKind.of(chat) == ChatKind.CHANNEL) {
             return allowChannels;
         }
