@@ -1,5 +1,7 @@
 package ru.rainedev.raine.tools;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -23,7 +25,11 @@ public final class WebSearch {
     /** Сколько чужого текста уходит в контекст на один результат. */
     static final int MAX_SNIPPET = 2000;
 
-    private final ObjectMapper mapper = new ObjectMapper();
+    private static final int MAX_TITLE = 300;
+    private static final int MAX_URL = 2000;
+    private static final int MAX_QUERY = 500;
+
+    private final ObjectMapper mapper = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
 
     private final String url;
@@ -57,23 +63,39 @@ public final class WebSearch {
 
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
-                String note = ErrorNote.of(response.body());
+                String note = errorNote(response.body());
                 log.warn("Веб-поиск вернул {}: {}", response.statusCode(), note);
-                // причина передаётся как есть: «кончилась квота» и «нет сети» —
-                // это разные вещи, и решать, что делать дальше, ей
+                // Безопасная причина сохраняет разницу между квотой и отсутствием сети.
                 return "Web search failed (%d): %s".formatted(response.statusCode(), note);
             }
-            return render(mapper.readTree(response.body()).path("results"), query);
+            JsonNode envelope = mapper.readTree(response.body());
+            if (envelope == null || !envelope.isObject()) {
+                return unknownFormat();
+            }
+            // Наличие results, даже null, исключает откат к data.
+            return render(envelope.has("results") ? envelope.get("results") : envelope.get("data"), query);
+        } catch (JsonProcessingException e) {
+            // Ошибка разбора может цитировать ответ сервера: наружу только известная причина.
+            return unknownFormat();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return "Web search interrupted";
         } catch (Exception e) {
-            // сюда же приходит и ответ, который не разобрался: текст такой ошибки
-            // цитирует чужую страницу, а её кусок ничего не объясняет и только
-            // занимает место в контексте
-            log.warn("Веб-поиск не удался: {}", e.getMessage());
-            return "Web search failed: " + ErrorNote.of(e.getMessage());
+            String note = errorNote(e.getMessage());
+            log.warn("Веб-поиск не удался: {}", note);
+            return "Web search failed: " + note;
         }
+    }
+
+    private String errorNote(String text) {
+        // Известный ключ скрываем до сокращения и очистки, независимо от его длины и формы.
+        return ErrorNote.of(text == null ? null : text.replace(apiKey, "[скрыто]"));
+    }
+
+    private static String unknownFormat() {
+        String note = ErrorNote.of("Unknown web search response format");
+        log.warn("Веб-поиск не удался: {}", note);
+        return "Web search failed: " + note;
     }
 
     /**
@@ -88,10 +110,21 @@ public final class WebSearch {
      * Видна пакету: мерить размер чужого ответа можно и без поднятой сети.
      */
     static String render(JsonNode results, String query) {
-        if (!results.isArray() || results.isEmpty()) {
+        if (results == null || !results.isArray()) {
+            return unknownFormat();
+        }
+        if (results.isEmpty()) {
             // запрос модель берёт из разговора, а разговор диктуют посторонние:
             // голое эхо вернуло бы чужую скопку уже готовым тегом
-            return "Nothing found on the web for: " + Markup.body(query);
+            return "Nothing found on the web for: " + bounded(Markup.body(query), MAX_QUERY);
+        }
+        // Проверяем весь массив до вывода: повреждение не становится пустой находкой,
+        // даже если оно оказалось за пределом пяти результатов.
+        for (JsonNode result : results) {
+            if (!result.isObject() || !result.path("title").isTextual()
+                    || !result.path("url").isTextual() || !result.path("content").isTextual()) {
+                return unknownFormat();
+            }
         }
         StringBuilder out = new StringBuilder();
         int kept = 0;
@@ -100,13 +133,21 @@ public final class WebSearch {
                 log.warn("Веб-поиск вернул больше {} результатов — остальные отброшены", MAX_RESULTS);
                 break;
             }
-            out.append("<web_search_result title=\"%s\" url=\"%s\">\n%s\n</web_search_result>\n".formatted(
-                    Markup.attribute(result.path("title").asText("")),
-                    Markup.attribute(result.path("url").asText("")),
-                    Markup.body(snippet(result.path("content").asText("")))));
+            String resultUrl = result.path("url").asText();
+            boolean omitUrl = resultUrl.length() > MAX_URL;
+            // Обрезанный URL выглядит рабочим, но ведёт уже не туда: опускаем целиком.
+            out.append("<web_search_result title=\"%s\" url=\"%s\">\n%s%s\n</web_search_result>\n".formatted(
+                    bounded(Markup.attribute(result.path("title").asText()), MAX_TITLE),
+                    omitUrl ? "" : Markup.attribute(resultUrl),
+                    omitUrl ? "[URL omitted: too long]\n" : "",
+                    Markup.body(snippet(result.path("content").asText()))));
             kept++;
         }
         return out.toString();
+    }
+
+    private static String bounded(String text, int limit) {
+        return text.length() <= limit ? text : text.substring(0, limit) + "…";
     }
 
     /** Кусок чужой страницы: дальше смыслов уже нет, а токены есть. */
