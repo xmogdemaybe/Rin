@@ -187,6 +187,8 @@ public final class RaineApp implements AutoCloseable {
 
         telegramMedia.hearing(hearing);
         telegramMedia.markHeard(actions, config.hearing().markListened());
+        // в режиме только чтения отметка до Telegram не доходит, и ждать её незачем
+        telegramMedia.markHeardDelay(config.readOnly() ? 0 : config.hearing().markHeardDelaySeconds());
 
         AntiRepeat antiRepeat = new AntiRepeat(llm, prompts.lazy("anti_repeat.md"), config.repeat());
         tools = new TelegramTools(telegram, actions, new ChatScreen(formatter, prompts).recentDepth(config.vision().recentDepth()),

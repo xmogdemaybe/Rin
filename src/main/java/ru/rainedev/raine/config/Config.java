@@ -139,9 +139,13 @@ public record Config(
      *
      * @param markListened помечать ли услышанное прослушанным: галочку увидит
      *                     автор сообщения, и решать это должен владелец
+     * @param markHeardDelaySeconds до скольких секунд дотягивать эту отметку:
+     *                              человек слушает запись столько, сколько она
+     *                              звучит, и мгновенная галочка выдала бы, что
+     *                              её не слушали вовсе
      */
     public record Hearing(boolean enabled, boolean voiceNotes, boolean videoNotes,
-                          boolean markListened, Path cacheDir) {}
+                          boolean markListened, int markHeardDelaySeconds, Path cacheDir) {}
 
     /** Генерация снимков. */
     /**
@@ -245,6 +249,8 @@ public record Config(
                                 "слушать ли видеокружки самой модели"),
                         s.flag("hearing_mark_listened", true,
                                 "помечать ли услышанное прослушанным: автор сообщения увидит галочку"),
+                        s.integer("mark_heard_delay_seconds", 4,
+                                "до скольких секунд дотягивать отметку о прослушивании: ноль — отмечать сразу"),
                         s.path("hearing_cache_dir", "cache/hearing", "кэш услышанного")),
                 new Camera(
                         s.flag("camera_enabled", true, "может ли делать снимки"),

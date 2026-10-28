@@ -79,7 +79,7 @@ class ModelHearingTest {
     }
 
     private static Config.Hearing hearing(boolean voiceNotes, boolean videoNotes, Path cache) {
-        return new Config.Hearing(true, voiceNotes, videoNotes, true, cache);
+        return new Config.Hearing(true, voiceNotes, videoNotes, true, 4, cache);
     }
 
     private static ModelHearing with(Ears ears, Path cache, boolean voiceNotes, boolean videoNotes) {
@@ -94,7 +94,7 @@ class ModelHearingTest {
         // относился к отдельному распознавателю, которого больше нет
         ModelHearing deaf = new ModelHearing(new Ears(), new Prompts(Path.of("prompts"),
                 new Config.Character("Raine", "@raine_tyan", "RaineDev")),
-                "модель", Path.of("cache"), new Config.Hearing(false, true, true, true, Path.of("cache")));
+                "модель", Path.of("cache"), new Config.Hearing(false, true, true, true, 4, Path.of("cache")));
 
         assertFalse(deaf.hearsVoiceNotes(), "выключено — значит не слушает");
         assertFalse(deaf.hearsVideoNotes(), "выключено — значит не слушает");
@@ -143,6 +143,29 @@ class ModelHearingTest {
         // то же голосовое спрашивают не раз: чат открывают заново
         assertEquals(Optional.of("привет, папик"), with(ears, cache, true, true).listen(voice, Track.VOICE));
         assertEquals(1, ears.sounds.size(), "второй раз прослушивать незачем");
+    }
+
+    /**
+     * Готовая расшифровка — не новое прослушивание: время на неё потратили
+     * раньше. Без этого различия отметка «прослушано» ждала бы дольше всего
+     * именно тогда, когда слушать уже нечего.
+     */
+    @Test
+    void aRememberedTranscriptionIsNotAFreshOne(@TempDir Path dir) throws Exception {
+        Path cache = dir.resolve("cache");
+        Ears ears = new Ears().willHear("привет, папик");
+        Path voice = voiceNote(dir);
+
+        ModelHearing.Heard first = with(ears, cache, true, true)
+                .listenMarked(voice, Track.VOICE).orElseThrow();
+        assertEquals("привет, папик", first.words());
+        assertTrue(first.fresh(), "в первый раз звук действительно слушают");
+
+        ModelHearing.Heard second = with(ears, cache, true, true)
+                .listenMarked(voice, Track.VOICE).orElseThrow();
+        assertEquals("привет, папик", second.words());
+        assertFalse(second.fresh(), "второй раз это готовая расшифровка из кэша");
+        assertEquals(1, ears.sounds.size(), "звука во второй раз не было");
     }
 
     @Test

@@ -148,6 +148,23 @@ public final class ModelHearing {
      * @return сказанное словами или пусто, если не вышло
      */
     public Optional<String> listen(Path file, Track track) {
+        return listenMarked(file, track).map(Heard::words);
+    }
+
+    /**
+     * @param words сказанное словами
+     * @param fresh слушали ли звук заново: готовая расшифровка из кэша значит,
+     *              что время на неё уже потратили раньше
+     */
+    public record Heard(String words, boolean fresh) {}
+
+    /**
+     * То же, что {@link #listen(Path, Track)}, но с признаком, слушали ли звук
+     * на этот раз. Нужен тому, кто после расшифровки отмечает сообщение
+     * прослушанным: отметка должна выглядеть как прослушивание, а готовая
+     * расшифровка слушанием уже не является.
+     */
+    public Optional<Heard> listenMarked(Path file, Track track) {
         if (!hears(track)) {
             // разрешение держится здесь, а не у того, кто зовёт: к кружку вели
             // две дороги, и на одной из них оно терялось
@@ -155,7 +172,7 @@ public final class ModelHearing {
         }
         String remembered = fromCache(file);
         if (remembered != null) {
-            return Optional.of(remembered);
+            return Optional.of(new Heard(remembered, false));
         }
         Optional<Take> take = soundOf(file, track);
         if (take.isEmpty()) {
@@ -186,7 +203,7 @@ public final class ModelHearing {
             String words = withNote(said, take.get().cut());
             toCache(file, words);
             log.info("Услышано: {}", firstLine(words));
-            return Optional.of(words);
+            return Optional.of(new Heard(words, true));
         } catch (RuntimeException e) {
             log.warn("Прослушать {} не вышло: {}", file.getFileName(), e.getMessage());
             return Optional.empty();

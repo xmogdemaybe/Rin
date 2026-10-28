@@ -10,6 +10,7 @@ import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MediaDescriber;
+import ru.rainedev.raine.speech.ModelHearing;
 import ru.rainedev.raine.speech.ModelHearing.Track;
 import ru.rainedev.raine.telegram.Telegram;
 
@@ -32,6 +33,24 @@ public final class TelegramMedia implements MediaDescriber {
 
     /** Ставить ли отметку «прослушано» — её увидит автор сообщения, поэтому решает владелец. */
     private boolean markHeard;
+
+    /** До скольких секунд дотягивать отметку «прослушано»; ноль — отмечать сразу. */
+    private int markHeardDelaySeconds;
+
+    /**
+     * Сообщения, которые уже помечены прослушанными. Вложение разбирают дважды:
+     * сначала греют, потом рисуют разметку, — и без этой памяти отметка вместе
+     * с паузой выстрелила бы повторно, уже когда собеседник ждёт ответа.
+     * Мест ровно столько, сколько нужно одному ходу: бот живёт неделями.
+     */
+    private static final int MARKED_CAP = 512;
+    private final java.util.Set<String> marked = java.util.Collections.synchronizedSet(
+            java.util.Collections.newSetFromMap(new java.util.LinkedHashMap<>() {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Boolean> eldest) {
+                    return size() > MARKED_CAP;
+                }
+            }));
 
     /** Разбирать ли ролики в каналах покадрово. Обычно нет — слишком дорого. */
     private boolean videoInChannels;
@@ -70,6 +89,15 @@ public final class TelegramMedia implements MediaDescriber {
         this.markHeard = allowed;
     }
 
+    /**
+     * @param seconds минимальное время от начала разбора до отметки «прослушано».
+     *                Человек слушает запись столько, сколько она звучит, и галочка
+     *                в ту же секунду выдала бы, что её не слушали вовсе
+     */
+    public void markHeardDelay(int seconds) {
+        this.markHeardDelaySeconds = Math.max(0, seconds);
+    }
+
     public void videoInChannels(boolean allowed) {
         this.videoInChannels = allowed;
     }
@@ -86,6 +114,9 @@ public final class TelegramMedia implements MediaDescriber {
         if (!sees() && !hearable(message) && !(message.content instanceof TdApi.MessageStory)) {
             return "";
         }
+        // с этого места считают, сколько длилось прослушивание: отметка
+        // «прослушано» должна падать не раньше, чем запись успели бы услышать
+        long startedAt = System.currentTimeMillis();
         return switch (message.content) {
             case TdApi.MessagePhoto photo -> look(largest(photo.photo), Vision.Kind.PHOTO);
             case TdApi.MessageSticker sticker -> {
@@ -95,12 +126,12 @@ public final class TelegramMedia implements MediaDescriber {
             }
             // у подарка есть вид и цена — без них «подарок» ничего не говорит
             case TdApi.MessageGift gift -> gift(gift);
-            case TdApi.MessageVoiceNote ignored -> heard(message, "voice");
+            case TdApi.MessageVoiceNote ignored -> heard(message, "voice", startedAt);
             case TdApi.MessageVideoNote videoNote ->
                     // у кружка есть и картинка, и речь, но дорога к звуку
                     // должна быть одна: через зрение он слушался бы по
                     // разрешению ролика, а тумблер кружка там не спрашивают
-                    watch(fileOf(videoNote.videoNote.video), false) + heard(message, "video_note");
+                    watch(fileOf(videoNote.videoNote.video), false) + heard(message, "video_note", startedAt);
             case TdApi.MessageVideo video -> video.video == null ? "" : watchOrGlance(
                     message, fileOf(video.video.video), thumbnailOf(video.video.thumbnail));
             case TdApi.MessageAnimation animation -> animation.animation == null ? "" : watchOrGlance(
@@ -436,19 +467,109 @@ public final class TelegramMedia implements MediaDescriber {
      * Голосовое без расшифровки — потерянное сообщение: видно, что оно было,
      * а что сказали, неизвестно. Сначала спрашиваем Telegram: он делает это сам
      * и за премиум качество лучше. Не вышло — слушает сама модель.
+     *
+     * @param startedAt когда начали разбирать вложение: по нему отмечают
+     *                  «прослушано» не раньше, чем запись успели бы услышать
      */
-    private String heard(TdApi.Message message, String tag) {
+    private String heard(TdApi.Message message, String tag, long startedAt) {
         Optional<String> speech = telegram.recognizeSpeech(message.chatId, message.id);
+        boolean fresh = speech.isPresent();   // премиум-распознавание слушает запись прямо сейчас
         if (speech.isEmpty()) {
-            speech = heardByModel(message);
+            Optional<ModelHearing.Heard> byModel = heardByModel(message);
+            speech = byModel.map(ModelHearing.Heard::words);
+            fresh = byModel.map(ModelHearing.Heard::fresh).orElse(false);
         }
         if (speech.isEmpty()) {
             return "";
         }
-        if (actions != null && shouldMarkHeard(message, markHeard)) {
-            actions.openContent(message.chatId, message.id);
-        }
+        markListened(message, startedAt, fresh);
         return transcription(tag, speech.get());
+    }
+
+    /**
+     * Отметить прослушанным, выждав то, чего не хватило самому прослушиванию.
+     * <p>
+     * Пауза нужна, потому что галочка в ту же секунду, когда прислали запись,
+     * выдаёт, что её не слушали вовсе. Готовая расшифровка из кэша паузы не
+     * заслуживает: время на неё потратили раньше.
+     */
+    private void markListened(TdApi.Message message, long startedAt, boolean fresh) {
+        if (actions == null) {
+            return;
+        }
+        Mark mark = markOf(message, markHeard, marked, System.currentTimeMillis() - startedAt,
+                markHeardDelaySeconds * 1000L, fresh);
+        if (!mark.set()) {
+            return;
+        }
+        if (!sleep(mark.waitMs())) {
+            // останавливают — отметка не важнее остановки
+            marked.remove(keyOf(message));
+            return;
+        }
+        actions.openContent(message.chatId, message.id);
+    }
+
+    /**
+     * @param set отмечать ли это сообщение на этот раз
+     * @param waitMs сколько ещё выждать до отметки
+     */
+    record Mark(boolean set, long waitMs) {}
+
+    /**
+     * Отмечают один раз на сообщение: вложение разбирают дважды — сначала греют,
+     * потом рисуют разметку, — и второй разбор идёт по кэшу мгновенно. Без этой
+     * памяти отметка вместе с паузой выстрелила бы повторно, уже когда
+     * собеседник ждёт ответа.
+     * <p>
+     * Видно пакету: проверять можно без Telegram.
+     */
+    static Mark markOf(TdApi.Message message, boolean allowed, java.util.Set<String> marked,
+                       long elapsedMs, long maxMs, boolean fresh) {
+        if (!shouldMarkHeard(message, allowed) || !marked.add(keyOf(message))) {
+            return new Mark(false, 0);
+        }
+        return new Mark(true, remainingMs(elapsedMs, durationSeconds(message), maxMs, fresh));
+    }
+
+    /**
+     * Сколько ещё ждать до отметки. Цель — минимальное общее время от начала
+     * разбора: длинная запись стоит дольше короткой, но у потолка.
+     */
+    static long remainingMs(long elapsedMs, int durationSeconds, long maxMs, boolean fresh) {
+        if (!fresh || maxMs <= 0) {
+            return 0;
+        }
+        long target = Math.min(Math.max(durationSeconds * 350L, 1000L), maxMs);
+        return Math.max(0, target - elapsedMs);
+    }
+
+    /** Сколько звучит запись: по ней и считают, сколько её слушают. */
+    static int durationSeconds(TdApi.Message message) {
+        return switch (message.content) {
+            case TdApi.MessageVoiceNote voice -> voice.voiceNote == null ? 0 : voice.voiceNote.duration;
+            case TdApi.MessageVideoNote note -> note.videoNote == null ? 0 : note.videoNote.duration;
+            default -> 0;
+        };
+    }
+
+    /** Номера сообщений повторяются в каждом чате, поэтому ключ — с чатом. */
+    private static String keyOf(TdApi.Message message) {
+        return message.chatId + ":" + message.id;
+    }
+
+    /** @return false, если ждать не дали: прерванный сон значит остановку */
+    private static boolean sleep(long millis) {
+        if (millis <= 0) {
+            return true;
+        }
+        try {
+            Thread.sleep(millis);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /** Есть чем слушать это вложение вовсе: зрение для голосового не нужно. */
@@ -461,15 +582,15 @@ public final class TelegramMedia implements MediaDescriber {
      * Что модель слышит из файла сама. Пусто, если слуха нет или тумблер снят:
      * качать ради этого файл незачем.
      */
-    private Optional<String> heardByModel(TdApi.Message message) {
+    private Optional<ModelHearing.Heard> heardByModel(TdApi.Message message) {
         if (hearing == null) {
             return Optional.empty();
         }
         return switch (message.content) {
             case TdApi.MessageVoiceNote voice when hearing.hears(Track.VOICE) ->
-                    soundOf(voice.voiceNote.voice).flatMap(sound -> hearing.listen(sound, Track.VOICE));
+                    soundOf(voice.voiceNote.voice).flatMap(sound -> hearing.listenMarked(sound, Track.VOICE));
             case TdApi.MessageVideoNote note when hearing.hears(Track.CIRCLE) ->
-                    soundOf(note.videoNote.video).flatMap(sound -> hearing.listen(sound, Track.CIRCLE));
+                    soundOf(note.videoNote.video).flatMap(sound -> hearing.listenMarked(sound, Track.CIRCLE));
             default -> Optional.empty();
         };
     }

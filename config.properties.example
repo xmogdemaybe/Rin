@@ -114,6 +114,9 @@ hearing_video_notes=true
 # помечать ли услышанное прослушанным: галочку увидит автор сообщения
 hearing_mark_listened=true
 
+# до скольких секунд дотягивать отметку о прослушивании: ноль — отмечать сразу
+mark_heard_delay_seconds=4
+
 # кэш услышанного
 hearing_cache_dir=cache/hearing
 
