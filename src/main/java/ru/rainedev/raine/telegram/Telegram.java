@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.Fatal;
 
 /**
  * Фасад над TDLib. Вызовы блокирующие: цикл живёт на виртуальном потоке,
@@ -548,6 +549,9 @@ public final class Telegram {
         try {
             return ask(new TdApi.GetUser(userId)).isContact;
         } catch (RuntimeException e) {
+            // обычный сбой здесь значит «не контакт», но замороженный аккаунт
+            // нельзя выдавать за отказ от знакомства
+            Fatal.check(e);
             return false;
         }
     }
@@ -874,6 +878,8 @@ public final class Telegram {
         try {
             return Optional.ofNullable(ask(new TdApi.GetMessage(chatId, messageId)));
         } catch (RuntimeException e) {
+            // «сообщения нет» — обычный ответ; замороженный аккаунт — нет
+            Fatal.check(e);
             return Optional.empty();
         }
     }

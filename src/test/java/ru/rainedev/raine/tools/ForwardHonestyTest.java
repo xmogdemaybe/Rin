@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import ru.rainedev.raine.core.ErrorNote;
 import ru.rainedev.raine.core.Fatal;
 import ru.rainedev.raine.core.Tool;
+import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.telegram.Lockdown;
 import ru.rainedev.raine.telegram.TelegramActions;
 
@@ -81,6 +82,8 @@ class ForwardHonestyTest {
 
     /** Всё, что инструмент спрашивает у Telegram, подставляется: клиент не нужен. */
     private Tool forward(long fromChatId) {
+        // тулза создаётся при открытии чата, и набор помнит, какой чат открыт
+        tools.addWritingTools(ChatKind.GROUP, fromChatId, tool -> { });
         return tools.forward(fromChatId, chatId -> {
             if (lookupFailure != null) {
                 throw lookupFailure;
@@ -143,6 +146,19 @@ class ForwardHonestyTest {
         String result = forward(SOURCE).call(args("5", STRANGER_CHAT, null));
 
         assertEquals("You cannot forward anything to that chat.", result);
+        nothingWasSent();
+    }
+
+    @Test
+    void aToolLeftFromAnotherChatIsRefused() {
+        // набор доживает до конца хода: тулза помнит чат, открытый в тот момент,
+        // а он уже сменился — брать сообщения по памяти из закрытого чата нельзя
+        Tool stale = forward(SOURCE);
+        tools.addWritingTools(ChatKind.CHANNEL, FRIEND_CHAT, tool -> { });
+
+        String result = stale.call(args("5", FRIEND_CHAT, null));
+
+        assertTrue(result.contains("Open this chat"), result);
         nothingWasSent();
     }
 

@@ -78,6 +78,15 @@ public final class Lockdown {
     }
 
     public boolean allows(TdApi.Chat chat, boolean isContact) {
+        return allows(chat, () -> isContact);
+    }
+
+    /**
+     * Признак контакта спрашивается, только когда режим действительно решает по
+     * нему: в остальных случаях это был бы запрос к Telegram, ответ которого
+     * никто не прочитает.
+     */
+    public boolean allows(TdApi.Chat chat, java.util.function.BooleanSupplier isContact) {
         if (mode == Mode.NONE || chat == null) {
             return mode == Mode.NONE;
         }
@@ -93,12 +102,20 @@ public final class Lockdown {
         }
         // групповой чат, в котором она состоит, — это круг знакомых по определению:
         // её туда позвали, и переписка там общая, а не личная
-        return ChatKind.of(chat) == ChatKind.GROUP || isContact;
+        return ChatKind.of(chat) == ChatKind.GROUP || isContact.getAsBoolean();
     }
 
     /** Личный чат с владельцем — его нельзя ни закрыть, ни заблокировать. */
     public boolean isOwner(long chatId) {
         return chatId == ownerId;
+    }
+
+    /**
+     * То же по самому чату. Id приватного чата в TDLib совпадает с id собеседника,
+     * но когда чат уже под рукой, его тип надёжнее любого совпадения чисел.
+     */
+    public boolean isOwner(TdApi.Chat chat) {
+        return chat != null && chat.type instanceof TdApi.ChatTypePrivate priv && priv.userId == ownerId;
     }
 
     public boolean allowsSender(long senderId, boolean isContact) {

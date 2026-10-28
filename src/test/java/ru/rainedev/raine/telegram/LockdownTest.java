@@ -72,6 +72,49 @@ class LockdownTest {
     }
 
     @Test
+    void ownerChatIsRecognisedByItsOwnType() {
+        Lockdown lockdown = new Lockdown(Lockdown.Mode.NONE, OWNER);
+
+        assertTrue(lockdown.isOwner(privateChat(OWNER)));
+        assertFalse(lockdown.isOwner(privateChat(STRANGER)));
+        assertFalse(lockdown.isOwner(channel()), "канал не может быть личным чатом владельца");
+        assertFalse(lockdown.isOwner(null));
+    }
+
+    @Test
+    void contactLookupIsSkippedUnlessTheModeAsksForIt() {
+        // там, где ответ про контакты не читается, вопрос — это лишний запрос к Telegram
+        int[] asked = {0};
+        java.util.function.BooleanSupplier contact = () -> {
+            asked[0]++;
+            return true;
+        };
+
+        assertTrue(new Lockdown(Lockdown.Mode.NONE, OWNER).allows(privateChat(STRANGER), contact));
+        assertFalse(new Lockdown(Lockdown.Mode.OWNER_ONLY, OWNER).allows(privateChat(STRANGER), contact));
+        assertTrue(new Lockdown(Lockdown.Mode.CONTACTS_ONLY, OWNER).allows(privateChat(OWNER), contact));
+        assertEquals(0, asked[0], "спрашивать было нечего");
+
+        assertTrue(new Lockdown(Lockdown.Mode.CONTACTS_ONLY, OWNER).allows(privateChat(STRANGER), contact));
+        assertEquals(1, asked[0], "в этом режиме без ответа не обойтись");
+    }
+
+    @Test
+    void groupChatsDoNotNeedTheContactFlag() {
+        // в группу её позвали, и переписка там общая: контакт спрашивать незачем
+        TdApi.Chat group = new TdApi.Chat();
+        group.id = -200L;
+        group.type = new TdApi.ChatTypeBasicGroup();
+        int[] asked = {0};
+
+        assertTrue(new Lockdown(Lockdown.Mode.CONTACTS_ONLY, OWNER).allows(group, () -> {
+            asked[0]++;
+            return false;
+        }));
+        assertEquals(0, asked[0]);
+    }
+
+    @Test
     void openModeAllowsEveryone() {
         Lockdown lockdown = new Lockdown(Lockdown.Mode.NONE, OWNER);
 

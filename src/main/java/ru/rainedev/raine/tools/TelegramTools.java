@@ -412,7 +412,7 @@ public final class TelegramTools {
             // Заговаривать с незнакомыми первой можно разрешить настройкой,
             // но по умолчанию это выключено: слишком легко написать не туда
             boolean stranger = history.isEmpty() && rendered.kind() == ChatKind.DM
-                    && !lockdown.isOwner(chatId);
+                    && !lockdown.isOwner(chat);
             if (stranger && !behaviour.writeToNewPeople()) {
                 log.info("Чат {} пуст, а писать незнакомым не разрешено", chatId);
                 return "This chat is empty — you have never talked to this person. "
@@ -1409,6 +1409,11 @@ public final class TelegramTools {
                 .optionalString("comment", "Optional. Your reaction, sent right after the forwarded message.")
                 .mutating()
                 .build(arguments -> {
+                    // набор сохраняет тулзу прошлого чата: пересылать из чата,
+                    // который уже не открыт, значит брать его id по памяти
+                    if (writingChatId != fromChatId) {
+                        return "Open this chat before forwarding from it. Nothing was forwarded.";
+                    }
                     long toChatId = Numbers.longAt(arguments, "to_chat_id", 0);
                     List<Long> ids = Numbers.idsAt(arguments, "message_id");
                     if (ids.isEmpty()) {
@@ -1822,7 +1827,9 @@ public final class TelegramTools {
     /** Признак контакта подставляется: инструмент учат без клиента Telegram. */
     private boolean allowed(TdApi.Chat chat, java.util.function.LongPredicate contacts) {
         long userId = chat.type instanceof TdApi.ChatTypePrivate priv ? priv.userId : 0;
-        return lockdown.allows(chat, userId != 0 && contacts.test(userId));
+        // признак контакта спрашивается лениво: в режимах NONE и OWNER_ONLY он
+        // всё равно не читается, а каждый вопрос — отдельный запрос к Telegram
+        return lockdown.allows(chat, () -> userId != 0 && contacts.test(userId));
     }
 
     /**
