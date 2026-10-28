@@ -10,13 +10,21 @@ import java.nio.file.*;
 public final class AtomicFiles {
     private AtomicFiles() {}
     public static void writeString(Path file, String content) throws IOException {
+        writeBytes(file, StandardCharsets.UTF_8.encode(content));
+    }
+
+    /** То же для байтов: картинку не нужно перекодировать в текст. */
+    public static void writeBytes(Path file, byte[] content) throws IOException {
+        writeBytes(file, ByteBuffer.wrap(content));
+    }
+
+    private static void writeBytes(Path file, ByteBuffer content) throws IOException {
         Path target = file.toAbsolutePath();
         Files.createDirectories(target.getParent());
         Path temporary = Files.createTempFile(target.getParent(), ".raine-", ".tmp");
         try {
             try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
-                ByteBuffer bytes = StandardCharsets.UTF_8.encode(content);
-                while (bytes.hasRemaining()) channel.write(bytes);
+                while (content.hasRemaining()) channel.write(content);
                 channel.force(true);
             }
             // If atomic replacement is unsupported, preserve the old file and report failure.

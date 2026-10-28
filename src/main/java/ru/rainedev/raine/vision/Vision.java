@@ -33,7 +33,7 @@ public final class Vision {
     private static final int FRAMES_AT_ONCE = 6;
 
     /** Меньше этого — не картинка, а недокачанный файл. */
-    private static final int MIN_IMAGE_BYTES = 512;
+    static final int MIN_IMAGE_BYTES = 512;
 
     /** Что смотрим. От этого зависит и промпт, и какой моделью. */
     public enum Kind {
@@ -238,16 +238,23 @@ public final class Vision {
         return describe(file, kind, context, true);
     }
 
+    public String describe(Path file, Kind kind, List<Message> context, boolean allowCache) {
+        return describe(file, kind, context, allowCache, false);
+    }
+
     /**
      * @param allowCache читать ли готовое описание из кэша и писать туда новое.
      *                   Второй взгляд с вопросом — нет: в кэше лежит общий
      *                   пересказ, ответа на вопрос в нём нет, а узкий ответ не
      *                   должен вытеснить обычный пересказ картинки
+     * @param preview    заставка вместо самого ролика. Помечают отдельно: по
+     *                   одному кадру не узнать, что в ролике было дальше, и
+     *                   догадка не должна уходить в разговор как увиденное
      */
-    public String describe(Path file, Kind kind, List<Message> context, boolean allowCache) {
+    public String describe(Path file, Kind kind, List<Message> context, boolean allowCache, boolean preview) {
         String cached = allowCache ? fromCache(file) : null;
         if (cached != null) {
-            return wrap(kind, cached);
+            return wrap(kind, cached, preview);
         }
 
         byte[] image;
@@ -284,7 +291,7 @@ public final class Vision {
                         toCache(file, description.strip());
                     }
                     log.info("Разглядела {}: {}", kind.tag, description.strip().lines().findFirst().orElse(""));
-                    return wrap(kind, description.strip());
+                    return wrap(kind, description.strip(), preview);
                 }
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустое описание, попытка {} из {}", attempt, MAX_ATTEMPTS);
@@ -317,9 +324,14 @@ public final class Vision {
         return out.append("</context>\n\nDescribe the photo.").toString();
     }
 
-    /** Описание рисует модель по чужому вложению: границы блоков оно ломать не должно. */
-    private static String wrap(Kind kind, String description) {
-        return "<%s description>\n%s\n</%s>\n".formatted(kind.tag, Markup.body(description), kind.tag);
+    /**
+     * Описание рисует модель по чужому вложению: границы блоков оно ломать не
+     * должно. Заставку отмечают в открывающем теге, чтобы модель отличала один
+     * кадр от просмотра всего ролика.
+     */
+    private static String wrap(Kind kind, String description, boolean preview) {
+        return "<%s description%s>\n%s\n</%s>\n".formatted(kind.tag, preview ? " preview=\"true\"" : "",
+                Markup.body(description), kind.tag);
     }
 
     /**

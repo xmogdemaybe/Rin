@@ -1,24 +1,38 @@
 package ru.rainedev.raine.vision;
 
 import it.tdlight.jni.TdApi;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.phone.MediaDescriber;
 import ru.rainedev.raine.speech.ModelHearing;
 import ru.rainedev.raine.speech.ModelHearing.Track;
+import ru.rainedev.raine.storage.AtomicFiles;
 import ru.rainedev.raine.telegram.Telegram;
 
 /** Скачивает вложение из Telegram и передаёт его зрению или слуху. */
 public final class TelegramMedia implements MediaDescriber {
 
+    private static final Logger log = LoggerFactory.getLogger(TelegramMedia.class);
+
     /** Что видно, если историю достать не удалось. Текст читает модель, поэтому он английский. */
     private static final String UNREACHABLE = "This story could not be opened — it may have expired or been hidden.";
+
+    /**
+     * Куда кладут заставку, присланную байтами вместе с сообщением: файл нужен
+     * только как имя для кэша описания.
+     */
+    private static final Path PREVIEW_DIR = Path.of(System.getProperty("java.io.tmpdir"), "raine-preview");
 
     private final Telegram telegram;
     /** Может не быть: зрение включают тумблером, а подпись истории читается и без него. */
@@ -131,17 +145,16 @@ public final class TelegramMedia implements MediaDescriber {
                     // у кружка есть и картинка, и речь, но дорога к звуку
                     // должна быть одна: через зрение он слушался бы по
                     // разрешению ролика, а тумблер кружка там не спрашивают
-                    watch(fileOf(videoNote.videoNote.video), false) + heard(message, "video_note", startedAt);
-            case TdApi.MessageVideo video -> video.video == null ? "" : watchOrGlance(
-                    message, fileOf(video.video.video), thumbnailOf(video.video.thumbnail));
-            case TdApi.MessageAnimation animation -> animation.animation == null ? "" : watchOrGlance(
-                    message, fileOf(animation.animation.animation), thumbnailOf(animation.animation.thumbnail));
+                    circle(message, videoNote.videoNote) + heard(message, "video_note", startedAt);
+            case TdApi.MessageVideo video -> video.video == null ? ""
+                    : watchOrGlance(message, Ladder.of(video), true);
+            case TdApi.MessageAnimation animation -> animation.animation == null ? ""
+                    : watchOrGlance(message, Ladder.of(animation.animation), true);
             // роликом, присланным файлом, каналы пользуются чаще всего: по типу
             // сообщения это документ, и без разбора имени он уходил бы в разбор
             // картинки, где из видео не видно ничего
             case TdApi.MessageDocument document -> document.document == null ? "" : switch (kindOf(document)) {
-                case VIDEO -> watchOrGlance(message, fileOf(document.document.document),
-                        thumbnailOf(document.document.thumbnail));
+                case VIDEO -> watchOrGlance(message, Ladder.of(document.document), true);
                 case PHOTO -> look(fileOf(document.document.document), Vision.Kind.PHOTO);
                 default -> "";
             };
@@ -392,37 +405,197 @@ public final class TelegramMedia implements MediaDescriber {
      * кадр — отдельное обращение к зрению, и идут они друг за другом. Понять
      * пост хватает и заставки. В личной переписке наоборот: ролик там часть
      * разговора, и его смотрят целиком.
+     *
+     * @param withSound слушать ли дорожку ролика
      */
-    private String watchOrGlance(TdApi.Message message, Optional<Integer> video, Optional<Integer> thumbnail) {
+    private String watchOrGlance(TdApi.Message message, Ladder ladder, boolean withSound) {
         return watchOrGlance(onlyGlanceIn(message),
-                () -> watch(video),
-                () -> thumbnail.map(file -> look(Optional.of(file), Vision.Kind.VIDEO)).orElse(""));
+                () -> firstSeen(ladder.videos(), stream -> watch(fileOf(stream), withSound)),
+                () -> glance(message, ladder.thumbnail(), ladder.mini()));
+    }
+
+    /**
+     * Кружок смотрят целиком и в канале тоже: он короткий, и покадровый разбор
+     * его не дороже одного взгляда. Когда кадры не извлеклись, берут заставку.
+     * <p>
+     * Жалобы на неподдерживаемый формат здесь нет: кружок всё равно услышали, и
+     * «не поддерживается» соврало бы, что сообщение осталось непонятым.
+     */
+    private String circle(TdApi.Message message, TdApi.VideoNote note) {
+        if (note == null) {
+            return "";
+        }
+        Ladder ladder = Ladder.of(note);
+        return watchOrGlance(false,
+                () -> firstSeen(ladder.videos(), stream -> watch(fileOf(stream), false)),
+                () -> glance(message, ladder.thumbnail(), ladder.mini()),
+                "");
+    }
+
+    /**
+     * Первый поток, в котором что-то видно. Каждый следующий стоит и
+     * скачивания, и обращения к зрению на каждый кадр, поэтому до него дело
+     * доходит только тогда, когда предыдущий ничего не дал.
+     * Видно пакету: порядок проб проверяют без Telegram.
+     */
+    static String firstSeen(List<TdApi.File> streams, Function<TdApi.File, String> watch) {
+        for (TdApi.File stream : streams) {
+            String seen = watch.apply(stream);
+            if (seen != null && !seen.isBlank()) {
+                return seen;
+            }
+        }
+        return "";
     }
 
     /**
      * @param onlyGlance смотреть лишь на заставку, не трогая сам ролик
      */
-    static String watchOrGlance(boolean onlyGlance, java.util.function.Supplier<String> watch,
-                                java.util.function.Supplier<String> glance) {
+    static String watchOrGlance(boolean onlyGlance, Supplier<String> watch, Supplier<String> glance) {
+        return watchOrGlance(onlyGlance, watch, glance, NOT_SUPPORTED);
+    }
+
+    /**
+     * @param whenNothing чем заменить пустоту: для ролика это жалоба на формат,
+     *                    а для кружка молчание — его всё равно услышали
+     */
+    static String watchOrGlance(boolean onlyGlance, Supplier<String> watch, Supplier<String> glance,
+                                String whenNothing) {
         if (onlyGlance) {
-            return orNotSupported(glance.get());
+            return atLeast(glance.get(), whenNothing);
         }
         String seen = watch.get();
         if (!seen.isBlank()) {
             return seen;
         }
         // формат не поддался разбору — хотя бы заставка
-        return orNotSupported(glance.get());
+        return atLeast(glance.get(), whenNothing);
     }
 
     /**
      * Пустота в разметке выглядит так, будто вложения не было вовсе, поэтому
      * пропущенное молча не оставляют.
      */
-    private static String orNotSupported(String glanced) {
-        return glanced.isBlank()
-                ? "<video description>\nThis media type is not supported\n</video>\n"
-                : glanced;
+    private static final String NOT_SUPPORTED =
+            "<video description>\nThis media type is not supported\n</video>\n";
+
+    private static String atLeast(String seen, String whenNothing) {
+        return seen.isBlank() ? whenNothing : seen;
+    }
+
+    /**
+     * Один кадр вместо всего ролика.
+     * <p>
+     * Заставку отдельным файлом ещё нужно скачать, а мелкая приходит байтами
+     * вместе с сообщением: её кладут в файл с именем по чату и номеру, чтобы
+     * одно и то же сообщение не раскладывало её заново, а разные сообщения не
+     * писали в один файл — предразбор вложений идёт в несколько потоков.
+     */
+    private String glance(TdApi.Message message, TdApi.Thumbnail thumbnail, TdApi.Minithumbnail mini) {
+        if (!sees()) {
+            return "";   // без зрения и мелкую заставку незачем класть на диск
+        }
+        String seen = look(thumbnailOf(thumbnail), Vision.Kind.VIDEO, null, true);
+        if (!seen.isBlank()) {
+            return seen;
+        }
+        return miniFile(message, mini)
+                .map(still -> lookAt(still, Vision.Kind.VIDEO, null, true))
+                .orElse("");
+    }
+
+    /** Совсем мелкая заставка: байты уже на руках, а файл нужен как имя для кэша. */
+    private static Optional<Path> miniFile(TdApi.Message message, TdApi.Minithumbnail mini) {
+        if (mini == null || !worthLooking(mini.data)) {
+            return Optional.empty();
+        }
+        Path file = PREVIEW_DIR.resolve(miniName(message.chatId, message.id, mini.data));
+        try {
+            AtomicFiles.writeBytes(file, mini.data);
+            return Optional.of(file);
+        } catch (IOException e) {
+            log.debug("Заставку {} не удалось положить: {}", file.getFileName(), e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Меньше порога это не картинка, а размытое пятно: платить зрению за него
+     * незачем. Порог тот же, что и у скачанного файла, — иначе одна и та же
+     * мелочь проходила бы в одну дверь и не проходила в другую.
+     */
+    static boolean worthLooking(byte[] data) {
+        return data != null && data.length >= Vision.MIN_IMAGE_BYTES;
+    }
+
+    /** Имя собирают из чата и номера: номера сообщений в каждом чате свои. */
+    static String miniName(long chatId, long messageId, byte[] data) {
+        return "%d-%d-mini.%s".formatted(chatId, messageId, extensionOf(data));
+    }
+
+    /** Заставка бывает и не JPEG: расширение угадывают по первым байтам. */
+    private static String extensionOf(byte[] data) {
+        return data.length > 3 && data[0] == (byte) 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G'
+                ? "png"
+                : "jpg";
+    }
+
+    /**
+     * Ступени разбора ролика: что пробовать, когда предыдущее не дало картинки.
+     * <p>
+     * Основной поток бывает в HEVC, который нашему разборщику не по зубам, а
+     * запасные — в другом кодеке: терять из-за одного контейнера весь ролик
+     * незачем. Не поддались и они — берут заставку, которую Telegram приготовил
+     * сам: один кадр лучше, чем ничего.
+     * <p>
+     * Видно пакету: порядок ступеней учат без Telegram и без зрения.
+     *
+     * @param videos    потоки в порядке пробы
+     * @param thumbnail заставка отдельным файлом
+     * @param mini      совсем мелкая заставка: она лежит байтами в самом сообщении
+     */
+    record Ladder(List<TdApi.File> videos, TdApi.Thumbnail thumbnail, TdApi.Minithumbnail mini) {
+
+        static Ladder of(TdApi.MessageVideo message) {
+            List<TdApi.File> videos = new ArrayList<>();
+            add(videos, message.video == null ? null : message.video.video);
+            for (TdApi.AlternativeVideo alternative : streamsOf(message.alternativeVideos)) {
+                // HLS-поток не берут: это плейлист, а не файл, который можно разобрать
+                add(videos, alternative == null ? null : alternative.video);
+            }
+            return new Ladder(List.copyOf(videos),
+                    message.video == null ? null : message.video.thumbnail,
+                    message.video == null ? null : message.video.minithumbnail);
+        }
+
+        static Ladder of(TdApi.Animation animation) {
+            return new Ladder(one(animation.animation), animation.thumbnail, animation.minithumbnail);
+        }
+
+        static Ladder of(TdApi.Document document) {
+            return new Ladder(one(document.document), document.thumbnail, document.minithumbnail);
+        }
+
+        static Ladder of(TdApi.VideoNote note) {
+            return new Ladder(one(note.video), note.thumbnail, note.minithumbnail);
+        }
+
+        private static void add(List<TdApi.File> into, TdApi.File file) {
+            if (file != null) {
+                into.add(file);
+            }
+        }
+
+        private static List<TdApi.File> one(TdApi.File file) {
+            List<TdApi.File> videos = new ArrayList<>();
+            add(videos, file);
+            return List.copyOf(videos);
+        }
+
+        /** Наполненность массива Telegram оставляет за собой, и дыр в нём не ждут. */
+        private static List<TdApi.AlternativeVideo> streamsOf(TdApi.AlternativeVideo[] alternatives) {
+            return alternatives == null ? List.of() : Arrays.asList(alternatives);
+        }
     }
 
     /**
@@ -632,15 +805,8 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * Видео описывается покадрово, с отметками времени. Если формат не поддался
-     * разбору, зовущий берёт заготовленную Telegram миниатюру: один кадр лучше,
-     * чем ничего.
-     */
-    private String watch(Optional<Integer> fileId) {
-        return watch(fileId, true);
-    }
-
-    /**
+     * Видео описывается покадрово, с отметками времени.
+     *
      * @param withSound слушать ли дорожку. У ролика без звука её не слушают:
      *                  распознавание речи на тишине выдумывает субтитры, и они
      *                  ушли бы в разговор как услышанное
@@ -717,12 +883,25 @@ public final class TelegramMedia implements MediaDescriber {
      *                 пересказ, и не оставляя в нём узкий ответ
      */
     private String look(Optional<Integer> fileId, Vision.Kind kind, String question) {
+        return look(fileId, kind, question, false);
+    }
+
+    /**
+     * @param preview заставка вместо самого файла: модель должна отличать её от
+     *                просмотра, иначе расскажет о ролике то, чего в кадре не было
+     */
+    private String look(Optional<Integer> fileId, Vision.Kind kind, String question, boolean preview) {
         if (!sees()) {
             return "";
         }
         return fileId.flatMap(telegram::download)
-                .map((Path file) -> vision.describe(file, kind, asking(context.get(), question), plain(question)))
+                .map((Path file) -> lookAt(file, kind, question, preview))
                 .orElse("");
+    }
+
+    /** Файл уже на руках: скачивать нечего, осталось только посмотреть. */
+    private String lookAt(Path file, Vision.Kind kind, String question, boolean preview) {
+        return vision.describe(file, kind, asking(context.get(), question), plain(question), preview);
     }
 
     /** Берём самый крупный вариант: мелкий превью модель толком не разглядит. */

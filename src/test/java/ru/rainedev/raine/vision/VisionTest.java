@@ -229,6 +229,33 @@ class VisionTest {
         assertTrue(result.contains("<photo description>"), result);
     }
 
+    /**
+     * Заставка — не просмотр ролика: по одному кадру не узнать, что в нём было
+     * дальше. Без отметки догадка ушла бы в разговор как увиденное.
+     */
+    @Test
+    void aStillIsMarkedAsAPreviewAndNotAsTheWholeClip(@TempDir Path dir) throws IOException {
+        Path still = imageFile(dir, "заставка.jpg");
+        Vision vision = visionWith(new ScriptedLlm().willSee("кот на диване"), dir.resolve("cache"));
+
+        String glanced = vision.describe(still, Vision.Kind.VIDEO, List.of(), true, true);
+
+        assertTrue(glanced.contains("preview=\"true\""), glanced);
+        assertTrue(glanced.contains("кот на диване"), glanced);
+        assertTrue(vision.describe(still, Vision.Kind.VIDEO, List.of(), true, true).contains("preview=\"true\""),
+                "готовое описание из кэша остаётся заставкой");
+    }
+
+    /** То, что разобрали целиком, заставкой не помечают. */
+    @Test
+    void aWholeClipIsNotAPreview(@TempDir Path dir) throws IOException {
+        String watched = visionWith(new ScriptedLlm().willSee("кот на диване"), dir.resolve("cache"))
+                .describe(imageFile(dir, "кадр.jpg"), Vision.Kind.VIDEO, List.of(), true, false);
+
+        assertFalse(watched.contains("preview"), watched);
+        assertTrue(watched.contains("<video description>"), watched);
+    }
+
     @Test
     void stickersGoToTheCheaperModel(@TempDir Path dir) throws IOException {
         // стикеров в переписке много, а качество их описания роли не играет
