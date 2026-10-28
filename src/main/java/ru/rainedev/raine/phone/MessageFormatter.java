@@ -34,15 +34,22 @@ public final class MessageFormatter {
     private final NameResolver names;
     private final ReplyLookup replies;
     private final MediaDescriber media;
+    private final MessageEdits edits;
 
     public MessageFormatter(NameResolver names, ReplyLookup replies) {
         this(names, replies, MediaDescriber.NONE);
     }
 
     public MessageFormatter(NameResolver names, ReplyLookup replies, MediaDescriber media) {
+        this(names, replies, media, MessageEdits.NONE);
+    }
+
+    public MessageFormatter(NameResolver names, ReplyLookup replies, MediaDescriber media,
+                            MessageEdits edits) {
         this.names = names;
         this.replies = replies;
         this.media = media;
+        this.edits = edits;
     }
 
     /**
@@ -76,7 +83,7 @@ public final class MessageFormatter {
      * про последние из них — за остальными всегда можно вернуться поиском.
      */
     public String formatBriefly(TdApi.Message message, ChatView view) {
-        return new MessageFormatter(names, replies, MediaDescriber.NONE).format(message, view);
+        return new MessageFormatter(names, replies, MediaDescriber.NONE, edits).format(message, view);
     }
 
     private String format(TdApi.Message message, ChatView view, String tag) {
@@ -102,15 +109,20 @@ public final class MessageFormatter {
         appendReactions(attributes, message);
 
         StringBuilder body = new StringBuilder();
+        // цитата в чужом ответе — не самостоятельная реплика: если размечать правку
+        // и в ней, единственный показ диффа уйдёт на цитату, а не на чтение
+        boolean quoted = "reply_to".equals(tag);
         // вложенный reply_to разворачиваем только на один уровень, иначе цепочка ответов
         // раздувает контекст без пользы
-        if (!"reply_to".equals(tag) && message.replyTo instanceof TdApi.MessageReplyToMessage reply) {
+        if (!quoted && message.replyTo instanceof TdApi.MessageReplyToMessage reply) {
             long chatId = reply.chatId == 0 ? message.chatId : reply.chatId;
             body.append(replies.find(chatId, reply.messageId)
                     .map(original -> format(original, view, "reply_to"))
                     .orElse("<reply_to>Удалённое сообщение</reply_to>\n"));
         }
-        body.append(ControlMarkers.sanitize(content(message.content)));
+        String content = ControlMarkers.sanitize(content(message.content));
+        body.append(content);
+        appendEdits(body, attributes, message, content, quoted);
 
         // описание встаёт под вложением: сначала «прислал фото», потом что на нём
         // расшифровка голосового и описание картинки — тоже чужой текст,
@@ -121,6 +133,31 @@ public final class MessageFormatter {
         }
 
         return "<%s>\n%s\n</%s>\n".formatted(attributes, body.toString().strip(), tag);
+    }
+
+    /**
+     * Что собеседник поменял в уже прочитанном сообщении.
+     * <p>
+     * Свои правки не показываем: это механика опечаток, а не слова собеседника.
+     * Прежние слова заново через {@code Markup.body} не гоним: свободный текст уже
+     * размечен в {@code MessageContent}, а служебные теги Telegram — превью ссылки
+     * или звонок — внутри правки как раз должны остаться целыми.
+     */
+    private void appendEdits(StringBuilder body, StringBuilder attributes,
+                             TdApi.Message message, String content, boolean quoted) {
+        if (quoted || message.isOutgoing) {
+            return;
+        }
+        Optional<String> previous = edits.previous(message.chatId, message.id);
+        edits.remember(message.chatId, message.id, content);
+        if (previous.isPresent() && !previous.get().equals(content)) {
+            body.append("\n<edited>\n<was>").append(previous.get())
+                    .append("</was>\n<now>").append(content).append("</now>\n</edited>");
+        } else if (message.editDate != 0) {
+            // прежних слов не знать (правили до первого чтения) либо перемены с
+            // прошлого показа нет: дифф показывают один раз, дальше — только отметка
+            attributes.append(" edited=\"true\"");
+        }
     }
 
     /**

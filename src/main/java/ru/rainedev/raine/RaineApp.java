@@ -26,6 +26,7 @@ import ru.rainedev.raine.memory.WorkingMemory;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.phone.ChatScreen;
 import ru.rainedev.raine.phone.MediaDescriber;
+import ru.rainedev.raine.phone.MessageEdits;
 import ru.rainedev.raine.phone.MessageFormatter;
 import ru.rainedev.raine.phone.Notifications;
 import ru.rainedev.raine.prompt.Prompts;
@@ -123,6 +124,10 @@ public final class RaineApp implements AutoCloseable {
         builder.addUpdateHandler(TdApi.UpdateMessageSendFailed.class,
                 update -> telegram.onSendFailed(update.oldMessageId,
                         update.error == null ? "причина неизвестна" : update.error.message));
+        // собеседник поправил сообщение: кэш сообщений протух, иначе ещё несколько
+        // секунд читали бы старую версию вместо новой
+        builder.addUpdateHandler(TdApi.UpdateMessageEdited.class,
+                update -> telegram.forgetMessage(update.chatId, update.messageId));
         // лента историй приходит только так: запроса «покажи все истории» у Telegram нет
         builder.addUpdateHandler(TdApi.UpdateChatActiveStories.class,
                 update -> stories.onChanged(update.activeStories));
@@ -176,7 +181,8 @@ public final class RaineApp implements AutoCloseable {
         MessageFormatter formatter = new MessageFormatter(
                 telegram::nameOf,
                 (chatId, messageId) -> telegram.message(chatId, messageId),
-                media);
+                media,
+                new MessageEdits());
 
         actions = config.readOnly()
                 ? new TelegramActions.ReadOnly()
