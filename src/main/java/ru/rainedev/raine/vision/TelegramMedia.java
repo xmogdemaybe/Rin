@@ -136,7 +136,7 @@ public final class TelegramMedia implements MediaDescriber {
             case TdApi.MessageSticker sticker -> {
                 // запоминаем: без этого её нельзя ни сохранить, ни отправить
                 telegram.rememberSticker(sticker.sticker);
-                yield look(fileOf(sticker.sticker.sticker), Vision.Kind.STICKER);
+                yield sticker(sticker.sticker);
             }
             // у подарка есть вид и цена — без них «подарок» ничего не говорит
             case TdApi.MessageGift gift -> gift(gift);
@@ -873,7 +873,45 @@ public final class TelegramMedia implements MediaDescriber {
 
     /** Описание стикера по его файлу: без него в списке видно только эмодзи. */
     public String describeSticker(TdApi.Sticker sticker) {
-        return sticker == null ? "" : look(fileOf(sticker.sticker), Vision.Kind.STICKER);
+        return sticker(sticker);
+    }
+
+    /**
+     * Стикер смотрят с оглядкой на формат. Lottie {@code .tgs} и видео
+     * {@code .webm} для зрения не картинки: модель встречает их отказом 400,
+     * а запрос уже оплачен. Растровый кадр у них лежит в миниатюре — её и
+     * смотрят. Статичный WEBP годится целиком.
+     */
+    private String sticker(TdApi.Sticker sticker) {
+        if (!sees() || sticker == null) {
+            return "";   // метка сообщения уже говорит, что это стикер и какой
+        }
+        String seen = look(stillOf(sticker), Vision.Kind.STICKER);
+        return seen.isBlank() ? stickerFallback(sticker) : seen;
+    }
+
+    /**
+     * Какой файл показать зрению: сам стикер — только растровый, иначе
+     * миниатюру. Догадываться о формате по имени файла незачем: Telegram
+     * сообщает его прямо.
+     */
+    static Optional<Integer> stillOf(TdApi.Sticker sticker) {
+        if (sticker == null) {
+            return Optional.empty();
+        }
+        if (sticker.format instanceof TdApi.StickerFormatWebp) {
+            Optional<Integer> main = fileOf(sticker.sticker);
+            if (main.isPresent()) {
+                return main;
+            }
+        }
+        return thumbnailOf(sticker.thumbnail);
+    }
+
+    /** Картинки не нашлось: эмодзи — всё, что о стикере известно без глаз. */
+    static String stickerFallback(TdApi.Sticker sticker) {
+        String emoji = sticker == null || sticker.emoji == null ? "" : sticker.emoji.strip();
+        return emoji.isEmpty() ? "[стикер]" : "[стикер %s]".formatted(Markup.body(emoji));
     }
 
     /** Аватарка чата — по ней понятно, с кем разговариваешь. */

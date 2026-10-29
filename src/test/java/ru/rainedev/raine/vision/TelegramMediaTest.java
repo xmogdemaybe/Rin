@@ -159,6 +159,38 @@ class TelegramMediaTest {
                 "неподключённый слух не греет вовсе");
     }
 
+    /**
+     * Анимация Lottie и видео WebM — не картинки: модель отвечает на них
+     * отказом 400, и запрос оплачивается впустую. Растровый кадр Telegram
+     * кладёт в миниатюру, её и смотрят.
+     */
+    @Test
+    void animatedAndVideoStickersAreSeenThroughTheirThumbnail() {
+        assertEquals(20, TelegramMedia.stillOf(sticker(new TdApi.StickerFormatTgs(), 10, 20)).orElseThrow(),
+                "Lottie-стикер смотрят по миниатюре, а не по .tgs");
+        assertEquals(20, TelegramMedia.stillOf(sticker(new TdApi.StickerFormatWebm(), 10, 20)).orElseThrow(),
+                "видео-стикер смотрят по миниатюре, а не по .webm");
+    }
+
+    @Test
+    void aStaticStickerIsSeenAsItIs() {
+        // WEBP зрение понимает: миниатюра здесь мельче и не нужна
+        assertEquals(10, TelegramMedia.stillOf(sticker(new TdApi.StickerFormatWebp(), 10, 20)).orElseThrow());
+    }
+
+    @Test
+    void aStaticStickerWithoutAFileFallsBackToTheThumbnail() {
+        assertEquals(20, TelegramMedia.stillOf(sticker(new TdApi.StickerFormatWebp(), 0, 20)).orElseThrow());
+    }
+
+    @Test
+    void aStickerWithoutAPictureSaysWhatItIs() {
+        TdApi.Sticker animated = sticker(new TdApi.StickerFormatTgs(), 10, 0);
+
+        assertTrue(TelegramMedia.stillOf(animated).isEmpty(), "смотреть нечего — зрение не зовут");
+        assertEquals("[стикер 🤍]", TelegramMedia.stickerFallback(animated));
+    }
+
     /** Разметка вложений вслепую: Telegram здесь не нужен — он только качает файлы. */
     private static TelegramMedia media(boolean voiceNotes, boolean videoNotes) {
         TelegramMedia media = new TelegramMedia(null, null, () -> List.of());
@@ -213,6 +245,24 @@ class TelegramMediaTest {
         return with(new TdApi.MessageVideoNote(
                 new TdApi.VideoNote(durationSeconds, new byte[0], 240, null, null, null, new TdApi.File()),
                 viewed, secret));
+    }
+
+    /** Стикер с заданным форматом и файлами: основной и растровая миниатюра. */
+    private static TdApi.Sticker sticker(TdApi.StickerFormat format, int fileId, int thumbnailId) {
+        TdApi.Sticker sticker = new TdApi.Sticker();
+        sticker.id = 1;
+        sticker.emoji = "🤍";
+        sticker.format = format;
+        if (fileId != 0) {
+            sticker.sticker = new TdApi.File();
+            sticker.sticker.id = fileId;
+        }
+        if (thumbnailId != 0) {
+            sticker.thumbnail = new TdApi.Thumbnail();
+            sticker.thumbnail.file = new TdApi.File();
+            sticker.thumbnail.file.id = thumbnailId;
+        }
+        return sticker;
     }
 
     /** Сообщение, которое не слушают: у него и длительности нет. */
