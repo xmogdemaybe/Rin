@@ -152,7 +152,10 @@ public final class OpenAiCompatibleClient implements LlmClient {
         Response response = post("chat/completions", body, Duration.ofMinutes(5), messages);
         Transcript.save(body, response.text());
         try {
-            ChatResponse parsed = mapper.readValue(response.text(), ChatResponse.class);
+            // иногда вызов приходит текстом, а не в tool_calls: без этого он
+            // считался болтовнёй и решение выбрасывалось вместе с ним
+            ChatResponse parsed = TextualToolCalls.repair(mapper.readValue(response.text(), ChatResponse.class),
+                    body.path("tools").isArray() && !body.path("tools").isEmpty());
             rememberThoughtSignatures(parsed, response.text(), body.path("model").asText(), response.fallback());
             if (parsed.cacheLooksBroken()) {
                 log.warn("Посредник не кэширует подсказку — каждый шаг оплачивается как первый");

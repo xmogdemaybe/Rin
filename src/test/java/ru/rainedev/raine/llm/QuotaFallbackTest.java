@@ -314,6 +314,25 @@ class QuotaFallbackTest {
         assertEquals("skip_thought_signature_validator", bodies.get(3).at("/messages/1/tool_calls/0/extra_content/google/thought_signature").asText());
     }
 
+    /** Ответ текстом с вызовом внутри не должен доехать до цикла пустым. */
+    @Test
+    void aCallWrittenAsTextBecomesARealToolCall() throws Exception {
+        success = """
+                {"choices":[{"message":{"role":"assistant","content":
+                "Пора спать.\\n<call:default_api:send_telegram_message{text:Споки ноки}>"
+                },"finish_reason":"stop"}]}
+                """;
+        var tools = mapper.readTree("[{\"type\":\"function\",\"function\":{\"name\":\"send_telegram_message\"}}]");
+
+        var response = client("").chat("test", List.of(), tools);
+
+        assertEquals(1, response.toolCalls().size(), "вызов из текста должен дойти до цикла");
+        assertEquals("send_telegram_message", response.toolCalls().getFirst().name());
+        assertEquals("{\"text\":\"Споки ноки\"}", response.toolCalls().getFirst().arguments());
+        assertFalse(response.text().contains("call:"), "тег вырезан: " + response.text());
+        assertEquals("Пора спать.", response.text());
+    }
+
     private static String signedTool(String signature) {
         return """
                 {"choices":[{"message":{"role":"assistant","tool_calls":[{
