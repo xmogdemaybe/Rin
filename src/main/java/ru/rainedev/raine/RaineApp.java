@@ -134,6 +134,10 @@ public final class RaineApp implements AutoCloseable {
         // пробуждением; но список отреагировавших в кэше протух
         builder.addUpdateHandler(TdApi.UpdateMessageInteractionInfo.class,
                 update -> telegram.forgetMessage(update.chatId, update.messageId));
+        // непрочитанные реакции TDLib обновляет своим событием — без него кэш
+        // ещё несколько секунд отдавал бы устаревшие имена отреагировавших
+        builder.addUpdateHandler(TdApi.UpdateMessageUnreadReactions.class,
+                update -> telegram.forgetMessage(update.chatId, update.messageId));
         // лента историй приходит только так: запроса «покажи все истории» у Telegram нет
         builder.addUpdateHandler(TdApi.UpdateChatActiveStories.class,
                 update -> stories.onChanged(update.activeStories));
