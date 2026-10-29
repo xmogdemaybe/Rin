@@ -14,6 +14,8 @@ import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
+import ru.rainedev.raine.memory.Audience;
+import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
 
 class NotificationLoopTest {
@@ -269,7 +271,7 @@ class NotificationLoopTest {
         llm.willRespond(finishing());
 
         NotificationLoop loop = loopWith(llm, tools);
-        loop.memory(ctx -> {
+        loop.memory((ctx, audience) -> {
             recallMoments.add("вспомнила");
             return "";
         });
@@ -286,7 +288,7 @@ class NotificationLoopTest {
         llm.willRespond(finishing());
 
         NotificationLoop loop = loopWith(llm, new Toolbox());
-        loop.memory(ctx -> "<your_diary_page>вы ездили на Байкал</your_diary_page>\n");
+        loop.memory((ctx, audience) -> "<your_diary_page>вы ездили на Байкал</your_diary_page>\n");
 
         loop.process(new Notification("тебе написали"));
 
@@ -398,17 +400,17 @@ class NotificationLoopTest {
         llm.willRespond(finishing());
 
         NotificationLoop loop = loopWith(llm, new Toolbox());
-        loop.chatSource(id -> id == 1 ? Source.OWNER_DM : Source.GROUP);
+        loop.chatOrigin(id -> id == 1 ? new Origin(id, Source.OWNER_DM) : new Origin(id, Source.GROUP));
 
         loop.process(new Notification("сообщение из группы").from(2));
-        assertEquals(Source.GROUP, loop.contextSource());
+        assertEquals(new Origin(2, Source.GROUP), loop.contextOrigin());
 
         loop.process(new Notification("сообщение от владельца").from(1));
-        assertEquals(Source.OWNER_DM, loop.contextSource(),
+        assertEquals(new Origin(1, Source.OWNER_DM), loop.contextOrigin(),
                 "в несохранённом контексте есть личка владельца — общим он стать не должен");
 
         loop.process(new Notification("и снова из группы").from(2));
-        assertEquals(Source.OWNER_DM, loop.contextSource(),
+        assertEquals(new Origin(1, Source.OWNER_DM), loop.contextOrigin(),
                 "более открытый чат не вправе смягчать метку несохранённого разговора");
     }
 
@@ -418,13 +420,13 @@ class NotificationLoopTest {
         llm.willRespond(finishing());
 
         NotificationLoop loop = loopWith(llm, new Toolbox());
-        loop.chatSource(id -> Source.OWNER_DM);
+        loop.chatOrigin(id -> new Origin(id, Source.OWNER_DM));
         loop.process(new Notification("сообщение от владельца").from(1));
-        assertEquals(Source.OWNER_DM, loop.contextSource());
+        assertEquals(new Origin(1, Source.OWNER_DM), loop.contextOrigin());
 
         loop.clearContext();
 
-        assertEquals(Source.GENERAL, loop.contextSource(),
+        assertEquals(Origin.GENERAL, loop.contextOrigin(),
                 "разговор записан — следующему его метка достаться не должна");
     }
 
@@ -440,13 +442,13 @@ class NotificationLoopTest {
         Toolbox openedChat = new Toolbox();
         openedChat.add(Tool.named("open").describedAs("Открывает чат")
                 .buildContextual((arguments, addTool) -> {
-                    loop.noteSource(Source.OWNER_DM);
+                    loop.noteOrigin(new Origin(1, Source.OWNER_DM));
                     return "чат открыт";
                 }));
 
         loop.process(new Notification("ночной порыв", openedChat));
 
-        assertEquals(Source.OWNER_DM, loop.contextSource(),
+        assertEquals(new Origin(1, Source.OWNER_DM), loop.contextOrigin(),
                 "чат, открытый в середине хода, тоже часть этого разговора");
     }
 
@@ -459,15 +461,93 @@ class NotificationLoopTest {
         llm.willRespond(finishing());
 
         NotificationLoop loop = loopWith(llm, new Toolbox());
-        loop.chatSource(id -> {
+        loop.chatOrigin(id -> {
             asked.add(id);
-            return Source.OWNER_DM;
+            return new Origin(id, Source.OWNER_DM);
         });
 
         loop.process(new Notification("служебное событие"));
 
         assertTrue(asked.isEmpty(), "спрашивать про чат нечего — его нет");
-        assertEquals(Source.GENERAL, loop.contextSource());
+        assertEquals(Origin.GENERAL, loop.contextOrigin());
+    }
+
+    /** Куда память уходит зрителю — ловим сам зритель, а не его строку. */
+    private static List<Audience> audienceSpy(NotificationLoop loop) {
+        List<Audience> seen = new ArrayList<>();
+        loop.memory((ctx, audience) -> {
+            seen.add(audience);
+            return "";
+        });
+        return seen;
+    }
+
+    @Test
+    void memoryIsAnsweredToTheChatThatAsked() {
+        // подмешивание ищет не по тексту: один и тот же вопрос в разных чатах
+        // даёт разную выдачу, и кто именно спросил надо передать в память
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        List<Audience> seen = audienceSpy(loop);
+        loop.chatOrigin(id -> new Origin(id, Source.GROUP));
+        loop.trustOf(id -> id == 555 ? 3 : 0);
+
+        loop.process(new Notification("сообщение из группы").about(555).from(2));
+
+        assertEquals(List.of(new Audience(2, 3, false)), seen, "зритель — этот чат с этим доверием");
+    }
+
+    @Test
+    void theOwnerChatIsMarkedAsTheOwners() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        List<Audience> seen = audienceSpy(loop);
+        loop.chatOrigin(id -> new Origin(id, Source.OWNER_DM));
+        loop.trustOf(id -> 0);
+
+        loop.process(new Notification("личное сообщение").about(1).from(1));
+
+        assertEquals(List.of(new Audience(1, 0, true)), seen,
+                "в своей личке ей открываются и то, что рассказывали другие");
+    }
+
+    @Test
+    void anEventAboutAPersonWithNoChatIsSeenByThatPerson() {
+        // событие о человеке, но не из его чата (например, напоминание из
+        // планировщика): зрителем всё равно он, раз доверие меряют по нему
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        List<Audience> seen = audienceSpy(loop);
+        loop.trustOf(id -> id == 555 ? 3 : 0);
+
+        loop.process(new Notification("напоминание о человеке").about(555));
+
+        assertEquals(List.of(new Audience(555, 3, false)), seen,
+                "без адреса чата оставался бы ноль — и показывать ему было бы нечего");
+    }
+
+    @Test
+    void anImpulseThatCameFromNoChatHasNoAudience() {
+        // зритель считается заново на каждый ход: вчерашняя личка владельца не
+        // должна протаскивать его права в служебное событие без адреса
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        List<Audience> seen = audienceSpy(loop);
+        loop.chatOrigin(id -> new Origin(id, Source.OWNER_DM));
+
+        loop.process(new Notification("личное сообщение").about(1).from(1));
+        loop.process(new Notification("служебное событие"));
+
+        assertEquals(List.of(new Audience(1, 0, true), Audience.STRANGER), seen,
+                "без адреса зрителя нет — и такому ходу остаётся только общее");
     }
 
     @Test

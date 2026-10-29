@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.rainedev.raine.core.LowQualityException;
 import ru.rainedev.raine.memory.Diary;
-import ru.rainedev.raine.memory.Source;
+import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.TraitSignal;
 import ru.rainedev.raine.memory.TraitSignals;
 
@@ -66,7 +66,7 @@ class RecordTraitSignalTest {
         diary.save("Прошлая запись об этой же черте — формулировка должна повториться дословно.",
                 new double[] {1, 0, 0}, 0,
                 List.of(new TraitSignal("hurt", "огрызаюсь на колкости", 0.3, 0.5, "", "2026-10-18T10:00:00Z")),
-                Source.GENERAL);
+                Origin.GENERAL);
         TraitSignals pocket = new TraitSignals();
         TelegramTools tools = new TelegramTools(null, null, null, null, null);
         tools.traitSignals(pocket);

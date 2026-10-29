@@ -157,7 +157,7 @@ class DiaryWriterTest {
                         "Alex", "2026-10-20T18:00:00Z"));
 
         List<DiaryEntry> saved = new DiaryWriter(diary, llm, "запиши дневник", 0.97)
-                .saveStrict("промпт", CONTEXT, signals, Source.GENERAL);
+                .saveStrict("промпт", CONTEXT, signals, Origin.GENERAL);
 
         assertEquals(2, saved.size());
         assertEquals(signals, saved.getFirst().metadata().signals());
@@ -180,7 +180,7 @@ class DiaryWriterTest {
                 Вечером обсуждали планы на отпуск в октябре.""");
 
         List<DiaryEntry> saved = writerFor(dir, llm)
-                .saveStrict("промпт", CONTEXT, List.of(), Source.OWNER_DM);
+                .saveStrict("промпт", CONTEXT, List.of(), new Origin(777, Source.OWNER_DM));
 
         assertEquals(2, saved.size());
         List<DiaryEntry> reloaded = new Diary(dir).query(new double[0]).stream()
@@ -189,6 +189,8 @@ class DiaryWriterTest {
         assertEquals(2, reloaded.size(), "на диске обе записи");
         assertTrue(reloaded.stream().allMatch(entry -> entry.metadata().source() == Source.OWNER_DM),
                 "метка разговора должна лечь на каждую его запись");
+        assertTrue(reloaded.stream().allMatch(entry -> entry.metadata().sourceChat() == 777),
+                "и разговор, откуда она взялась, тоже ложится на каждую запись");
     }
 
     @Test

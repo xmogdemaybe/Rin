@@ -50,7 +50,7 @@ class DiaryMemoryTest {
         Diary diary = diaryWith(dir, "мы ездили на Байкал", "разговор про работу");
         Memory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {1, 0, 0}), 4000);
 
-        String recalled = memory.recall(context("помнишь поездку?"));
+        String recalled = memory.recall(context("помнишь поездку?"), Audience.STRANGER);
 
         assertTrue(recalled.contains("мы ездили на Байкал"), recalled);
         assertFalse(recalled.contains("разговор про работу"), "не относящееся к делу подмешивать незачем");
@@ -61,8 +61,8 @@ class DiaryMemoryTest {
         Diary diary = diaryWith(dir, "мы ездили на Байкал");
         Memory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {1, 0, 0}), 4000);
 
-        assertFalse(memory.recall(context("помнишь поездку?")).isEmpty());
-        assertTrue(memory.recall(context("помнишь поездку?")).isEmpty(),
+        assertFalse(memory.recall(context("помнишь поездку?"), Audience.STRANGER).isEmpty());
+        assertTrue(memory.recall(context("помнишь поездку?"), Audience.STRANGER).isEmpty(),
                 "запись уже в контексте — второй раз её тянуть некуда");
     }
 
@@ -93,11 +93,11 @@ class DiaryMemoryTest {
         RecordingEmbedding embedding = new RecordingEmbedding(new double[] {1, 0, 0});
         DiaryMemory memory = new DiaryMemory(diary, embedding, 4000);
 
-        String recalled = memory.recall(context("помнишь поездку?"));
+        String recalled = memory.recall(context("помнишь поездку?"), Audience.STRANGER);
         assertFalse(recalled.isEmpty());
 
         // так воспоминания встают в контекст: перед последним сообщением
-        memory.recall(List.of(Message.user(recalled + "помнишь поездку?")));
+        memory.recall(List.of(Message.user(recalled + "помнишь поездку?")), Audience.STRANGER);
 
         assertEquals(2, embedding.topics.size(), embedding.topics.toString());
         assertFalse(embedding.topics.getLast().contains("Байкал"),
@@ -112,11 +112,12 @@ class DiaryMemoryTest {
         Diary diary = diaryWith(dir, "мы ездили на Байкал");
         DiaryMemory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {1, 0, 0}), 4000);
 
-        assertFalse(memory.recall(context("помнишь поездку?")).isEmpty());
+        assertFalse(memory.recall(context("помнишь поездку?"), Audience.STRANGER).isEmpty());
 
         assertEquals(1, diary.size(), "воспоминание не убирает запись из дневника");
         memory.forget();
-        assertFalse(memory.recall(context("помнишь поездку?")).isEmpty(), "новый разговор помнит то же");
+        assertFalse(memory.recall(context("помнишь поездку?"), Audience.STRANGER).isEmpty(),
+                "новый разговор помнит то же");
     }
 
     @Test
@@ -124,7 +125,7 @@ class DiaryMemoryTest {
         Diary diary = diaryWith(dir, "совсем про другое");
         DiaryMemory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {-1, 0, 0}), 4000);
 
-        assertTrue(memory.recall(context("вопрос")).isEmpty());
+        assertTrue(memory.recall(context("вопрос"), Audience.STRANGER).isEmpty());
         assertTrue(memory.threshold() < 0.5, "планка завышена — её надо опустить: " + memory.threshold());
     }
 
@@ -136,7 +137,7 @@ class DiaryMemoryTest {
         }
         DiaryMemory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {1, 0, 0}), 300);
 
-        memory.recall(context("вопрос"));
+        memory.recall(context("вопрос"), Audience.STRANGER);
 
         assertTrue(memory.threshold() >= 0.5, "набралось с избытком — впредь строже: " + memory.threshold());
     }
@@ -149,7 +150,7 @@ class DiaryMemoryTest {
         }
         Memory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {1, 0, 0}), 250);
 
-        String recalled = memory.recall(context("вопрос"));
+        String recalled = memory.recall(context("вопрос"), Audience.STRANGER);
 
         assertTrue(recalled.length() < 700, "объём подмешанного должен быть ограничен: " + recalled.length());
     }
@@ -161,7 +162,7 @@ class DiaryMemoryTest {
         Diary diary = diaryWith(dir, "совсем про другое");
         DiaryMemory memory = new DiaryMemory(diary, new FixedEmbedding(new double[] {-1, 0, 0}), 4000, 0.8);
 
-        assertTrue(memory.recall(context("вопрос")).isEmpty());
+        assertTrue(memory.recall(context("вопрос"), Audience.STRANGER).isEmpty());
         assertTrue(memory.threshold() >= 0.8, "порог просел ниже границы: " + memory.threshold());
     }
 
@@ -169,7 +170,7 @@ class DiaryMemoryTest {
     void emptyDiaryRecallsNothing(@TempDir Path dir) {
         Memory memory = new DiaryMemory(new Diary(dir), new FixedEmbedding(new double[] {1, 0, 0}), 4000);
 
-        assertEquals("", memory.recall(context("вопрос")));
+        assertEquals("", memory.recall(context("вопрос"), Audience.STRANGER));
     }
 
     @Test
@@ -188,6 +189,108 @@ class DiaryMemoryTest {
         };
 
         // без воспоминаний разговор беднее, но продолжается
-        assertEquals("", new DiaryMemory(diary, broken, 4000).recall(context("вопрос")));
+        assertEquals("", new DiaryMemory(diary, broken, 4000).recall(context("вопрос"), Audience.STRANGER));
+    }
+
+    /** Зритель из конкретного разговора с заданным доверием. */
+    private static Audience viewer(long chatId, int trust) {
+        return new Audience(chatId, trust, false);
+    }
+
+    private static DiaryMemory memory(Diary diary) {
+        return new DiaryMemory(diary, new FixedEmbedding(new double[] {1, 0, 0}), 4000);
+    }
+
+    @Test
+    void aStrangerDoesNotGetAnotherPersonsSecrets(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("Серёжа признался в чужой личке", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(111, Source.PRIVATE_DM));
+
+        String recalled = memory(diary).recall(context("помнишь Серёжу?"), viewer(222, 0));
+
+        assertEquals("", recalled, "случайный собеседник не должен узнавать чужие лички");
+    }
+
+    @Test
+    void aClosedEntryDoesNotGainExperience(@TempDir Path dir) {
+        // запись отсеяна не потому, что не подошла, а потому, что её нельзя
+        // показывать: начислять ей опыт за чужой вопрос — подтасовывать вес
+        Diary diary = new Diary(dir);
+        diary.save("Серёжа признался в чужой личке", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(111, Source.PRIVATE_DM));
+
+        memory(diary).recall(context("помнишь Серёжу?"), viewer(222, 0));
+
+        Diary reopened = new Diary(dir);
+        assertEquals(0, reopened.query(new double[] {1, 0, 0}).getFirst().entry().metadata().usageCount());
+    }
+
+    @Test
+    void aChatSeesWhatWasToldInIt(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("Серёжа признался в этом же разговоре", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(111, Source.PRIVATE_DM));
+
+        String recalled = memory(diary).recall(context("помнишь Серёжу?"), viewer(111, 0));
+
+        assertTrue(recalled.contains("признался"), "то, что сказано в этом же чате, не секрет для него");
+    }
+
+    @Test
+    void aFriendSeesOtherChatsButNotTheOwnersBunker(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("владелец поверил только мне", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(1, Source.OWNER_DM));
+        diary.save("Серёжа признался в чужой личке", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(111, Source.PRIVATE_DM));
+        diary.save("общая новость из ленты", new double[] {1, 0, 0}, 0, List.of(), Origin.GENERAL);
+
+        String recalled = memory(diary).recall(context("вопрос"), viewer(222, 3));
+
+        assertTrue(recalled.contains("Серёжа"), recalled);
+        assertTrue(recalled.contains("общая новость"), recalled);
+        assertFalse(recalled.contains("поверил только мне"),
+                "бункер владельца не открывается ни за какое доверие: " + recalled);
+    }
+
+    @Test
+    void theOwnerSeesEverythingAndIsToldWhereItCameFrom(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("владелец поверил только мне", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(1, Source.OWNER_DM));
+        diary.save("Серёжа признался в чужой личке", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(111, Source.PRIVATE_DM));
+        diary.save("обсудили в общей группе", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(5, Source.GROUP));
+        diary.save("просто общая запись", new double[] {1, 0, 0});
+
+        String recalled = memory(diary).recall(context("вопрос"), new Audience(222, 5, true));
+
+        assertTrue(recalled.contains("поверил только мне"), recalled);
+        assertTrue(recalled.contains("[from: your private chat with your person]"), recalled);
+        assertTrue(recalled.contains("[from: a private chat with someone else]"), recalled);
+        assertTrue(recalled.contains("[from: another chat]"), recalled);
+        assertTrue(recalled.contains("просто общая запись"), recalled);
+        assertEquals(3, recalled.split("\n\\[from: ", -1).length - 1,
+                "атрибуция нужна трём записям, четвёртая и так общая: " + recalled);
+    }
+
+    @Test
+    void attributionLivesInsideTheBlockAndDiesWithIt(@TempDir Path dir) {
+        // внешний тег трогать нельзя: без него подмешанное не вырезается из
+        // следующего запроса, и она начинает вспоминать собственные воспоминания
+        Diary diary = new Diary(dir);
+        diary.save("Серёжа признался в чужой личке", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(111, Source.PRIVATE_DM));
+        DiaryMemory memory = memory(diary);
+
+        String recalled = memory.recall(context("помнишь Серёжу?"), viewer(111, 0));
+
+        assertTrue(recalled.contains("[from: this private chat]"), recalled);
+        String topic = DiaryMemory.topicOf(List.of(Message.user(recalled + "помнишь Серёжу?")));
+        assertFalse(topic.contains("признался"), topic);
+        assertFalse(topic.contains("[from:"), topic);
+        assertTrue(topic.contains("помнишь Серёжу?"), topic);
     }
 }

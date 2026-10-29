@@ -95,7 +95,8 @@ class SleepConsolidationTest {
         // сведение переписывает память необратимо: если общая запись утянет за
         // собой чужую личку, секрет станет общим и достанется кому попало
         Diary diary = new Diary(dir);
-        diary.save("Ездили на Байкал в июле, было холодно", new double[] {1, 0, 0}, 0, List.of(), Source.OWNER_DM);
+        diary.save("Ездили на Байкал в июле, было холодно", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(777, Source.OWNER_DM));
         diary.save("Байкал запомнился прозрачной водой", new double[] {1, 0, 0});
 
         ScriptedLlm llm = new ScriptedLlm()
@@ -105,8 +106,32 @@ class SleepConsolidationTest {
 
         Diary after = new Diary(dir);
         assertEquals(1, after.size(), "две записи свелись в одну");
-        assertEquals(Source.OWNER_DM, after.query(new double[] {1, 0, 0}).getFirst().entry().metadata().source(),
-                "сведённая запись наследует строжайшую метку из исходных");
+        assertEquals(new Origin(777, Source.OWNER_DM),
+                after.query(new double[] {1, 0, 0}).getFirst().entry().origin(),
+                "сведённая запись наследует строжайшую метку из исходных — вместе с разговором");
+    }
+
+    @Test
+    void aMergedEntryFromDifferentChatsClaimsNeither(@TempDir Path dir) {
+        // личка Серёжи и личка Маши сошлись в одной записи: приписать её
+        // кому-то одному значит соврать, а неверный адрес хуже пустого —
+        // по нему свои же чаты получили бы чужое
+        Diary diary = new Diary(dir);
+        diary.save("Ездили на Байкал в июле, было холодно", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(111, Source.PRIVATE_DM));
+        diary.save("Байкал запомнился прозрачной водой", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(222, Source.PRIVATE_DM));
+
+        ScriptedLlm llm = new ScriptedLlm()
+                .willAnswer("{\"confidence\":0.5}\nПоездка на Байкал в июле: холодно, вода прозрачная.");
+
+        consolidation(diary, llm, dir.resolve("archive")).run(Duration.ofMinutes(5), () -> false);
+
+        Diary after = new Diary(dir);
+        assertEquals(1, after.size(), "две записи свелись в одну");
+        assertEquals(new Origin(0, Source.PRIVATE_DM),
+                after.query(new double[] {1, 0, 0}).getFirst().entry().origin(),
+                "метка остаётся строжайшей, а вот разговор уже не один");
     }
 
     @Test

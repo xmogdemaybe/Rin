@@ -44,27 +44,27 @@ public final class DiaryWriter {
 
     /** @return сохранённые записи; пусто, если сохранять оказалось нечего */
     public List<DiaryEntry> save(String systemPrompt, List<Message> context) {
-        return save(systemPrompt, context, List.of(), Source.GENERAL, false);
+        return save(systemPrompt, context, List.of(), Origin.GENERAL, false);
     }
 
     /** A failed summary must leave the original conversation available for another attempt. */
     public List<DiaryEntry> saveStrict(String systemPrompt, List<Message> context) {
-        return saveStrict(systemPrompt, context, List.of(), Source.GENERAL);
+        return saveStrict(systemPrompt, context, List.of(), Origin.GENERAL);
     }
 
     /**
      * @param signals заметки о себе за этот разговор; уходят в первую же
      *                сохранённую запись, рядом с её эмбеддингом
-     * @param source  откуда разговор: метка ложится на каждую запись, и уже по ней
-     *                память решает, кому их можно показывать
+     * @param origin  откуда разговор: метка и чат ложатся на каждую запись, и уже
+     *                по ним память решает, кому их можно показывать
      */
     public List<DiaryEntry> saveStrict(String systemPrompt, List<Message> context, List<TraitSignal> signals,
-                                       Source source) {
-        return save(systemPrompt, context, signals, source, true);
+                                       Origin origin) {
+        return save(systemPrompt, context, signals, origin, true);
     }
 
     private List<DiaryEntry> save(String systemPrompt, List<Message> context,
-                                  List<TraitSignal> signals, Source source, boolean strict) {
+                                  List<TraitSignal> signals, Origin origin, boolean strict) {
         if (context.isEmpty()) {
             return List.of();
         }
@@ -79,7 +79,7 @@ public final class DiaryWriter {
                 .split(SEPARATOR)).noneMatch(part -> part.strip().length() >= MIN_ENTRY_LENGTH)) {
             throw new IllegalStateException("Пересказ слишком короткий, исходный разговор нужно сохранить");
         }
-        return persist(summary, signals, source);
+        return persist(summary, signals, origin);
     }
 
     private String askForSummary(String systemPrompt, List<Message> context) {
@@ -106,7 +106,7 @@ public final class DiaryWriter {
         return "";
     }
 
-    private List<DiaryEntry> persist(String summary, List<TraitSignal> signals, Source source) {
+    private List<DiaryEntry> persist(String summary, List<TraitSignal> signals, Origin origin) {
         // модель порой ставит разделитель с лишними пробелами
         String normalized = summary.replace("- --", SEPARATOR).replace("-- -", SEPARATOR);
 
@@ -130,7 +130,7 @@ public final class DiaryWriter {
                 continue;
             }
             // заметки родились вместе, хранятся вместе: все — в первой же записи
-            saved.add(diary.save(part, embedding, 0, attach, source));
+            saved.add(diary.save(part, embedding, 0, attach, origin));
             attach = List.of();
         }
         log.info("В дневник добавлено записей: {}", saved.size());

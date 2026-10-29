@@ -124,7 +124,9 @@ public final class Diary {
                 meta.path("lastUsed").asText("never"),
                 meta.path("usageCount").asInt(0),
                 signals(meta),
-                Source.of(meta.path("source").asText(""))));
+                Source.of(meta.path("source").asText("")),
+                // у прежних записей ключа нет вовсе — они читаются без адреса
+                meta.path("source_chat").asLong(0)));
     }
 
     /** Заметки о себе лежат рядом с эмбеддингом; у прежних записей их просто нет. */
@@ -221,7 +223,7 @@ public final class Diary {
 
     /** Новая запись. Идентификатор — время создания, как и у прежних. */
     public synchronized DiaryEntry save(String body, double[] embedding) {
-        return save(body, embedding, 0, List.of(), Source.GENERAL);
+        return save(body, embedding, 0, List.of(), Origin.GENERAL);
     }
 
     /**
@@ -229,17 +231,18 @@ public final class Diary {
      *                   1 установленный факт. Пересматривается во сне
      * @param signals    заметки о себе за этот разговор; хранятся в метаданных,
      *                   рядом с эмбеддингом — их читает только ночной отбор
-     * @param source     откуда запись попала в дневник: по этой метке память
+     * @param origin     откуда запись попала в дневник: по метке и чату память
      *                   решает, кому её вообще можно показывать
      */
     public synchronized DiaryEntry save(String body, double[] embedding, double confidence,
-                                        List<TraitSignal> signals, Source source) {
+                                        List<TraitSignal> signals, Origin origin) {
         long id = Instant.now().getEpochSecond();
         while (Files.exists(dir.resolve(id + ".md"))) {
             id++;
         }
         DiaryEntry entry = new DiaryEntry(String.valueOf(id), body.strip(), embedding,
-                new DiaryEntry.Metadata(0, confidence, "never", 0, List.copyOf(signals), source));
+                new DiaryEntry.Metadata(0, confidence, "never", 0, List.copyOf(signals),
+                        origin.source(), origin.chatId()));
         write(entry);
         entries.put(entry.id(), entry);
         return entry;
@@ -252,6 +255,7 @@ public final class Diary {
         meta.put("lastUsed", entry.metadata().lastUsed());
         meta.put("usageCount", entry.metadata().usageCount());
         meta.put("source", entry.metadata().source().wire());
+        meta.put("source_chat", entry.metadata().sourceChat());
         if (!entry.metadata().signals().isEmpty()) {
             ArrayNode signals = meta.putArray("signals");
             for (TraitSignal signal : entry.metadata().signals()) {

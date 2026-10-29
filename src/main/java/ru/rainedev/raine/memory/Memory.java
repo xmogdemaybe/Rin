@@ -9,10 +9,11 @@ public interface Memory {
 
     /**
      * @param recentContext последние сообщения — по ним понятно, о чём сейчас речь
+     * @param audience      кому показывать: часть записей этому зрителю закрыта
      * @return текст воспоминаний для подмешивания или пустая строка
      */
-    String recall(List<Message> recentContext);
+    String recall(List<Message> recentContext, Audience audience);
 
     /** Память отключена — Raine помнит только текущий разговор. */
-    Memory NONE = context -> "";
+    Memory NONE = (context, audience) -> "";
 }

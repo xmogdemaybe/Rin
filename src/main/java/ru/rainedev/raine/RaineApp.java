@@ -20,6 +20,7 @@ import ru.rainedev.raine.memory.CharacterGrowth;
 import ru.rainedev.raine.memory.Diary;
 import ru.rainedev.raine.memory.DiaryMemory;
 import ru.rainedev.raine.memory.DiaryWriter;
+import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Recall;
 import ru.rainedev.raine.memory.Source;
 import ru.rainedev.raine.memory.TrustLedger;
@@ -246,7 +247,7 @@ public final class RaineApp implements AutoCloseable {
         Recall recall = new Recall(diary, llm, prompts.lazy("character_base.md"), web,
                 config.diaryMinRelatedness());
         // ask доступен всегда: заглянуть в память можно в любой момент хода
-        always.add(recall.asTool(this::currentSituation));
+        always.add(recall.asTool(this::currentSituation, () -> loop.audience()));
         if (config.behaviour().stickers()) {
             always.add(tools.stickers().list());
             // пак открывают не в чате, а «у себя»: ссылка могла прийти когда угодно
@@ -312,8 +313,11 @@ public final class RaineApp implements AutoCloseable {
         loop.aboutPerson(id -> settings.current().trustLedgerEnabled() ? trust.aboutPerson(id) : "");
         // разговор помнит, откуда в него попали сообщения: дневник получает
         // строжайшую метку из затронутых чатов, и чужая личка не становится общей
-        loop.chatSource(this::sourceOfChat);
-        tools.onChatEntered(chat -> loop.noteSource(sourceOf(chat)));
+        loop.chatOrigin(this::originOfChat);
+        tools.onChatEntered(chat -> loop.noteOrigin(originOf(chat)));
+        // память режет выдачу по тому, кому она отвечает сейчас, — в коде, а не в
+        // промпте: просить чужой секрет у модели можно теми же словами, что и свой
+        loop.trustOf(trust::levelOf);
         DiaryMemory diaryMemory = new DiaryMemory(diary, llm,
                 config.diaryInjectionMaxLength(), config.diaryMinRelatedness());
         loop.memory(diaryMemory);
@@ -331,7 +335,7 @@ public final class RaineApp implements AutoCloseable {
             try {
                 // сначала средняя память: ей нужен ещё не урезанный разговор
                 workingMemory.update(prompts.system(""), loop.context());
-                var saved = writer.saveStrict(prompts.system(""), loop.context(), taken, loop.contextSource());
+                var saved = writer.saveStrict(prompts.system(""), loop.context(), taken, loop.contextOrigin());
                 if (saved.isEmpty() && !taken.isEmpty()) {
                     traitSignals.requeue(taken);
                 }
@@ -474,27 +478,27 @@ public final class RaineApp implements AutoCloseable {
     }
 
     /**
-     * Насколько закрыт чат, из которого пришло событие. Личка владельца
+     * Откуда и насколько закрыто событие из переписки. Личка владельца
      * определяется по идентификатору, без запроса к Telegram: самая строгая
      * метка не должна зависеть от того, ответил ли клиент. Остальное не
      * определилось — считаем чужой личкой: так запись не достанется случайным
      * людям, а владелец видит всё.
      */
-    private Source sourceOfChat(long chatId) {
+    private Origin originOfChat(long chatId) {
         if (lockdown.isOwner(chatId)) {
-            return Source.OWNER_DM;
+            return new Origin(chatId, Source.OWNER_DM);
         }
         try {
-            return sourceOf(telegram.chatCached(chatId));
+            return originOf(telegram.chatCached(chatId));
         } catch (RuntimeException e) {
             log.debug("Чат {} для метки источника не определился: {}", chatId, e.getMessage());
-            return Source.PRIVATE_DM;
+            return new Origin(chatId, Source.PRIVATE_DM);
         }
     }
 
     /** То, что владелец написал в общий чат, секретом его лички не является. */
-    private Source sourceOf(TdApi.Chat chat) {
-        return Source.of(ChatKind.of(chat), lockdown.isOwner(chat));
+    private Origin originOf(TdApi.Chat chat) {
+        return new Origin(chat.id, Source.of(ChatKind.of(chat), lockdown.isOwner(chat)));
     }
 
     /**

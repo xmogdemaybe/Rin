@@ -88,8 +88,11 @@ public final class Recall {
     /**
      * @param currentSituation что происходит прямо сейчас — подмешивается к запросу,
      *                         чтобы подагент отвечал не вообще, а по делу
+     * @param audience         кому отвечать: часть записей этому зрителю закрыта,
+     *                         и до подагента она не доходит вовсе
      */
-    public Tool asTool(java.util.function.Supplier<String> currentSituation) {
+    public Tool asTool(java.util.function.Supplier<String> currentSituation,
+                       java.util.function.Supplier<Audience> audience) {
         return Tool.named("ask")
                 .describedAs("""
                         Consult your own knowledge database (subagent). Use this to retrieve pages from your diary. \
@@ -104,10 +107,11 @@ public final class Recall {
                         - You need public or recent information: weather, news, facts""")
                 .requiredString("query", "Freeform question to the subagent. Provide as much context as possible — "
                         + "include sender name, topic, and what you want to know.")
-                .build(arguments -> ask(arguments.path("query").asText("").strip(), currentSituation.get()));
+                .build(arguments -> ask(arguments.path("query").asText("").strip(),
+                        currentSituation.get(), audience.get()));
     }
 
-    private String ask(String query, String situation) {
+    private String ask(String query, String situation, Audience audience) {
         if (query.length() < MIN_QUERY_LENGTH) {
             // не исключение, а обычный ответ: на техническую ошибку цикл среагировал бы
             // подмешиванием записей, и модель приняла бы это за удачный поиск
@@ -133,7 +137,7 @@ public final class Recall {
                 - %s""".formatted(situation, query);
 
         Set<String> alreadyGiven = new HashSet<>();
-        Toolbox tools = new Toolbox(searchTool(alreadyGiven));
+        Toolbox tools = new Toolbox(searchTool(alreadyGiven, audience));
 
         List<Message> session = new ArrayList<>();
         session.add(Message.user("<character>\n" + characterPrompt.get() + "\n</character>\n\n" + question));
@@ -165,7 +169,7 @@ public final class Recall {
                 .orElse("No data was found");
     }
 
-    private Tool searchTool(Set<String> alreadyGiven) {
+    private Tool searchTool(Set<String> alreadyGiven, Audience audience) {
         Tool.Builder builder = Tool.named("query")
                 .describedAs("Perform embedding-based search on the diary"
                         + (web.isAvailable() ? ", optionally adding results from the web" : ""))
@@ -177,7 +181,7 @@ public final class Recall {
         }
         return builder.build(arguments -> {
             String cue = arguments.path("text").asText("").strip();
-            String fromDiary = search(cue, alreadyGiven);
+            String fromDiary = search(cue, alreadyGiven, audience);
             if (!ru.rainedev.raine.core.Numbers.flagAt(arguments, "include_web_search_results")) {
                 return fromDiary;
             }
@@ -186,7 +190,7 @@ public final class Recall {
         });
     }
 
-    private String search(String cue, Set<String> alreadyGiven) {
+    private String search(String cue, Set<String> alreadyGiven, Audience audience) {
         if (cue.isEmpty() || diary.isEmpty()) {
             return "No data was found";
         }
@@ -197,11 +201,11 @@ public final class Recall {
         // смысловой канал: вектор запроса против векторов записей
         double[] vector = embeddingOf(cue);
         if (vector != null) {
-            skippedAsDuplicate = collectByRelatedness(cue, vector, alreadyGiven, found);
+            skippedAsDuplicate = collectByRelatedness(cue, vector, alreadyGiven, audience, found);
         }
         // слова — запасной ход: запись без вектора по смыслу не найдётся вовсе
         if (found.isEmpty()) {
-            skippedAsDuplicate |= collectByWords(cue, alreadyGiven, found);
+            skippedAsDuplicate |= collectByWords(cue, alreadyGiven, audience, found);
         }
 
         if (!found.isEmpty()) {
@@ -230,7 +234,7 @@ public final class Recall {
 
     /** Обычный канал поиска по смыслу. @return true, если всё выданное уже отдавалось */
     private boolean collectByRelatedness(String cue, double[] vector, Set<String> alreadyGiven,
-                                         StringBuilder found) {
+                                         Audience audience, StringBuilder found) {
         int taken = 0;
         boolean skippedAsDuplicate = false;
         for (Diary.Match match : diary.query(vector)) {
@@ -244,11 +248,16 @@ public final class Recall {
                 skippedAsDuplicate = true;
                 continue;
             }
+            Origin origin = match.entry().origin();
+            if (!audience.allows(origin.source(), origin.chatId())) {
+                continue;   // закрытая этому зрителю запись подагенту не достаётся
+            }
             DiaryEntry entry = diary.use(match);
             alreadyGiven.add(entry.id());
             taken++;
-            found.append("<memory_piece relatedness=\"%.3f\">\n%s\n</memory_piece>\n"
-                    .formatted(match.relatedness(), Markup.body(entry.body())));
+            String from = audience.attributionOf(origin.source(), origin.chatId());
+            found.append("<memory_piece relatedness=\"%.3f\">\n%s%s\n</memory_piece>\n"
+                    .formatted(match.relatedness(), from.isEmpty() ? "" : from + "\n", Markup.body(entry.body())));
         }
         if (taken > 0) {
             log.info("По запросу «{}» вспомнилось записей: {}", cue, taken);
@@ -262,7 +271,8 @@ public final class Recall {
      * векторы незачем. Опыт записи здесь не начисляется: аварийный канал
      * не должен подтасовывать обычный ранжир.
      */
-    private boolean collectByWords(String cue, Set<String> alreadyGiven, StringBuilder found) {
+    private boolean collectByWords(String cue, Set<String> alreadyGiven, Audience audience,
+                                   StringBuilder found) {
         Set<String> cueWords = WordScan.words(cue);
         if (cueWords.isEmpty()) {
             return false;
@@ -287,10 +297,15 @@ public final class Recall {
                 skippedAsDuplicate = true;
                 continue;
             }
+            Origin origin = candidate.entry().origin();
+            if (!audience.allows(origin.source(), origin.chatId())) {
+                continue;   // закрытая этому зрителю запись подагенту не достаётся
+            }
             alreadyGiven.add(candidate.entry().id());
             taken++;
-            found.append("<memory_piece matched_by=\"words\">\n%s\n</memory_piece>\n"
-                    .formatted(Markup.body(candidate.entry().body())));
+            String from = audience.attributionOf(origin.source(), origin.chatId());
+            found.append("<memory_piece matched_by=\"words\">\n%s%s\n</memory_piece>\n"
+                    .formatted(from.isEmpty() ? "" : from + "\n", Markup.body(candidate.entry().body())));
         }
         if (taken > 0) {
             log.info("По запросу «{}» по совпадению слов вспомнилось записей: {}", cue, taken);

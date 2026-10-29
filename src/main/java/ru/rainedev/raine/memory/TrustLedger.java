@@ -54,6 +54,9 @@ public final class TrustLedger {
     /** Прежде чем снова менять запись о человеке, дай перемене дожить. */
     public static final Duration COOLDOWN = Duration.ofHours(6);
 
+    /** Доверие владельца — инвариант, а не строка файла: его нечем переписать. */
+    public static final int OWNER_LEVEL = 5;
+
     private static final int NAME_LIMIT = 40;
     private static final int REASON_LIMIT = 110;
 
@@ -201,6 +204,25 @@ public final class TrustLedger {
                 level > 0 ? "+" + level : String.valueOf(level));
         return ("Noted. id %d%s now sits at %s in your ledger.").formatted(
                 userId, name.isEmpty() ? "" : " (" + name + ")", level > 0 ? "+" + level : String.valueOf(level));
+    }
+
+    /**
+     * Сколько доверия к человеку прямо сейчас. Владельца в файле нет, но он +5
+     * инвариантом — как и в строке промпта: по этому числу память решает, что
+     * показывать, и случайным он оказаться не должен.
+     *
+     * @return уровень из файла; 0 — человека в файле нет
+     */
+    public int levelOf(long personId) {
+        if (personId == ownerId) {
+            return OWNER_LEVEL;
+        }
+        for (Entry entry : entries()) {
+            if (entry.id() == personId) {
+                return entry.level();
+            }
+        }
+        return 0;
     }
 
     /**

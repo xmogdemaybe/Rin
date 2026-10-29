@@ -12,7 +12,9 @@ import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
+import ru.rainedev.raine.memory.Audience;
 import ru.rainedev.raine.memory.Memory;
+import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
 
 /**
@@ -146,19 +148,33 @@ public final class NotificationLoop {
     private volatile java.util.function.LongFunction<String> aboutPerson = id -> "";
 
     /**
-     * Кто говорит, откуда чат уведомления. Спрашивается в тот момент, когда текст
-     * чата ложится в контекст, а не когда уведомление создано: событие из очереди
-     * иначе приписало бы свой чат чужому разговору, который ещё не сохранён.
+     * Откуда чат уведомления и насколько он закрыт. Спрашивается в тот момент,
+     * когда текст чата ложится в контекст, а не когда уведомление создано: событие
+     * из очереди иначе приписало бы свой чат чужому разговору, который ещё не
+     * сохранён.
      */
-    private volatile java.util.function.LongFunction<Source> chatSource = id -> Source.GENERAL;
+    private volatile java.util.function.LongFunction<Origin> chatOrigin = id -> Origin.GENERAL;
 
     /**
-     * Откуда родом то, что уже легло в контекст. Разговор задевает несколько
-     * чатов, а запись в дневник уходит из него одна — поэтому метка строжайшая
-     * из затронутых. Пишет поток ядра, читает и тот, кто останавливает бота.
+     * Доверие к тому, кому она отвечает: по нему память решает, что показывать.
+     * Нет человека в файле доверия — ноль, как и в разговоре.
      */
-    private final java.util.concurrent.atomic.AtomicReference<Source> contextSource =
-            new java.util.concurrent.atomic.AtomicReference<>(Source.GENERAL);
+    private volatile java.util.function.LongFunction<Integer> trustOf = id -> 0;
+
+    /**
+     * Откуда родом то, что уже легло в контекст: строжайшая метка затронутых
+     * чатов и чат, который её задал. Разговор задевает несколько чатов, а запись
+     * в дневник уходит из него одна. Пишет поток ядра, читает и тот, кто
+     * останавливает бота, — поэтому одна пара на атомарную замену.
+     */
+    private final java.util.concurrent.atomic.AtomicReference<Origin> contextOrigin =
+            new java.util.concurrent.atomic.AtomicReference<>(Origin.GENERAL);
+
+    /**
+     * Кому память показывает записи прямо сейчас. Во время хода читается и из
+     * подагента поиска, поэтому volatile.
+     */
+    private volatile Audience audience = Audience.STRANGER;
 
     private Rest rest;
 
@@ -192,17 +208,26 @@ public final class NotificationLoop {
         this.aboutPerson = suffix;
     }
 
-    public void chatSource(java.util.function.LongFunction<Source> source) {
-        this.chatSource = source;
+    public void chatOrigin(java.util.function.LongFunction<Origin> origin) {
+        this.chatOrigin = origin;
+    }
+
+    public void trustOf(java.util.function.LongFunction<Integer> level) {
+        this.trustOf = level;
     }
 
     /** Чат вошёл в контекст: метка разговора становится не мягче его. */
-    public void noteSource(Source source) {
-        contextSource.accumulateAndGet(source, Source::strictest);
+    public void noteOrigin(Origin origin) {
+        contextOrigin.accumulateAndGet(origin, Origin::strictest);
     }
 
-    public Source contextSource() {
-        return contextSource.get();
+    public Origin contextOrigin() {
+        return contextOrigin.get();
+    }
+
+    /** Кому этот ход показывает память. */
+    public Audience audience() {
+        return audience;
     }
 
     public void rest(Rest rest) {
@@ -291,7 +316,7 @@ public final class NotificationLoop {
     public void clearContext() {
         context.clear();
         // разговор ушёл в дневник — следующему его метка достаться не должна
-        contextSource.set(Source.GENERAL);
+        contextOrigin.set(Origin.GENERAL);
     }
 
     /** Бесконечный цикл. Прерывается только остановкой потока. */
@@ -394,6 +419,10 @@ public final class NotificationLoop {
         Turn turn = active;
         long startedAt = turn.startedAt;
         long spentTokens = turn.tokens;
+        // откуда чат и кому этот ход отвечает: снимается один раз на вход и для
+        // зрителя, и для разговора, который из него выйдет
+        Origin from = notification.chatId() == 0 ? null : chatOrigin.apply(notification.chatId());
+        audience = audienceOf(notification, from);
         if (!resuming) {
             // «тебе написали» открытый чат заменяет собой: в нём и так всё видно.
             // А вот «снимок готов, вот имя файла» в переписке не написано нигде —
@@ -411,8 +440,8 @@ public final class NotificationLoop {
             // метка снимается здесь, а не когда уведомление создано: событие из
             // очереди иначе приписало бы свой чат чужому разговору, который ещё
             // не сохранён, а новый контекст остался бы без метки вовсе
-            if (notification.chatId() != 0) {
-                noteSource(chatSource.apply(notification.chatId()));
+            if (from != null) {
+                noteOrigin(from);
             }
         }
         boolean recallMemories = turn.recall;
@@ -583,9 +612,23 @@ public final class NotificationLoop {
         }
     }
 
+    /**
+     * Кому этот ход показывает память.
+     * <p>
+     * Личка владельца — единственное место, где её секреты открываются; событие не
+     * из переписки зрителя не имеет вовсе, и ему остаётся только общее. У личного
+     * чата идентификатор совпадает с идентификатором человека, поэтому ответ, у
+     * которого чата нет, всё равно кому-то принадлежит.
+     */
+    private Audience audienceOf(Notification notification, Origin from) {
+        return new Audience(notification.chatId() != 0 ? notification.chatId() : notification.personId(),
+                trustOf.apply(notification.personId()),
+                from != null && from.source() == Source.OWNER_DM);
+    }
+
     /** Воспоминания встают перед последним сообщением — как будто вспомнилось до ответа. */
     private void recallIntoContext() {
-        String recalled = memory.recall(context);
+        String recalled = memory.recall(context, audience);
         if (recalled.isEmpty()) {
             return;
         }

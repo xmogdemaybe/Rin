@@ -46,7 +46,7 @@ class EmbeddingLengthTest {
         RecordingLlm llm = new RecordingLlm();
         Memory memory = new DiaryMemory(diary, llm, 4000);
 
-        memory.recall(List.of(Message.user(longText(50_000))));
+        memory.recall(List.of(Message.user(longText(50_000))), Audience.STRANGER);
 
         assertTrue(llm.asked.length() <= 8_000,
                 "запрос ушёл длиной " + llm.asked.length() + " — эндпоинт такой отвергнет");

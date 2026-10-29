@@ -118,6 +118,19 @@ class TrustLedgerTest {
     }
 
     @Test
+    void theLevelIsReadableForAccessDecisions(@TempDir Path dir) throws Exception {
+        // доступ к памяти решается кодом по числу, а не по тексту строки:
+        // то же доверие, что видно в промпте, должно быть доступно и решению
+        TrustLedger ledger = new TrustLedger(dir.resolve("trust.md"), 111, "Владелец", clock);
+        note(ledger, "{\"id\":\"4567\",\"level\":3,\"reason\":\"помогла просто так\"}");
+
+        assertEquals(3, ledger.levelOf(4567), "доверие из файла читается обратно");
+        assertEquals(0, ledger.levelOf(9999), "о ком не записано — ноль, а не презумпция дружбы");
+        assertEquals(TrustLedger.OWNER_LEVEL, ledger.levelOf(111),
+                "владелец выше файла: понизить его нечем");
+    }
+
+    @Test
     void theEntryKeepsUntilItSettles(@TempDir Path dir) throws Exception {
         TrustLedger ledger = new TrustLedger(dir.resolve("trust.md"), 111, "", clock);
         note(ledger, "{\"id\":\"77\",\"level\":2,\"reason\":\"тепло\"}");

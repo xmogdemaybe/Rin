@@ -129,7 +129,7 @@ public final class SleepConsolidation {
             if (rewritten.isEmpty()) {
                 continue;
             }
-            StoreResult stored = store(rewritten, strictest(group));
+            StoreResult stored = store(rewritten, origin(group));
             if (!stored.complete()) {
                 log.warn("Пересмотр не сохранён полностью — исходные записи остаются активными");
                 break;
@@ -206,14 +206,29 @@ public final class SleepConsolidation {
     private record Replacement(String text, double confidence, double[] embedding) {}
     private record StoreResult(int saved, boolean complete) {}
 
-    /** Сведённая запись наследует секретность самого закрытого из исходных чатов. */
-    private static Source strictest(List<DiaryEntry> group) {
-        return group.stream()
+    /**
+     * Сведённая запись наследует секретность самого закрытого из исходных чатов.
+     * <p>
+     * Чат остаётся только когда все самые закрытые записи пришли из одного:
+     * сведённая из двух чужих личек не принадлежит ни одной из них, и случайному
+     * человеку показывать её нельзя.
+     */
+    private static Origin origin(List<DiaryEntry> group) {
+        Source source = group.stream()
                 .map(entry -> entry.metadata().source())
                 .reduce(Source.GENERAL, Source::strictest);
+        if (source == Source.GENERAL) {
+            return Origin.GENERAL;
+        }
+        List<Long> chats = group.stream()
+                .filter(entry -> entry.metadata().source() == source)
+                .map(entry -> entry.metadata().sourceChat())
+                .distinct()
+                .toList();
+        return new Origin(chats.size() == 1 ? chats.getFirst() : 0, source);
     }
 
-    private StoreResult store(String answer, Source source) {
+    private StoreResult store(String answer, Origin origin) {
         List<Replacement> replacements = new ArrayList<>();
         boolean explicitForget = false;
         // Validate the entire answer and compute every embedding before writing anything.
@@ -249,7 +264,7 @@ public final class SleepConsolidation {
             try {
                 for (Replacement replacement : replacements) {
                     created.add(diary.save(replacement.text(), replacement.embedding(),
-                            replacement.confidence(), List.of(), source));
+                            replacement.confidence(), List.of(), origin));
                 }
             } catch (RuntimeException failure) {
                 for (DiaryEntry entry : created) Files.deleteIfExists(diary.directory().resolve(entry.id() + ".md"));

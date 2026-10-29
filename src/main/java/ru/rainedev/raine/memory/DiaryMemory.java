@@ -73,7 +73,7 @@ public final class DiaryMemory implements Memory {
     }
 
     @Override
-    public String recall(List<Message> recentContext) {
+    public String recall(List<Message> recentContext, Audience audience) {
         if (diary.isEmpty() || maxLength <= 0 || recentContext.isEmpty()) {
             return "";
         }
@@ -112,10 +112,20 @@ public final class DiaryMemory implements Memory {
             if (injected.contains(Fingerprint.of(match.entry().body()))) {
                 continue;
             }
+            Origin origin = match.entry().origin();
+            if (!audience.allows(origin.source(), origin.chatId())) {
+                // запись закрыта для этого зрителя: не показывать и не списывать её
+                // как вспомненную — вернётся та, что ему доступна
+                continue;
+            }
             DiaryEntry entry = diary.use(match);
             injected.add(Fingerprint.of(entry.body()));
-            recalled.append("<").append(TAG).append(">\n")
-                    .append(Markup.body(entry.body())).append("\n")
+            String from = audience.attributionOf(origin.source(), origin.chatId());
+            recalled.append("<").append(TAG).append(">\n");
+            if (!from.isEmpty()) {
+                recalled.append(from).append('\n');
+            }
+            recalled.append(Markup.body(entry.body())).append("\n")
                     .append("</").append(TAG).append(">\n");
             log.info("Вспомнилось (близость {}): {}", String.format("%.3f", match.relatedness()),
                     entry.body().lines().findFirst().orElse("").strip());
