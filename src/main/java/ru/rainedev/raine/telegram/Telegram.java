@@ -893,6 +893,21 @@ public final class Telegram {
         messageCache.forget(messageKey(chatId, messageId));
     }
 
+    /**
+     * Пост по ссылке так, как понимает её Telegram: и публичную «t.me/durov/123»,
+     * и «t.me/c/…», куда у этого аккаунта есть доступ. Спрашиваем один раз на
+     * адрес — остальное держит {@link TmeLinks}.
+     */
+    public Optional<TdApi.MessageLinkInfo> linkInfo(String url) {
+        try {
+            return Optional.ofNullable(ask(new TdApi.GetMessageLinkInfo(url)));
+        } catch (RuntimeException e) {
+            // битый адрес или закрытый чат — обычный ответ; замороженный аккаунт — нет
+            Fatal.check(e);
+            return Optional.empty();
+        }
+    }
+
     public void typing(long chatId) {
         TdApi.SendChatAction action = new TdApi.SendChatAction();
         action.chatId = chatId;

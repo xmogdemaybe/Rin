@@ -4,6 +4,7 @@ import it.tdlight.jni.TdApi;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -28,6 +29,19 @@ public final class MessageFormatter {
         ReplyLookup NONE = (chatId, messageId) -> Optional.empty();
     }
 
+    /**
+     * Ссылки на чужие посты. {@code peek} только читает то, что уже раскрыли:
+     * разметка сама к Telegram не ходит. {@code lookAhead} раскрывает адреса всего
+     * экрана разом — до того, как экран начнёт собираться.
+     */
+    public interface LinkLookup {
+        Optional<TdApi.MessageLinkInfo> peek(String url);
+
+        default void lookAhead(List<TdApi.Message> messages) {}
+
+        LinkLookup NONE = url -> Optional.empty();
+    }
+
     private static final DateTimeFormatter DATE =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
 
@@ -35,6 +49,7 @@ public final class MessageFormatter {
     private final ReplyLookup replies;
     private final MediaDescriber media;
     private final MessageEdits edits;
+    private final LinkLookup links;
 
     public MessageFormatter(NameResolver names, ReplyLookup replies) {
         this(names, replies, MediaDescriber.NONE);
@@ -46,10 +61,16 @@ public final class MessageFormatter {
 
     public MessageFormatter(NameResolver names, ReplyLookup replies, MediaDescriber media,
                             MessageEdits edits) {
+        this(names, replies, media, edits, LinkLookup.NONE);
+    }
+
+    public MessageFormatter(NameResolver names, ReplyLookup replies, MediaDescriber media,
+                            MessageEdits edits, LinkLookup links) {
         this.names = names;
         this.replies = replies;
         this.media = media;
         this.edits = edits;
+        this.links = links;
     }
 
     /**
@@ -64,8 +85,12 @@ public final class MessageFormatter {
         return media;
     }
 
+    LinkLookup links() {
+        return links;
+    }
+
     public String format(TdApi.Message message, ChatView view) {
-        return format(message, view, "message", false);
+        return format(message, view, "message", "");
     }
 
     /**
@@ -74,7 +99,7 @@ public final class MessageFormatter {
      *                 соседнего сообщения
      */
     public String format(TdApi.Message message, ChatView view, boolean isTarget) {
-        return format(message, view, "message", isTarget);
+        return format(message, view, "message", isTarget ? " target" : "");
     }
 
     /**
@@ -83,21 +108,29 @@ public final class MessageFormatter {
      * про последние из них — за остальными всегда можно вернуться поиском.
      */
     public String formatBriefly(TdApi.Message message, ChatView view) {
-        return new MessageFormatter(names, replies, MediaDescriber.NONE, edits).format(message, view);
+        return new MessageFormatter(names, replies, MediaDescriber.NONE, edits, LinkLookup.NONE)
+                .format(message, view);
     }
 
     private String format(TdApi.Message message, ChatView view, String tag) {
-        return format(message, view, tag, false);
+        return format(message, view, tag, "");
     }
 
-    private String format(TdApi.Message message, ChatView view, String tag, boolean isTarget) {
-        StringBuilder attributes = new StringBuilder(tag)
-                .append(isTarget ? " target" : "")
+    /**
+     * @param extra готовые атрибуты этого блока — те, что знает только вызывающий
+     */
+    private String format(TdApi.Message message, ChatView view, String tag, String extra) {
+        // самостоятельная реплика переписки, а не приписка к ней: цитата в чужом
+        // ответе и пост за ссылкой не раскручиваются дальше
+        boolean turn = "message".equals(tag);
+        StringBuilder attributes = new StringBuilder(tag).append(extra)
                 .append(" message_id=\"").append(message.id).append('"')
                 .append(" date=\"").append(DATE.format(Instant.ofEpochSecond(message.date))).append('"');
 
         long senderId = senderId(message.senderId);
-        if (senderId != view.myId() && message.id > view.lastReadInboxMessageId()) {
+        // граница прочитанного относится к открытому чату: чужой пост за ссылкой
+        // ничего не говорит о том, дочитала ли она сюда
+        if (!"link".equals(tag) && senderId != view.myId() && message.id > view.lastReadInboxMessageId()) {
             attributes.append(" unread");
         }
 
@@ -109,12 +142,9 @@ public final class MessageFormatter {
         appendReactions(attributes, message);
 
         StringBuilder body = new StringBuilder();
-        // цитата в чужом ответе — не самостоятельная реплика: если размечать правку
-        // и в ней, единственный показ диффа уйдёт на цитату, а не на чтение
-        boolean quoted = "reply_to".equals(tag);
         // вложенный reply_to разворачиваем только на один уровень, иначе цепочка ответов
         // раздувает контекст без пользы
-        if (!quoted && message.replyTo instanceof TdApi.MessageReplyToMessage reply) {
+        if (turn && message.replyTo instanceof TdApi.MessageReplyToMessage reply) {
             long chatId = reply.chatId == 0 ? message.chatId : reply.chatId;
             body.append(replies.find(chatId, reply.messageId)
                     .map(original -> format(original, view, "reply_to"))
@@ -122,7 +152,8 @@ public final class MessageFormatter {
         }
         String content = ControlMarkers.sanitize(content(message.content));
         body.append(content);
-        appendEdits(body, attributes, message, content, quoted);
+        appendEdits(body, attributes, message, content, turn);
+        appendLinks(body, message, view, turn);
 
         // описание встаёт под вложением: сначала «прислал фото», потом что на нём
         // расшифровка голосового и описание картинки — тоже чужой текст,
@@ -139,13 +170,16 @@ public final class MessageFormatter {
      * Что собеседник поменял в уже прочитанном сообщении.
      * <p>
      * Свои правки не показываем: это механика опечаток, а не слова собеседника.
+     * Цитата и пост за ссылкой размечаются без правок: дифф показывают один раз,
+     * и отдавать его цитате значит не дать прочитать само сообщение.
+     * <p>
      * Прежние слова заново через {@code Markup.body} не гоним: свободный текст уже
      * размечен в {@code MessageContent}, а служебные теги Telegram — превью ссылки
      * или звонок — внутри правки как раз должны остаться целыми.
      */
     private void appendEdits(StringBuilder body, StringBuilder attributes,
-                             TdApi.Message message, String content, boolean quoted) {
-        if (quoted || message.isOutgoing) {
+                             TdApi.Message message, String content, boolean turn) {
+        if (!turn || message.isOutgoing) {
             return;
         }
         Optional<String> previous = edits.previous(message.chatId, message.id);
@@ -157,6 +191,33 @@ public final class MessageFormatter {
             // прежних слов не знать (правили до первого чтения) либо перемены с
             // прошлого показа нет: дифф показывают один раз, дальше — только отметка
             attributes.append(" edited=\"true\"");
+        }
+    }
+
+    /**
+     * Чужой пост по ссылке вкладывается сюда же: адрес без текста говорит только
+     * «там что-то написано», а своей тулзы открыть ссылку у неё нет.
+     * <p>
+     * Вложенный блок собирается выбросным форматтером — без зрения, правок и
+     * ссылок внутри ссылок. Иначе канал за одной ссылкой тянет за собой десяток
+     * картинок и собственную ленту пересказов.
+     */
+    private void appendLinks(StringBuilder body, TdApi.Message message, ChatView view, boolean turn) {
+        if (!turn) {
+            return;
+        }
+        for (String url : TmeLink.in(message, TmeLink.PER_MESSAGE)) {
+            TdApi.MessageLinkInfo info = links.peek(url).orElse(null);
+            if (info == null || info.message == null) {
+                continue;   // адрес ведёт в чат целиком либо закрыт от этого аккаунта
+            }
+            TdApi.Message post = info.message;
+            String chat = Markup.attribute(names.nameOf(post.chatId));
+            String extra = " url=\"" + Markup.attribute(url) + '"'
+                    + (chat.isBlank() ? "" : " chat=\"" + chat + '"')
+                    + (info.forAlbum || post.mediaAlbumId != 0 ? " album=\"true\"" : "");
+            body.append('\n').append(new MessageFormatter(names, replies, MediaDescriber.NONE,
+                    MessageEdits.NONE, LinkLookup.NONE).format(post, view, "link", extra));
         }
     }
 

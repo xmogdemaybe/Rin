@@ -2,6 +2,7 @@ package ru.rainedev.raine.telegram;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,6 +34,22 @@ class ShortLivedCacheTest {
         }
 
         assertEquals(3, computed.get(), "устаревшее значение отдаётся как годное");
+    }
+
+    /** Просмотр ничего не считает: живое отдать, протухшее и не было — промолчать. */
+    @Test
+    void lookingInsideNeverComputes() {
+        ShortLivedCache<String, String> fresh = new ShortLivedCache<>(60_000);
+        AtomicInteger computed = new AtomicInteger();
+        fresh.get("чат", key -> "значение " + computed.incrementAndGet());
+
+        assertEquals(Optional.of("значение 1"), fresh.cached("чат"));
+        assertEquals(Optional.empty(), fresh.cached("другой чат"));
+        assertEquals(1, computed.get(), "просмотр спросил Telegram второй раз");
+
+        ShortLivedCache<String, String> stale = new ShortLivedCache<>(0);
+        stale.get("чат", key -> "значение");
+        assertTrue(stale.cached("чат").isEmpty(), "протухшее значение отдаётся как годное");
     }
 
     @Test

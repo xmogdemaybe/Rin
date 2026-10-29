@@ -36,6 +36,7 @@ import ru.rainedev.raine.telegram.StoryAudience;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
 import ru.rainedev.raine.telegram.TelegramProxy;
+import ru.rainedev.raine.telegram.TmeLinks;
 import ru.rainedev.raine.tools.AntiRepeat;
 import ru.rainedev.raine.tools.TelegramTools;
 import ru.rainedev.raine.tools.WebSearch;
@@ -182,7 +183,8 @@ public final class RaineApp implements AutoCloseable {
                 telegram::nameOf,
                 (chatId, messageId) -> telegram.message(chatId, messageId),
                 media,
-                new MessageEdits());
+                new MessageEdits(),
+                new TmeLinks(telegram));
 
         actions = config.readOnly()
                 ? new TelegramActions.ReadOnly()

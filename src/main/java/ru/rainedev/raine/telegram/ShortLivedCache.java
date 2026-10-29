@@ -55,6 +55,14 @@ final class ShortLivedCache<K, V> {
         return value;
     }
 
+    /** Только то, что уже лежит и не устарело: к Telegram не обращается. */
+    Optional<V> cached(K key) {
+        Entry<V> entry = entries.get(key);
+        return entry != null && System.currentTimeMillis() - entry.at() < lifetimeMillis
+                ? Optional.of(entry.value())
+                : Optional.empty();
+    }
+
     /** Запомнить свежий ответ, который посчитали снаружи. */
     void put(K key, V value) {
         if (value != null) {

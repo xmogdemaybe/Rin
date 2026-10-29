@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import it.tdlight.jni.TdApi;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import ru.rainedev.raine.config.Config;
 import ru.rainedev.raine.prompt.Prompts;
@@ -16,11 +18,11 @@ class ChatScreenTest {
     private static final long MY_ID = 7759009453L;
     private static final long JOHN = 100L;
 
+    private final Prompts prompts =
+            new Prompts(Path.of("prompts"), new Config.Character("Raine", "@raine_tyan", "RaineDev"));
     private final MessageFormatter formatter =
             new MessageFormatter(id -> id == JOHN ? "John" : "Raine", MessageFormatter.ReplyLookup.NONE);
-    private final ChatScreen screen = new ChatScreen(
-            formatter,
-            new Prompts(Path.of("prompts"), new Config.Character("Raine", "@raine_tyan", "RaineDev")));
+    private final ChatScreen screen = new ChatScreen(formatter, prompts);
     private final MessageFormatter.ChatView view = new MessageFormatter.ChatView(MY_ID, 0L);
 
     @Test
@@ -115,6 +117,69 @@ class ChatScreenTest {
         assertEquals(1, occurrences(result.text(), "<instructions>"), result.text());
         assertEquals(1, occurrences(result.text(), "</instructions>"), result.text());
         assertTrue(result.text().contains("владелец разрешил"), "заголовок всё ещё видно");
+    }
+
+    /** Ссылки раскрываются только у тех сообщений, которые читаются целиком. */
+    @Test
+    void warmsLinksOnlyForTheMessagesSheReadsInFull() {
+        List<TdApi.Message> history = new ArrayList<>();
+        for (long id = 1; id <= 10; id++) {
+            history.add(message(id, "обсуждают t.me/durov/" + id));
+        }
+        RecordingLinks links = new RecordingLinks(null);
+
+        screenWith(links).render(chat(1L, "John", new TdApi.ChatTypePrivate(JOHN)), history, view);
+
+        assertEquals(List.of(3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L), links.warmed,
+                "восемь последних — остальные прочитаны кратко и ссылок не ждут");
+    }
+
+    /** Разогретую ссылкой пост видно под тем сообщением, которое на неё указало. */
+    @Test
+    void aWarmedLinkAppearsUnderTheMessageThatPointedAtIt() {
+        ChatScreen.Screen result = screenWith(new RecordingLinks(post(555L, 123L, "на Марсе нашли лёд")))
+                .render(chat(1L, "John", new TdApi.ChatTypePrivate(JOHN)),
+                        List.of(message(600L, "глянь t.me/durov/123")), view);
+
+        assertTrue(result.text().contains("t.me/durov/123"), result.text());
+        assertTrue(result.text().contains("<link"), result.text());
+        assertTrue(result.text().contains("на Марсе нашли лёд"), result.text());
+    }
+
+    /** Раскрыватель ссылок, который помнит, что ему показали, и ничего не спрашивает. */
+    private static final class RecordingLinks implements MessageFormatter.LinkLookup {
+
+        private final List<Long> warmed = new ArrayList<>();
+        private final TdApi.MessageLinkInfo found;
+
+        RecordingLinks(TdApi.MessageLinkInfo found) {
+            this.found = found;
+        }
+
+        @Override
+        public Optional<TdApi.MessageLinkInfo> peek(String url) {
+            return Optional.ofNullable(found);
+        }
+
+        @Override
+        public void lookAhead(List<TdApi.Message> messages) {
+            messages.forEach(message -> warmed.add(message.id));
+        }
+    }
+
+    private ChatScreen screenWith(MessageFormatter.LinkLookup links) {
+        return new ChatScreen(new MessageFormatter(id -> id == JOHN ? "John" : "Raine",
+                MessageFormatter.ReplyLookup.NONE, MediaDescriber.NONE, MessageEdits.NONE, links), prompts);
+    }
+
+    private static TdApi.MessageLinkInfo post(long chatId, long messageId, String text) {
+        TdApi.Message found = message(messageId, text);
+        found.chatId = chatId;
+        found.senderId = new TdApi.MessageSenderChat(chatId);
+        TdApi.MessageLinkInfo info = new TdApi.MessageLinkInfo();
+        info.isPublic = true;
+        info.message = found;
+        return info;
     }
 
     private static TdApi.ChatTypeSupergroup group() {

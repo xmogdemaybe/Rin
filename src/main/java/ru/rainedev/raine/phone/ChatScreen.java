@@ -61,6 +61,9 @@ public final class ChatScreen {
         int from = Math.max(0, messages.size() - recentDepth);
         List<TdApi.Message> recent = messages.subList(from, messages.size());
         MediaAhead.look(formatter.media(), recent);
+        // ссылки раскрываются тем же приёмом и тоже только у свежих сообщений:
+        // краткая разметка старых чужие посты за собой не тянет
+        formatter.links().lookAhead(recent);
 
         for (TdApi.Message message : messages) {
             String rendered = recent.contains(message)
