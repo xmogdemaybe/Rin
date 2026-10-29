@@ -159,7 +159,7 @@ public final class ReliabilityChecks {
         check(Files.readString(file).equals("new"), "atomic replacement failed");
         check(Files.list(dir).count() == 1, "temporary files leaked");
         PendingConversations pending = new PendingConversations(dir.resolve("pending"));
-        for (int i = 0; i < 30; i++) pending.keep(List.of(Message.user("conversation " + i)));
+        for (int i = 0; i < 30; i++) pending.keep(List.of(Message.user("conversation " + i)), Origin.GENERAL);
         check(pending.waiting().size() == 30, "pending filenames collided");
         pending.keepFailure("notification", List.of(Message.user("actual context")), "offline");
         check(pending.waiting().size() == 30, "failed notification entered automatic replay");
@@ -266,7 +266,7 @@ public final class ReliabilityChecks {
     }
     public static void pendingSaveFailureDoesNotReportSuccess() throws Exception {
         Path file = temporary().resolve("not-a-directory"); Files.writeString(file, "occupied");
-        try { new PendingConversations(file).keep(List.of(Message.user("original"))); throw new AssertionError("failed pending save reported success"); }
+        try { new PendingConversations(file).keep(List.of(Message.user("original")), Origin.GENERAL); throw new AssertionError("failed pending save reported success"); }
         catch (IllegalStateException expected) { }
     }
     public static void main(String[] args) throws Exception {

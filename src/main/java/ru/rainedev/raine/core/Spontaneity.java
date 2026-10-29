@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.memory.Diary;
 import ru.rainedev.raine.memory.DiaryEntry;
+import ru.rainedev.raine.memory.Source;
 import ru.rainedev.raine.phone.Markup;
 
 /**
@@ -131,8 +132,11 @@ public final class Spontaneity implements AutoCloseable {
     /**
      * Поводом становится случайная запись дневника — так же, как человеку
      * что-то вспоминается само и тянет написать.
+     * <p>
+     * Видна для проверок: из чего именно сложился порыв, надо уметь увидеть,
+     * не заглядывая в планировщик.
      */
-    private String buildPrompt() {
+    String buildPrompt() {
         StringBuilder prompt = new StringBuilder("<your_diary_page just_for_reasoning no_plagiarism no_copy>\n");
         randomEntry().ifPresent(entry -> prompt.append(Markup.body(entry.body())).append('\n'));
         return prompt.append(PROMPT).toString();
@@ -148,7 +152,11 @@ public final class Spontaneity implements AutoCloseable {
     private final java.util.Deque<String> recent = new java.util.ArrayDeque<>();
 
     private synchronized java.util.Optional<DiaryEntry> randomEntry() {
-        List<Diary.Match> all = diary.query(new double[0]);
+        // порыв не привязан к чату и уходит в случайный разговор: поводом не
+        // может становиться то, что сказано в личке или в чужой переписке
+        List<Diary.Match> all = diary.query(new double[0]).stream()
+                .filter(match -> match.entry().origin().source() == Source.GENERAL)
+                .toList();
         if (all.isEmpty()) {
             return java.util.Optional.empty();
         }

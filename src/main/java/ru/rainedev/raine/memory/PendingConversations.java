@@ -1,6 +1,7 @@
 package ru.rainedev.raine.memory;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -32,16 +33,25 @@ public final class PendingConversations {
         this.dir = dir;
     }
 
+    /** Отложенное: сам разговор и то, откуда он пришёл. */
+    public record Pending(Origin origin, List<Message> conversation) {}
+
     /** Отложить разговор целиком — со всеми вызовами инструментов, как он был. */
-    public void keep(List<Message> conversation) {
+    public void keep(List<Message> conversation, Origin origin) {
         if (conversation.isEmpty()) {
             return;
         }
         try {
             Files.createDirectories(dir);
             Path file = dir.resolve(System.currentTimeMillis() + "-" + java.util.UUID.randomUUID() + ".json");
+            var data = MAPPER.createObjectNode();
+            // метка источника ложится в сам дамп: пересказывает этот разговор уже
+            // другой процесс, и без неё чужая личка уехала бы в общий круг
+            data.put("source", origin.source().wire());
+            data.put("source_chat", origin.chatId());
+            data.set("conversation", MAPPER.valueToTree(conversation));
             ru.rainedev.raine.storage.AtomicFiles.writeString(file,
-                    MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(conversation));
+                    MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(data));
             log.info("Разговор отложен до лучшей связи: {}", file.getFileName());
         } catch (IOException | RuntimeException e) {
             // дальше спасать нечем: этот разговор действительно потерян
@@ -104,12 +114,19 @@ public final class PendingConversations {
         }
     }
 
-    public List<Message> read(Path file) {
+    public Pending read(Path file) {
         try {
-            return MAPPER.readValue(file.toFile(), new TypeReference<List<Message>>() {});
+            JsonNode root = MAPPER.readTree(file.toFile());
+            // прежние дампы — голый список сообщений: метки в них нет, и
+            // разговор остаётся общим, но читается
+            boolean legacy = root.isArray();
+            JsonNode messages = legacy ? root : root.path("conversation");
+            Origin origin = legacy ? Origin.GENERAL
+                    : new Origin(root.path("source_chat").asLong(0), Source.of(root.path("source").asText("")));
+            return new Pending(origin, MAPPER.convertValue(messages, new TypeReference<List<Message>>() {}));
         } catch (IOException | RuntimeException e) {
             log.warn("Отложенный разговор {} не читается: {}", file.getFileName(), e.getMessage());
-            return List.of();
+            return new Pending(Origin.GENERAL, List.of());
         }
     }
 

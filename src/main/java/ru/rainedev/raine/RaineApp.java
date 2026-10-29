@@ -347,7 +347,7 @@ public final class RaineApp implements AutoCloseable {
                 // модель, а её нет. Разговор откладывается сырым и разбирается
                 // при следующем запуске — потерять целый день из-за связи нельзя
                 log.error("Не удалось сохранить память — откладываю разговор", e);
-                pending.keep(loop.context());
+                pending.keep(loop.context(), loop.contextOrigin());
             }
             loop.clearContext();
             diaryMemory.forget();
@@ -461,13 +461,16 @@ public final class RaineApp implements AutoCloseable {
      */
     private void rememberPending(DiaryWriter writer, String systemPrompt) {
         for (java.nio.file.Path file : pending.waiting()) {
-            var conversation = pending.read(file);
-            if (conversation.isEmpty()) {
+            var restored = pending.read(file);
+            if (restored.conversation().isEmpty()) {
                 log.warn("Отложенный разговор {} пуст или повреждён — оставляю для проверки", file.getFileName());
                 continue;
             }
             try {
-                int saved = writer.saveStrict(systemPrompt, conversation).size();
+                // метка источника лежит в самом дампе: без неё дневник,
+                // дозаписанный после обрыва, стал бы общим
+                int saved = writer.saveStrict(systemPrompt, restored.conversation(),
+                        List.of(), restored.origin()).size();
                 pending.done(file);
                 log.info("Отложенный разговор {} пересказан, записей: {}", file.getFileName(), saved);
             } catch (RuntimeException e) {
