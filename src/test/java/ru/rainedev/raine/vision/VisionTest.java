@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 import ru.rainedev.raine.config.Config;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
+import ru.rainedev.raine.llm.LlmFailure;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.prompt.Prompts;
@@ -31,6 +32,7 @@ class VisionTest {
                 new java.util.concurrent.atomic.AtomicInteger();
         private final java.util.concurrent.atomic.AtomicInteger failures =
                 new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.Queue<RuntimeException> errors = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
         ScriptedLlm willSee(String description) {
             answers.add(description);
@@ -40,6 +42,12 @@ class VisionTest {
         /** Первый взгляд отвечает сбоем обращения, остальные — обычным ответом. */
         ScriptedLlm failsOnce() {
             failures.incrementAndGet();
+            return this;
+        }
+
+        /** Ближайший взгляд отвечает этой ошибкой вместо обычного ответа. */
+        ScriptedLlm failsWith(RuntimeException error) {
+            errors.add(error);
             return this;
         }
 
@@ -58,6 +66,10 @@ class VisionTest {
             seen.incrementAndGet();
             lastModel = model;
             lastContext = context;
+            RuntimeException error = errors.poll();
+            if (error != null) {
+                throw error;
+            }
             if (failures.get() > 0) {
                 failures.decrementAndGet();
                 throw new IllegalStateException("сбой обращения к модели");
@@ -362,6 +374,62 @@ class VisionTest {
 
         assertTrue(result.contains("Человек с котом"), result);
         assertEquals(2, llm.seen.get());
+    }
+
+    /**
+     * 400 — отказ на саму полезную нагрузку: картинку модель не примет ни с
+     * какой попытки, а каждый повтор и эскалация на основную модель — это
+     * оплаченный запрос с тем же исходом.
+     */
+    @Test
+    void aPayloadErrorIsNeitherRetriedNorEscalated(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm()
+                .failsWith(new LlmFailure(400, "Unable to process input image"))
+                .willSee("Кот машет лапой");
+
+        String result = visionWith(llm, dir.resolve("cache")).describe(
+                imageFile(dir, "sticker.webp"), Vision.Kind.STICKER, List.of());
+
+        assertEquals("", result, "после неисправимой ошибки описания нет");
+        assertEquals(1, llm.seen.get(), "неисправимую ошибку не переспрашивают");
+        assertEquals("дешёвая-модель", llm.lastModel, "на основную модель не эскалируют");
+    }
+
+    /** Другие невозвратные 4xx ведут себя так же: это тоже про нагрузку. */
+    @Test
+    void aForbiddenImageIsNotRetriedEither(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm().failsWith(new LlmFailure(403, "forbidden"));
+
+        assertEquals("", visionWith(llm, dir.resolve("cache")).describe(
+                imageFile(dir, "photo.jpg"), Vision.Kind.PHOTO, List.of()));
+        assertEquals(1, llm.seen.get(), "403 не переспрашивают");
+    }
+
+    /** Временный сбой — наоборот: попытки и эскалация остаются как были. */
+    @Test
+    void aServerErrorStillGetsAllAttemptsAndTheMainModel(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm()
+                .failsWith(new LlmFailure(503, "unavailable"))
+                .failsWith(new LlmFailure(503, "unavailable"))
+                .failsWith(new LlmFailure(503, "unavailable"));
+
+        assertEquals("", visionWith(llm, dir.resolve("cache")).describe(
+                imageFile(dir, "sticker.webp"), Vision.Kind.STICKER, List.of()));
+        assertEquals(3, llm.seen.get(), "временный сбой переживает все попытки");
+        assertEquals("основная-модель", llm.lastModel, "последняя попытка — основной моделью");
+    }
+
+    /** Кадр с ошибкой формата не должен оплачиваться трижды. */
+    @Test
+    void aPayloadErrorOnAFrameIsNotRetried(@TempDir Path dir) {
+        ScriptedLlm llm = new ScriptedLlm().failsWith(new LlmFailure(400, "Unable to process input image"));
+
+        String result = visionWith(llm, dir.resolve("cache")).describeVideo(
+                () -> List.of(new VideoFrames.Frame(0, 1, new byte[] {1})),
+                List.of(), null, false, true);
+
+        assertEquals("", result);
+        assertEquals(1, llm.seen.get(), "кадр с неисправимой ошибкой не переспрашивают");
     }
 
     @Test

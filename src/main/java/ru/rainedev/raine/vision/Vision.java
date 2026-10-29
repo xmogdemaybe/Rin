@@ -8,6 +8,7 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
+import ru.rainedev.raine.llm.LlmFailure;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.Refusal;
 import ru.rainedev.raine.phone.Markup;
@@ -220,6 +221,16 @@ public final class Vision {
                 }
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустая подпись к кадру на {} с, попытка {}", frame.from(), attempt);
+            } catch (LlmFailure failure) {
+                if (!failure.retryable()) {
+                    // ошибка полезной нагрузки: тот же кадр не примут ни со
+                    // второй попытки, ни другой моделью
+                    log.warn("Кадр на {} секунде не разглядеть ({}): {}", frame.from(), failure.status(),
+                            failure.getMessage());
+                    return "";
+                }
+                log.warn("Кадр на {} секунде не разглядеть, попытка {} из {}: {}", frame.from(), attempt,
+                        MAX_ATTEMPTS, failure.getMessage());
             } catch (RuntimeException e) {
                 // сбой обращения — не отказ: пробуем, пока попытки не кончились
                 log.warn("Кадр на {} секунде не разглядеть, попытка {} из {}: {}", frame.from(), attempt,
@@ -295,6 +306,17 @@ public final class Vision {
                 }
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустое описание, попытка {} из {}", attempt, MAX_ATTEMPTS);
+            } catch (LlmFailure failure) {
+                if (!failure.retryable()) {
+                    // 400 и прочие невозвратные 4xx — ошибка самой картинки:
+                    // повтор и эскалация на основную модель оплачены, а исход
+                    // тот же, поэтому попытки кончаются здесь же
+                    log.warn("Не удалось разглядеть {} ({}): {}", file.getFileName(), failure.status(),
+                            failure.getMessage());
+                    return "";
+                }
+                log.warn("Не удалось разглядеть {}, попытка {} из {}: {}", file.getFileName(), attempt,
+                        MAX_ATTEMPTS, failure.getMessage());
             } catch (RuntimeException e) {
                 // сбой обращения к модели — это не отказ: попытки нужны все,
                 // иначе одна сетевая ошибка обнуляет весь цикл
