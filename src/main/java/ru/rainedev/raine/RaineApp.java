@@ -129,6 +129,11 @@ public final class RaineApp implements AutoCloseable {
         // секунд читали бы старую версию вместо новой
         builder.addUpdateHandler(TdApi.UpdateMessageEdited.class,
                 update -> telegram.forgetMessage(update.chatId, update.messageId));
+        // реакцию поставили или сняли: отдельного уведомления модели про неё нет
+        // намеренно — реакции сыплются пачками, и каждое обернулось бы лишним
+        // пробуждением; но список отреагировавших в кэше протух
+        builder.addUpdateHandler(TdApi.UpdateMessageInteractionInfo.class,
+                update -> telegram.forgetMessage(update.chatId, update.messageId));
         // лента историй приходит только так: запроса «покажи все истории» у Telegram нет
         builder.addUpdateHandler(TdApi.UpdateChatActiveStories.class,
                 update -> stories.onChanged(update.activeStories));

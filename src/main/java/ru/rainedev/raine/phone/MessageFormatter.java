@@ -4,8 +4,10 @@ import it.tdlight.jni.TdApi;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Превращает сообщение Telegram в разметку, которую видит модель.
@@ -232,28 +234,65 @@ public final class MessageFormatter {
         }
         StringBuilder reactions = new StringBuilder();
         for (TdApi.MessageReaction reaction : message.interactionInfo.reactions.reactions) {
-            if (!(reaction.type instanceof TdApi.ReactionTypeEmoji emoji)) {
-                continue;   // платные и кастомные ничего не говорят об отношении
+            String mark = markOf(reaction.type);
+            if (mark == null) {
+                continue;   // платные ничего не говорят об отношении
             }
             if (!reactions.isEmpty()) {
                 reactions.append(';');
             }
-            reactions.append('(').append(emoji.emoji);
-            if (reaction.totalCount > 3 || reaction.recentSenderIds == null) {
+            reactions.append('(').append(mark);
+            String who = authors(message, reaction);
+            if (who.isEmpty() || reaction.totalCount > 3) {
                 reactions.append(' ').append(reaction.totalCount).append(')');
                 continue;
             }
-            reactions.append(" by ");
-            for (int i = 0; i < reaction.recentSenderIds.length; i++) {
-                if (i > 0) {
-                    reactions.append(", ");
-                }
-                reactions.append(names.nameOf(senderId(reaction.recentSenderIds[i])));
-            }
-            reactions.append(')');
+            reactions.append(" by ").append(who).append(')');
         }
         if (!reactions.isEmpty()) {
             attributes.append(" reactions=\"").append(Markup.attribute(reactions.toString())).append('"');
+        }
+    }
+
+    /**
+     * Значок самой реакции: символ либо заглушка для картинки. Настоящее имя
+     * кастомного значка знает только Telegram и спрашивать его незачем — по такому
+     * значку видно лишь факт реакции, а не что там нарисовано.
+     */
+    private static String markOf(TdApi.ReactionType type) {
+        return switch (type) {
+            case TdApi.ReactionTypeEmoji emoji -> emoji.emoji;
+            case TdApi.ReactionTypeCustomEmoji ignored -> "[custom]";
+            case null, default -> null;
+        };
+    }
+
+    /**
+     * Кто поставил, без повторений. Telegram называет до трёх последних, но в
+     * канале их не отдаёт вовсе — там остаются только непрочитанные метки, и они
+     * лежат в уже прочитанном сообщении, то есть достаются бесплатно.
+     */
+    private String authors(TdApi.Message message, TdApi.MessageReaction reaction) {
+        Set<String> found = new LinkedHashSet<>();
+        TdApi.MessageSender[] recent = reaction.recentSenderIds == null
+                ? new TdApi.MessageSender[0] : reaction.recentSenderIds;
+        TdApi.UnreadReaction[] unread = message.unreadReactions == null
+                ? new TdApi.UnreadReaction[0] : message.unreadReactions;
+        for (TdApi.MessageSender sender : recent) {
+            addAuthor(found, sender);
+        }
+        for (TdApi.UnreadReaction marked : unread) {
+            if (reaction.type.equals(marked.type)) {
+                addAuthor(found, marked.senderId);
+            }
+        }
+        return String.join(", ", found);
+    }
+
+    private void addAuthor(Set<String> found, TdApi.MessageSender sender) {
+        String name = names.nameOf(senderId(sender));
+        if (!name.isBlank()) {
+            found.add(name);
         }
     }
 

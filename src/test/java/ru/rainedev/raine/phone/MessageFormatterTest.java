@@ -164,6 +164,74 @@ class MessageFormatterTest {
         assertTrue(formatter.format(message, view).contains("(👍 17)"));
     }
 
+    /**
+     * Кастомный значок — картинка, её название знает только Telegram. Выпрашивать
+     * его отдельным запросом незачем: важно не что за стикер, а кто отреагировал.
+     */
+    @Test
+    void showsACustomReactionWithoutAskingTelegramForItsName() {
+        TdApi.Message message = textMessage(600L, JOHN, "привет");
+        message.interactionInfo = reactions(customReaction(42655L, 1, JOHN));
+
+        String result = formatter.format(message, view);
+
+        assertTrue(result.contains("reactions=\"([custom] by John)\""), result);
+        assertFalse(result.contains("42655"), "числовой id значка модели ничего не говорит");
+    }
+
+    /** В канале Telegram не называет последних реагировавших — остаются только непрочитанные метки. */
+    @Test
+    void showsAuthorsFromUnreadReactionsWhenTelegramNamesNobody() {
+        TdApi.Message message = textMessage(600L, FOX_NEWS, "пост");
+        message.interactionInfo = reactions(reaction("👍", 1));
+        message.unreadReactions = unread("👍", JOHN);
+
+        assertTrue(formatter.format(message, view).contains("(👍 by John)"),
+                "без авторов из непрочитанных меток в канале видно только счётчик");
+    }
+
+    /** Никого не назвать — значит показать число, а не висячее «by». */
+    @Test
+    void showsCountInsteadOfAnEmptyAuthorList() {
+        TdApi.Message message = textMessage(600L, FOX_NEWS, "пост");
+        message.interactionInfo = reactions(reaction("👍", 2));
+
+        String result = formatter.format(message, view);
+
+        assertTrue(result.contains("(👍 2)"), result);
+        assertFalse(result.contains(" by "), result);
+    }
+
+    /** Один и тот же человек из обоих списков не должен упоминаться дважды. */
+    @Test
+    void namesEachAuthorOnce() {
+        TdApi.Message message = textMessage(600L, JOHN, "огонь");
+        message.interactionInfo = reactions(reaction("🔥", 2, JOHN));
+        message.unreadReactions = unread("🔥", JOHN, FOX_NEWS);
+
+        assertTrue(formatter.format(message, view).contains("(🔥 by John, Fox News)"),
+                "списки пересекаются: John стоит в обоих");
+    }
+
+    /** Имя недоступного человека не должно оставлять пустое место в списке. */
+    @Test
+    void skipsAReactorWhoseNameIsUnknown() {
+        TdApi.Message message = textMessage(600L, JOHN, "привет");
+        message.interactionInfo = reactions(reaction("👍", 2, JOHN, 999L));
+
+        assertTrue(formatter.format(message, view).contains("(👍 by John)"),
+                "id 999 не в списке имён: в разметке его быть не должно");
+    }
+
+    /** Платная реакция — это деньги, а не отношение конкретного человека. */
+    @Test
+    void hidesPaidReactions() {
+        TdApi.Message message = textMessage(600L, JOHN, "премиум");
+        message.interactionInfo = reactions(paidReaction(1, JOHN));
+
+        assertFalse(formatter.format(message, view).contains("reactions="));
+    }
+
     @Test
     void keepsLinkPreviewNextToMessage() {
         TdApi.Message message = textMessage(600L, JOHN, "смотри что нашёл");
@@ -456,6 +524,32 @@ class MessageFormatterTest {
         }
         reaction.recentSenderIds = ids;
         return reaction;
+    }
+
+    /** Значок-картинка: вместо символа у неё только внутренний номер Telegram. */
+    private static TdApi.MessageReaction customReaction(long customEmojiId, int count, long... senders) {
+        TdApi.MessageReaction reaction = reaction("🎂", count, senders);
+        reaction.type = new TdApi.ReactionTypeCustomEmoji(customEmojiId);
+        return reaction;
+    }
+
+    private static TdApi.MessageReaction paidReaction(int count, long... senders) {
+        TdApi.MessageReaction reaction = reaction("💎", count, senders);
+        reaction.type = new TdApi.ReactionTypePaid();
+        return reaction;
+    }
+
+    /**
+     * Те же авторы, что Telegram кладёт в сообщение отдельным полем: в канале оно
+     * единственный источник имён.
+     */
+    private static TdApi.UnreadReaction[] unread(String emoji, long... senders) {
+        TdApi.UnreadReaction[] list = new TdApi.UnreadReaction[senders.length];
+        for (int i = 0; i < senders.length; i++) {
+            list[i] = new TdApi.UnreadReaction(new TdApi.ReactionTypeEmoji(emoji),
+                    new TdApi.MessageSenderUser(senders[i]), false);
+        }
+        return list;
     }
 
     /** Поля заполняем по одному: сигнатуры конструкторов TdApi меняются от версии к версии. */
