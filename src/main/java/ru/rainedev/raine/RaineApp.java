@@ -444,6 +444,8 @@ public final class RaineApp implements AutoCloseable {
         brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
         Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
         Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(writer, prompts.system("")));
+        // недельное лежит для глаз, но папка не должна расти вечно
+        pending.pruneFailures(java.time.Duration.ofDays(7));
         // отказ сам не переигрывается: эти файлы нужны для контекста разговора.
         // Чат, оставленный без ответа, при этом снова числится непрочитанным, и
         // его найдёт догон при запуске

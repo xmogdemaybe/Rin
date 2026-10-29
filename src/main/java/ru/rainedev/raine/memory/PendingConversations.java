@@ -114,6 +114,40 @@ public final class PendingConversations {
         }
     }
 
+    /**
+     * Неотвеченные уведомления нужны для разбора считанные дни; без чистки
+     * папка data/pending/failed-notifications растёт вечно. Срок считается по
+     * времени изменения: файл могли перезаписать уже после сбоя.
+     *
+     * @return сколько файлов убрано
+     */
+    public int pruneFailures(java.time.Duration age) {
+        Path failures = dir.resolve("failed-notifications");
+        if (!Files.isDirectory(failures)) {
+            return 0;
+        }
+        long before = System.currentTimeMillis() - age.toMillis();
+        int removed = 0;
+        try (Stream<Path> files = Files.list(failures)) {
+            for (Path file : files.filter(f -> f.getFileName().toString().endsWith(".json")).toList()) {
+                try {
+                    if (Files.getLastModifiedTime(file).toMillis() < before) {
+                        Files.deleteIfExists(file);
+                        removed++;
+                    }
+                } catch (IOException e) {
+                    log.warn("Неотвеченное {} не удалилось: {}", file.getFileName(), e.getMessage());
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Не удалось почистить неотвеченные: {}", e.getMessage());
+        }
+        if (removed > 0) {
+            log.info("Убрано старых неотвеченных уведомлений: {}", removed);
+        }
+        return removed;
+    }
+
     public Pending read(Path file) {
         try {
             JsonNode root = MAPPER.readTree(file.toFile());

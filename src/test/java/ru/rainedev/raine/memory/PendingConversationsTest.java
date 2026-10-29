@@ -95,4 +95,46 @@ class PendingConversationsTest {
 
         assertTrue(pending.waiting().isEmpty());
     }
+
+    /**
+     * Неотвеченные уведомления нужны человеку считанные дни: без чистки папка
+     * data/pending/failed-notifications растёт вечно.
+     */
+    @Test
+    void weekOldUnansweredNotificationsAreCleared() throws Exception {
+        PendingConversations pending = new PendingConversations(dir.resolve("pending"));
+        pending.keepFailure("первое", List.of(Message.user("старое")), "сбой");
+        Path old = pending.unanswered().getFirst();
+        Files.setLastModifiedTime(old, java.nio.file.attribute.FileTime.fromMillis(
+                System.currentTimeMillis() - java.time.Duration.ofDays(8).toMillis()));
+
+        assertEquals(1, pending.pruneFailures(java.time.Duration.ofDays(7)));
+
+        assertTrue(pending.unanswered().isEmpty(), "недельная заметка больше не мешает");
+        assertFalse(Files.exists(old));
+    }
+
+    @Test
+    void aFreshUnansweredNotificationSurvivesTheCleanup() {
+        PendingConversations pending = new PendingConversations(dir.resolve("pending"));
+        pending.keepFailure("второе", List.of(Message.user("свежее")), "сбой");
+
+        assertEquals(0, pending.pruneFailures(java.time.Duration.ofDays(7)));
+
+        assertEquals(1, pending.unanswered().size(), "сегодняшнее должно дождаться разбора");
+    }
+
+    /** У отложенных разговоров свой срок: их пересказывают, а не выбрасывают. */
+    @Test
+    void theCleanupDoesNotTouchPendingConversations() throws Exception {
+        PendingConversations pending = new PendingConversations(dir.resolve("pending"));
+        pending.keep(List.of(Message.user("разговор")), Origin.GENERAL);
+        Path conversation = pending.waiting().getFirst();
+        Files.setLastModifiedTime(conversation, java.nio.file.attribute.FileTime.fromMillis(
+                System.currentTimeMillis() - java.time.Duration.ofDays(30).toMillis()));
+
+        pending.pruneFailures(java.time.Duration.ofDays(7));
+
+        assertTrue(Files.exists(conversation), "старый разговор всё ещё ждёт пересказа");
+    }
 }
