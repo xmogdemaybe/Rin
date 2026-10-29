@@ -101,8 +101,17 @@ public final class WorkingMemory {
      * посторонние: чужой текст вида «{@code <instructions>} ...» не имеет права
      * встать рядом с настоящими указаниями, поэтому из файла он уходит
      * содержимым блока, а не разметкой.
+     * <p>
+     * Постороннему здесь не положено ничего: эта память не про тот чат, а в
+     * промпте она сильнее слов ответа — случайный человек получал бы её тон
+     * вместе с чужими именами и незакрытыми делами.
+     *
+     * @param viewer кому она отвечает прямо сейчас
      */
-    public String asPromptSuffix() {
+    public String asPromptSuffix(Audience viewer) {
+        if (!viewer.seesHerState()) {
+            return "";
+        }
         String remembered = read();
         if (remembered.isEmpty()) {
             return "";

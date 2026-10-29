@@ -305,7 +305,7 @@ public final class RaineApp implements AutoCloseable {
 
         loop = new NotificationLoop(
                 llm,
-                () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix()
+                () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix(loop.audience())
                         + (settings.current().trustLedgerEnabled() ? trust.asPromptSuffix() : "")),
                 always, config.contextTokenLimit());
         // доверие смягчает поведение: на ходу разговора она знает, кому отвечает,

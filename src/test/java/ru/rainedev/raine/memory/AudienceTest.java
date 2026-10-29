@@ -60,6 +60,18 @@ class AudienceTest {
     }
 
     @Test
+    void herOwnStateIsNotForStrangers() {
+        // средняя память про неё саму: дела, обещания, настроение. Она задаёт тон
+        // каждого ответа, поэтому чужой человек в чате не должен её получить
+        assertFalse(new Audience(222, 0, false).seesHerState());
+        assertFalse(new Audience(222, -3, false).seesHerState(), "отрицательное доверие её состояние не открывает");
+        assertFalse(Audience.STRANGER.seesHerState(), "событие без адресата — тоже посторонний");
+        assertTrue(new Audience(222, 1, false).seesHerState(), "грань друга та же, что и у дневника");
+        assertTrue(new Audience(222, 5, true).seesHerState());
+        assertTrue(new Audience(222, 0, true).seesHerState(), "владелец не зависит от строки в файле доверия");
+    }
+
+    @Test
     void generalNeedsNoExplanation() {
         assertEquals("", new Audience(222, 5, true).attributionOf(Source.GENERAL, 0));
         assertEquals("", new Audience(222, 0, false).attributionOf(Source.GENERAL, 111));
