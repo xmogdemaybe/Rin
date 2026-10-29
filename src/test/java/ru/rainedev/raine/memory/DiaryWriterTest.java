@@ -157,7 +157,7 @@ class DiaryWriterTest {
                         "Alex", "2026-10-20T18:00:00Z"));
 
         List<DiaryEntry> saved = new DiaryWriter(diary, llm, "запиши дневник", 0.97)
-                .saveStrict("промпт", CONTEXT, signals);
+                .saveStrict("промпт", CONTEXT, signals, Source.GENERAL);
 
         assertEquals(2, saved.size());
         assertEquals(signals, saved.getFirst().metadata().signals());
@@ -168,6 +168,27 @@ class DiaryWriterTest {
                 .filter(entry -> entry.body().contains("Байкал"))
                 .findFirst().orElseThrow();
         assertEquals(signals, reloaded.metadata().signals(), "заметки не должны потеряться на диске");
+    }
+
+    @Test
+    void everySavedEntryCarriesTheSourceOfTheConversation(@TempDir Path dir) {
+        // разговор один, а записей из него выходит несколько: если метка
+        // достанется не всем, личка владельца уедет в общий круг по частям
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("""
+                Сегодня ездили на Байкал, было холодно но красиво.
+                ---
+                Вечером обсуждали планы на отпуск в октябре.""");
+
+        List<DiaryEntry> saved = writerFor(dir, llm)
+                .saveStrict("промпт", CONTEXT, List.of(), Source.OWNER_DM);
+
+        assertEquals(2, saved.size());
+        List<DiaryEntry> reloaded = new Diary(dir).query(new double[0]).stream()
+                .map(Diary.Match::entry)
+                .toList();
+        assertEquals(2, reloaded.size(), "на диске обе записи");
+        assertTrue(reloaded.stream().allMatch(entry -> entry.metadata().source() == Source.OWNER_DM),
+                "метка разговора должна лечь на каждую его запись");
     }
 
     @Test

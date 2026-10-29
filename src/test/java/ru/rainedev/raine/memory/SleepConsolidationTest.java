@@ -91,6 +91,25 @@ class SleepConsolidationTest {
     }
 
     @Test
+    void aMergedEntryKeepsTheStrictestLabel(@TempDir Path dir) {
+        // сведение переписывает память необратимо: если общая запись утянет за
+        // собой чужую личку, секрет станет общим и достанется кому попало
+        Diary diary = new Diary(dir);
+        diary.save("Ездили на Байкал в июле, было холодно", new double[] {1, 0, 0}, 0, List.of(), Source.OWNER_DM);
+        diary.save("Байкал запомнился прозрачной водой", new double[] {1, 0, 0});
+
+        ScriptedLlm llm = new ScriptedLlm()
+                .willAnswer("{\"confidence\":0.5}\nПоездка на Байкал в июле: холодно, вода прозрачная.");
+
+        consolidation(diary, llm, dir.resolve("archive")).run(Duration.ofMinutes(5), () -> false);
+
+        Diary after = new Diary(dir);
+        assertEquals(1, after.size(), "две записи свелись в одну");
+        assertEquals(Source.OWNER_DM, after.query(new double[] {1, 0, 0}).getFirst().entry().metadata().source(),
+                "сведённая запись наследует строжайшую метку из исходных");
+    }
+
+    @Test
     void establishedFactsAreNeverRewritten(@TempDir Path dir) throws IOException {
         Diary diary = new Diary(dir);
         diary.save("Установленный факт", new double[] {1, 0, 0});

@@ -21,6 +21,7 @@ import ru.rainedev.raine.memory.Diary;
 import ru.rainedev.raine.memory.DiaryMemory;
 import ru.rainedev.raine.memory.DiaryWriter;
 import ru.rainedev.raine.memory.Recall;
+import ru.rainedev.raine.memory.Source;
 import ru.rainedev.raine.memory.TrustLedger;
 import ru.rainedev.raine.memory.WorkingMemory;
 import ru.rainedev.raine.phone.ChatKind;
@@ -309,6 +310,10 @@ public final class RaineApp implements AutoCloseable {
         // доверие смягчает поведение: на ходу разговора она знает, кому отвечает,
         // и строка об этом человеке стоит в промпте, а не в контексте
         loop.aboutPerson(id -> settings.current().trustLedgerEnabled() ? trust.aboutPerson(id) : "");
+        // разговор помнит, откуда в него попали сообщения: дневник получает
+        // строжайшую метку из затронутых чатов, и чужая личка не становится общей
+        loop.chatSource(this::sourceOfChat);
+        tools.onChatEntered(chat -> loop.noteSource(sourceOf(chat)));
         DiaryMemory diaryMemory = new DiaryMemory(diary, llm,
                 config.diaryInjectionMaxLength(), config.diaryMinRelatedness());
         loop.memory(diaryMemory);
@@ -326,7 +331,7 @@ public final class RaineApp implements AutoCloseable {
             try {
                 // сначала средняя память: ей нужен ещё не урезанный разговор
                 workingMemory.update(prompts.system(""), loop.context());
-                var saved = writer.saveStrict(prompts.system(""), loop.context(), taken);
+                var saved = writer.saveStrict(prompts.system(""), loop.context(), taken, loop.contextSource());
                 if (saved.isEmpty() && !taken.isEmpty()) {
                     traitSignals.requeue(taken);
                 }
@@ -466,6 +471,30 @@ public final class RaineApp implements AutoCloseable {
                 return;   // связи по-прежнему нет, остальные ждут своей очереди
             }
         }
+    }
+
+    /**
+     * Насколько закрыт чат, из которого пришло событие. Личка владельца
+     * определяется по идентификатору, без запроса к Telegram: самая строгая
+     * метка не должна зависеть от того, ответил ли клиент. Остальное не
+     * определилось — считаем чужой личкой: так запись не достанется случайным
+     * людям, а владелец видит всё.
+     */
+    private Source sourceOfChat(long chatId) {
+        if (lockdown.isOwner(chatId)) {
+            return Source.OWNER_DM;
+        }
+        try {
+            return sourceOf(telegram.chatCached(chatId));
+        } catch (RuntimeException e) {
+            log.debug("Чат {} для метки источника не определился: {}", chatId, e.getMessage());
+            return Source.PRIVATE_DM;
+        }
+    }
+
+    /** То, что владелец написал в общий чат, секретом его лички не является. */
+    private Source sourceOf(TdApi.Chat chat) {
+        return Source.of(ChatKind.of(chat), lockdown.isOwner(chat));
     }
 
     /**

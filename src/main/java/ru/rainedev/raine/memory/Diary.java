@@ -123,7 +123,8 @@ public final class Diary {
                 meta.path("confidence").asDouble(0),
                 meta.path("lastUsed").asText("never"),
                 meta.path("usageCount").asInt(0),
-                signals(meta)));
+                signals(meta),
+                Source.of(meta.path("source").asText(""))));
     }
 
     /** Заметки о себе лежат рядом с эмбеддингом; у прежних записей их просто нет. */
@@ -220,20 +221,7 @@ public final class Diary {
 
     /** Новая запись. Идентификатор — время создания, как и у прежних. */
     public synchronized DiaryEntry save(String body, double[] embedding) {
-        return save(body, embedding, 0);
-    }
-
-    /**
-     * @param confidence насколько записи доверять: -1 ложь, 0 предположение,
-     *                   1 установленный факт. Пересматривается во сне
-     */
-    public synchronized DiaryEntry save(String body, double[] embedding, double confidence) {
-        return save(body, embedding, confidence, List.of());
-    }
-
-    /** Новая запись с заметками о себе; уверенность нулевая — предположение. */
-    public synchronized DiaryEntry save(String body, double[] embedding, List<TraitSignal> signals) {
-        return save(body, embedding, 0, signals);
+        return save(body, embedding, 0, List.of(), Source.GENERAL);
     }
 
     /**
@@ -241,15 +229,17 @@ public final class Diary {
      *                   1 установленный факт. Пересматривается во сне
      * @param signals    заметки о себе за этот разговор; хранятся в метаданных,
      *                   рядом с эмбеддингом — их читает только ночной отбор
+     * @param source     откуда запись попала в дневник: по этой метке память
+     *                   решает, кому её вообще можно показывать
      */
     public synchronized DiaryEntry save(String body, double[] embedding, double confidence,
-                                        List<TraitSignal> signals) {
+                                        List<TraitSignal> signals, Source source) {
         long id = Instant.now().getEpochSecond();
         while (Files.exists(dir.resolve(id + ".md"))) {
             id++;
         }
         DiaryEntry entry = new DiaryEntry(String.valueOf(id), body.strip(), embedding,
-                new DiaryEntry.Metadata(0, confidence, "never", 0, List.copyOf(signals)));
+                new DiaryEntry.Metadata(0, confidence, "never", 0, List.copyOf(signals), source));
         write(entry);
         entries.put(entry.id(), entry);
         return entry;
@@ -261,6 +251,7 @@ public final class Diary {
         meta.put("confidence", entry.metadata().confidence());
         meta.put("lastUsed", entry.metadata().lastUsed());
         meta.put("usageCount", entry.metadata().usageCount());
+        meta.put("source", entry.metadata().source().wire());
         if (!entry.metadata().signals().isEmpty()) {
             ArrayNode signals = meta.putArray("signals");
             for (TraitSignal signal : entry.metadata().signals()) {

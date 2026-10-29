@@ -168,6 +168,16 @@ public final class TelegramTools {
         opened.clear();
     }
 
+    /**
+     * Кто хочет знать, что она зашла в чат. Открытая переписка ложится в контекст
+     * целиком, так что для памяти это тот же разговор, что и входящее сообщение.
+     */
+    private volatile java.util.function.Consumer<TdApi.Chat> onChatEntered = chat -> { };
+
+    public void onChatEntered(java.util.function.Consumer<TdApi.Chat> listener) {
+        this.onChatEntered = listener;
+    }
+
     /** Сейчас она пишет по своему порыву, а не отвечает на уведомление. */
     private java.util.function.BooleanSupplier actingOnImpulse = () -> false;
 
@@ -394,6 +404,7 @@ public final class TelegramTools {
             actions.setOnline(true);   // зашла в Telegram — это видно собеседнику
             actions.openChat(chatId);
             opened.add(chatId);
+            onChatEntered.accept(chat);
 
             List<TdApi.Message> history = recentEnough(telegram.history(chatId, HISTORY_DEPTH));
             var view = new MessageFormatter.ChatView(telegram.myId(), chat.lastReadInboxMessageId);

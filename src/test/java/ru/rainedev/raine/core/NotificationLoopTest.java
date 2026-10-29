@@ -14,6 +14,7 @@ import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
+import ru.rainedev.raine.memory.Source;
 
 class NotificationLoopTest {
 
@@ -385,6 +386,88 @@ class NotificationLoopTest {
                 "событие не про человека — и дописки про человека нет");
         assertTrue(loop.context().stream().allMatch(m -> m.content() == null || !m.content().contains("<about")),
                 "дописка живёт в промпте, а не в контексте: в пересказ для дневника ей не надо");
+    }
+
+    @Test
+    void theContextRemembersTheStrictestChatItSaw() {
+        // разговор ещё не сохранён, а в контексте уже чужая личка и личка
+        // владельца: метка одна на запись, значит берётся самая строгая
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.chatSource(id -> id == 1 ? Source.OWNER_DM : Source.GROUP);
+
+        loop.process(new Notification("сообщение из группы").from(2));
+        assertEquals(Source.GROUP, loop.contextSource());
+
+        loop.process(new Notification("сообщение от владельца").from(1));
+        assertEquals(Source.OWNER_DM, loop.contextSource(),
+                "в несохранённом контексте есть личка владельца — общим он стать не должен");
+
+        loop.process(new Notification("и снова из группы").from(2));
+        assertEquals(Source.OWNER_DM, loop.contextSource(),
+                "более открытый чат не вправе смягчать метку несохранённого разговора");
+    }
+
+    @Test
+    void aSavedConversationStartsWithACleanLabel() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.chatSource(id -> Source.OWNER_DM);
+        loop.process(new Notification("сообщение от владельца").from(1));
+        assertEquals(Source.OWNER_DM, loop.contextSource());
+
+        loop.clearContext();
+
+        assertEquals(Source.GENERAL, loop.contextSource(),
+                "разговор записан — следующему его метка достаться не должна");
+    }
+
+    @Test
+    void aChatOpenedDuringTheTurnCountsToo() {
+        // открытый ею чат ложится в контекст целиком: для памяти это тот же
+        // разговор, что и входящее сообщение, и метку он обязан дать свою
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("open")), 10));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        Toolbox openedChat = new Toolbox();
+        openedChat.add(Tool.named("open").describedAs("Открывает чат")
+                .buildContextual((arguments, addTool) -> {
+                    loop.noteSource(Source.OWNER_DM);
+                    return "чат открыт";
+                }));
+
+        loop.process(new Notification("ночной порыв", openedChat));
+
+        assertEquals(Source.OWNER_DM, loop.contextSource(),
+                "чат, открытый в середине хода, тоже часть этого разговора");
+    }
+
+    @Test
+    void anEventThatCameFromNoChatIsNotAttributed() {
+        // ночное размышление или напоминание приходят не из переписки:
+        // приписать их чужой личке значит спрятать от самой себя
+        List<Long> asked = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.chatSource(id -> {
+            asked.add(id);
+            return Source.OWNER_DM;
+        });
+
+        loop.process(new Notification("служебное событие"));
+
+        assertTrue(asked.isEmpty(), "спрашивать про чат нечего — его нет");
+        assertEquals(Source.GENERAL, loop.contextSource());
     }
 
     @Test

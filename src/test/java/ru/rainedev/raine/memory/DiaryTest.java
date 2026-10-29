@@ -103,6 +103,43 @@ class DiaryTest {
     }
 
     @Test
+    void theSourceLabelSurvivesARestart(@TempDir Path dir) throws IOException {
+        Diary diary = new Diary(dir);
+
+        DiaryEntry saved = diary.save("владелец рассказал про своё", new double[] {1, 0, 0}, 0, List.of(),
+                Source.OWNER_DM);
+
+        assertTrue(Files.readString(dir.resolve(saved.id() + ".md")).contains("\"source\":\"owner_dm\""),
+                "метка обязана лежать в файле записи, а не только в памяти процесса");
+        assertEquals(Source.OWNER_DM,
+                new Diary(dir).query(new double[] {1, 0, 0}).getFirst().entry().metadata().source(),
+                "после перезапуска запись остаётся помеченной");
+    }
+
+    @Test
+    void anEntryWrittenBeforeTheLabelIsGeneral(@TempDir Path dir) throws IOException {
+        // переносить сотни накопленных файлов ради одного поля никто не будет,
+        // а общее и так можно показать кому угодно
+        writeEntry(dir, "1000", "запись из прошлого", new double[] {1, 0, 0});
+
+        assertEquals(Source.GENERAL,
+                new Diary(dir).query(new double[] {1, 0, 0}).getFirst().entry().metadata().source());
+    }
+
+    @Test
+    void usingAnEntryDoesNotLoseItsLabel(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("рассказала в чужой личке", new double[] {1, 0, 0}, 0, List.of(), Source.PRIVATE_DM);
+
+        Diary reloaded = new Diary(dir);
+        reloaded.use(reloaded.query(new double[] {1, 0, 0}).getFirst());
+
+        assertEquals(Source.PRIVATE_DM,
+                new Diary(dir).query(new double[] {1, 0, 0}).getFirst().entry().metadata().source(),
+                "начисление опыта переписывает файл — метка при этом теряться не должна");
+    }
+
+    @Test
     void brokenEntryDoesNotBreakStartup(@TempDir Path dir) throws IOException {
         writeEntry(dir, "1000", "нормальная запись", new double[] {1, 0, 0});
         Files.writeString(dir.resolve("1001.md"), "какой-то мусор без заголовка");

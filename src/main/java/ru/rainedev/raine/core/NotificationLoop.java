@@ -13,6 +13,7 @@ import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.memory.Memory;
+import ru.rainedev.raine.memory.Source;
 
 /**
  * Ядро поведения: очередь уведомлений и обработка каждого до тех пор,
@@ -144,6 +145,21 @@ public final class NotificationLoop {
      */
     private volatile java.util.function.LongFunction<String> aboutPerson = id -> "";
 
+    /**
+     * Кто говорит, откуда чат уведомления. Спрашивается в тот момент, когда текст
+     * чата ложится в контекст, а не когда уведомление создано: событие из очереди
+     * иначе приписало бы свой чат чужому разговору, который ещё не сохранён.
+     */
+    private volatile java.util.function.LongFunction<Source> chatSource = id -> Source.GENERAL;
+
+    /**
+     * Откуда родом то, что уже легло в контекст. Разговор задевает несколько
+     * чатов, а запись в дневник уходит из него одна — поэтому метка строжайшая
+     * из затронутых. Пишет поток ядра, читает и тот, кто останавливает бота.
+     */
+    private final java.util.concurrent.atomic.AtomicReference<Source> contextSource =
+            new java.util.concurrent.atomic.AtomicReference<>(Source.GENERAL);
+
     private Rest rest;
 
     /** Ход закончился — она отложила телефон. */
@@ -174,6 +190,19 @@ public final class NotificationLoop {
 
     public void aboutPerson(java.util.function.LongFunction<String> suffix) {
         this.aboutPerson = suffix;
+    }
+
+    public void chatSource(java.util.function.LongFunction<Source> source) {
+        this.chatSource = source;
+    }
+
+    /** Чат вошёл в контекст: метка разговора становится не мягче его. */
+    public void noteSource(Source source) {
+        contextSource.accumulateAndGet(source, Source::strictest);
+    }
+
+    public Source contextSource() {
+        return contextSource.get();
     }
 
     public void rest(Rest rest) {
@@ -261,6 +290,8 @@ public final class NotificationLoop {
 
     public void clearContext() {
         context.clear();
+        // разговор ушёл в дневник — следующему его метка достаться не должна
+        contextSource.set(Source.GENERAL);
     }
 
     /** Бесконечный цикл. Прерывается только остановкой потока. */
@@ -377,7 +408,12 @@ public final class NotificationLoop {
                 text = opened;
             }
             context.add(Message.user(text + "\nCurrent time: " + Instant.now() + " UTC"));
-
+            // метка снимается здесь, а не когда уведомление создано: событие из
+            // очереди иначе приписало бы свой чат чужому разговору, который ещё
+            // не сохранён, а новый контекст остался бы без метки вовсе
+            if (notification.chatId() != 0) {
+                noteSource(chatSource.apply(notification.chatId()));
+            }
         }
         boolean recallMemories = turn.recall;
         boolean askedThisTurn = turn.asked;

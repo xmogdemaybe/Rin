@@ -8,7 +8,7 @@ import java.util.List;
  * @param id         он же имя файла: unix-время создания
  * @param body       текст записи, как его читает модель
  * @param embedding  вектор для поиска по смыслу
- * @param metadata   опыт использования записи
+ * @param metadata   опыт использования записи и то, что известно о её происхождении
  */
 public record DiaryEntry(String id, String body, double[] embedding, Metadata metadata) {
 
@@ -19,12 +19,14 @@ public record DiaryEntry(String id, String body, double[] embedding, Metadata me
      * @param usageCount сколько раз пригодилась
      * @param signals    заметки о себе, записанные в момент создания записи;
      *                   у прежних записей их нет, формат файла остаётся совместимым
+     * @param source     откуда запись попала в дневник; прежние записи метки не имеют
+     *                   и читаются как общие
      */
     public record Metadata(double score, double confidence, String lastUsed, int usageCount,
-                           List<TraitSignal> signals) {
+                           List<TraitSignal> signals, Source source) {
 
         public Metadata(double score, double confidence, String lastUsed, int usageCount) {
-            this(score, confidence, lastUsed, usageCount, List.of());
+            this(score, confidence, lastUsed, usageCount, List.of(), Source.GENERAL);
         }
 
         public static Metadata fresh() {
@@ -33,7 +35,7 @@ public record DiaryEntry(String id, String body, double[] embedding, Metadata me
 
         /** Запись пригодилась: чем выше близость, тем заметнее прибавка. */
         public Metadata used(double relatedness, String now) {
-            return new Metadata(score + (relatedness - 0.5) * 2, confidence, now, usageCount + 1, signals);
+            return new Metadata(score + (relatedness - 0.5) * 2, confidence, now, usageCount + 1, signals, source);
         }
     }
 

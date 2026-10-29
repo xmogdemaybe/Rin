@@ -71,7 +71,7 @@ class CharacterGrowthTest {
     private void note(Diary diary, String trait, double intensity, String at) {
         diary.save("Прошла записка про «" + trait + "» — она пролежит здесь надолго.",
                 new double[] {1, 0, 0}, 0,
-                List.of(new TraitSignal("hurt", trait, -0.5, intensity, "Alex", at)));
+                List.of(new TraitSignal("hurt", trait, -0.5, intensity, "Alex", at)), Source.GENERAL);
     }
 
     @Test
