@@ -160,6 +160,40 @@ class VisionTest {
         assertEquals(1, llm.seen.get(), "и зрение не должно смотреть второй раз: " + llm.seen.get());
     }
 
+    /**
+     * Неудачу ролика тоже помнят: MediaAhead греет вложение, а форматтер тут
+     * же просит его снова, и каждый повтор — это распаковка и кадры заново.
+     */
+    @Test
+    void aFailedVideoIsNotUnpackedAgain(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm();   // на все кадры отвечает пустотой
+        Path video = imageFile(dir, "ролик.mp4");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+        List<VideoFrames.Frame> frames = List.of(new VideoFrames.Frame(0, 1, new byte[] {1}));
+
+        assertEquals("", vision.describeVideo(() -> frames, List.of(), video, false, true));
+        int once = llm.seen.get();
+        assertEquals("", vision.describeVideo(() -> frames, List.of(), video, false, true));
+        assertEquals(once, llm.seen.get(), "неудачный ролик не смотрят заново: " + llm.seen.get());
+    }
+
+    /** Ролик, из которого не вышло вынуть кадры, заново не распаковывают. */
+    @Test
+    void aVideoWithoutFramesIsNotTriedAgain(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm();
+        Path video = imageFile(dir, "ролик.mp4");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+        java.util.concurrent.atomic.AtomicInteger unpacked = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<List<VideoFrames.Frame>> none = () -> {
+            unpacked.incrementAndGet();
+            return List.of();
+        };
+
+        assertEquals("", vision.describeVideo(none, List.of(), video, false, true));
+        assertEquals("", vision.describeVideo(none, List.of(), video, false, true));
+        assertEquals(1, unpacked.get(), "распаковку не повторяют: " + unpacked.get());
+    }
+
     @Test
     void aCloserLookAtAPictureAsksAgain(@TempDir Path dir) throws IOException {
         // в кэше лежит общий пересказ: ответа на вопрос в нём нет
@@ -430,6 +464,66 @@ class VisionTest {
 
         assertEquals("", result);
         assertEquals(1, llm.seen.get(), "кадр с неисправимой ошибкой не переспрашивают");
+    }
+
+    /**
+     * MediaAhead разбирает вложение заранее, а MessageFormatter тут же просит
+     * его снова: без памяти о неудаче второй запрос оплачивается впустую.
+     */
+    @Test
+    void aFailedLookIsNotRepeatedFromTheCache(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm()
+                .failsWith(new LlmFailure(400, "Unable to process input image"))
+                .willSee("Кот машет лапой");
+        Path photo = imageFile(dir, "photo.jpg");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+
+        assertEquals("", vision.describe(photo, Vision.Kind.PHOTO, List.of()));
+        assertEquals("", vision.describe(photo, Vision.Kind.PHOTO, List.of()), "повторно не разглядывают");
+        assertEquals(1, llm.seen.get(), "неудача помнится: " + llm.seen.get());
+    }
+
+    /** Истощённые повторы тоже стоят денег: следующая попытка — не раньше часа. */
+    @Test
+    void anExhaustedServerErrorIsRememberedToo(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm()
+                .failsWith(new LlmFailure(503, "unavailable"))
+                .failsWith(new LlmFailure(503, "unavailable"))
+                .failsWith(new LlmFailure(503, "unavailable"))
+                .willSee("Кот у окна");
+        Path photo = imageFile(dir, "photo.jpg");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+
+        assertEquals("", vision.describe(photo, Vision.Kind.PHOTO, List.of()));
+        assertEquals("", vision.describe(photo, Vision.Kind.PHOTO, List.of()), "истощённые попытки не повторяют");
+        assertEquals(3, llm.seen.get());
+    }
+
+    /** Через час файл мог докачаться и измениться — память о неудаче истекает. */
+    @Test
+    void theMemoryOfAFailureExpires(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm().willSee("Кот у окна");
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Path photo = imageFile(dir, "photo.jpg");
+        Files.writeString(cache.resolve(photo.getFileName() + ".failed"), "0");
+
+        assertTrue(visionWith(llm, cache).describe(photo, Vision.Kind.PHOTO, List.of()).contains("Кот у окна"));
+        assertEquals(1, llm.seen.get());
+    }
+
+    /** Второй взгляд с вопросом идёт мимо памяти о неудаче: вопрос важнее. */
+    @Test
+    void aCloserLookIgnoresTheMemoryOfAFailure(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm()
+                .failsWith(new LlmFailure(400, "Unable to process input image"))
+                .willSee("На фото спящий кот");
+        Path photo = imageFile(dir, "photo.jpg");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+
+        assertEquals("", vision.describe(photo, Vision.Kind.PHOTO, List.of()));
+        assertTrue(vision.describe(photo, Vision.Kind.PHOTO, List.of(), false).contains("На фото спящий кот"));
+        assertEquals(2, llm.seen.get());
     }
 
     @Test

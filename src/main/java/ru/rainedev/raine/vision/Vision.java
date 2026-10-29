@@ -36,6 +36,12 @@ public final class Vision {
     /** Меньше этого — не картинка, а недокачанный файл. */
     static final int MIN_IMAGE_BYTES = 512;
 
+    /**
+     * Сколько помнится неудача: файл мог докачаться, и через час его стоит
+     * попробовать снова. До этого срока повтор заведомо тот же.
+     */
+    private static final long FAILURE_MEMORY_MS = java.time.Duration.ofHours(1).toMillis();
+
     /** Что смотрим. От этого зависит и промпт, и какой моделью. */
     public enum Kind {
         /** Присланное фото — важно разглядеть, берём основную модель. */
@@ -120,8 +126,14 @@ public final class Vision {
         String remembered = fromCache(file);
         if (remembered != null) {
             log.debug("Видео {} уже смотрела", file.getFileName());
+            return remembered;
         }
-        return remembered;
+        if (failedRecently(file)) {
+            // распаковка и полтора десятка кадров уже оплачены однажды
+            log.debug("Ролик {} недавно не разгляделся — смотреть заново незачем", file.getFileName());
+            return "";
+        }
+        return null;
     }
 
     private String lookFrames(List<VideoFrames.Frame> frames, List<Message> context, java.nio.file.Path file,
@@ -134,6 +146,9 @@ public final class Vision {
                     .orElse("");
             if (!onlySound.isEmpty() && file != null && allowCache) {
                 toCache(file, onlySound);
+            }
+            if (onlySound.isEmpty() && file != null && allowCache) {
+                rememberFailure(file);
             }
             return onlySound;
         }
@@ -163,6 +178,9 @@ public final class Vision {
                     .append(Markup.body(captions.get(i))).append("\n</f>\n");
         }
         if (timeline.isEmpty()) {
+            if (file != null && allowCache) {
+                rememberFailure(file);
+            }
             return "";
         }
         heard(file, withSound).ifPresent(speech ->
@@ -267,6 +285,13 @@ public final class Vision {
         if (cached != null) {
             return wrap(kind, cached, preview);
         }
+        // MediaAhead разбирает вложение заранее, а MessageFormatter тут же
+        // просит его снова: без памяти о неудаче второй запрос оплачивается
+        // впустую и обрывается тем же отказом
+        if (allowCache && failedRecently(file)) {
+            log.debug("{} недавно не разгляделся — смотреть заново незачем", file.getFileName());
+            return "";
+        }
 
         byte[] image;
         try {
@@ -283,6 +308,7 @@ public final class Vision {
             return "";
         }
 
+        boolean technicalFailure = false;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             // на последней попытке дешёвую модель сменяет основная: дешёвая
             // отказывается заметно чаще, а переспрашивать её тем же самым —
@@ -307,12 +333,16 @@ public final class Vision {
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустое описание, попытка {} из {}", attempt, MAX_ATTEMPTS);
             } catch (LlmFailure failure) {
+                technicalFailure = true;
                 if (!failure.retryable()) {
                     // 400 и прочие невозвратные 4xx — ошибка самой картинки:
                     // повтор и эскалация на основную модель оплачены, а исход
                     // тот же, поэтому попытки кончаются здесь же
                     log.warn("Не удалось разглядеть {} ({}): {}", file.getFileName(), failure.status(),
                             failure.getMessage());
+                    if (allowCache) {
+                        rememberFailure(file);
+                    }
                     return "";
                 }
                 log.warn("Не удалось разглядеть {}, попытка {} из {}: {}", file.getFileName(), attempt,
@@ -320,9 +350,15 @@ public final class Vision {
             } catch (RuntimeException e) {
                 // сбой обращения к модели — это не отказ: попытки нужны все,
                 // иначе одна сетевая ошибка обнуляет весь цикл
+                technicalFailure = true;
                 log.warn("Не удалось разглядеть {}, попытка {} из {}: {}", file.getFileName(), attempt,
                         MAX_ATTEMPTS, e.getMessage());
             }
+        }
+        // отказ модели — не наша неудача: его переспрашивают сразу, а вот
+        // исчерпанные технические попытки второй раз оплачивать незачем
+        if (allowCache && technicalFailure) {
+            rememberFailure(file);
         }
         return "";
     }
@@ -386,5 +422,30 @@ public final class Vision {
 
     private Path cacheFor(Path file) {
         return cacheDir.resolve(file.getFileName() + ".md");
+    }
+
+    /**
+     * Неудача бывает не у картинки, а у связи или у самого файла. Помнить её
+     * надо недолго: истёкшая запись значит, что пора попробовать снова.
+     */
+    private boolean failedRecently(Path file) {
+        try {
+            long when = Long.parseLong(Files.readString(failureFor(file)).strip());
+            return System.currentTimeMillis() - when < FAILURE_MEMORY_MS;
+        } catch (IOException | NumberFormatException e) {
+            return false;   // записи нет или она испорчена — смотрят заново
+        }
+    }
+
+    private void rememberFailure(Path file) {
+        try {
+            AtomicFiles.writeString(failureFor(file), Long.toString(System.currentTimeMillis()));
+        } catch (IOException e) {
+            log.debug("Неудача не запомнилась: {}", e.getMessage());
+        }
+    }
+
+    private Path failureFor(Path file) {
+        return cacheDir.resolve(file.getFileName() + ".failed");
     }
 }
