@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import it.tdlight.jni.TdApi;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
@@ -114,6 +115,38 @@ class VideoInChannelTest {
                         (file, withSound) -> "покадровое описание", () -> "заставка"));
     }
 
+    /**
+     * Заставку истории помечают как заставку: по одному кадру о всём ролике не
+     * рассказывают, а без пометки модель именно это и сделает.
+     */
+    @Test
+    void aStoryStillIsLookedAtAsASingleFrame() {
+        List<Integer> seen = new ArrayList<>();
+        List<Boolean> marked = new ArrayList<>();
+
+        String described = TelegramMedia.glanceOf(stillStory(), (file, isStill) -> {
+            file.ifPresent(id -> seen.add(id));
+            marked.add(isStill);
+            return "заставка";
+        });
+
+        assertEquals("заставка", described);
+        assertEquals(List.of(7), seen, "кадр берут из заставки ролика");
+        assertEquals(List.of(true), marked, "взгляд на заставку помечен как один кадр, а не как просмотр");
+    }
+
+    /** Без самого ролика заставки нет и смотреть нечего. */
+    @Test
+    void aStoryWithoutAVideoIsNotGlancedAt() {
+        List<Boolean> marked = new ArrayList<>();
+
+        assertEquals("", TelegramMedia.glanceOf(new TdApi.StoryContentVideo(), (file, isStill) -> {
+            marked.add(isStill);
+            return "заставка";
+        }));
+        assertTrue(marked.isEmpty(), "без файла незачем обращаться и к зрению");
+    }
+
     /** Зрение и Telegram здесь не нужны: решает только тип чата да тумблер. */
     private static TelegramMedia media(boolean videoInChannels) {
         TelegramMedia media = new TelegramMedia(null, null, () -> List.of());
@@ -159,6 +192,17 @@ class VideoInChannelTest {
         video.video = file;
         TdApi.StoryContentVideo content = new TdApi.StoryContentVideo();
         content.video = video;
+        return content;
+    }
+
+    /** Тот же ролик, но с заставкой, присланной отдельным файлом. */
+    private static TdApi.StoryContentVideo stillStory() {
+        TdApi.StoryContentVideo content = videoStory();
+        TdApi.File still = new TdApi.File();
+        still.id = 7;
+        TdApi.Thumbnail thumbnail = new TdApi.Thumbnail();
+        thumbnail.file = still;
+        content.video.thumbnail = thumbnail;
         return content;
     }
 }

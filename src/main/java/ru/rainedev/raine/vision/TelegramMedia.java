@@ -212,7 +212,9 @@ public final class TelegramMedia implements MediaDescriber {
         String seen = sees() ? seen(story.content,
                 file -> look(file, Vision.Kind.PHOTO, question),
                 video -> storyVideo(video, onlyGlance,
-                        (file, sound) -> watch(file, sound, question), () -> glanceOf(video, question))) : "";
+                        (file, sound) -> watch(file, sound, question),
+                        () -> glanceOf(video,
+                                (file, isStill) -> look(file, Vision.Kind.VIDEO, question, isStill)))) : "";
         return storyBlock(story, loss(seen, story.content, sees()));
     }
 
@@ -263,13 +265,21 @@ public final class TelegramMedia implements MediaDescriber {
 
     /**
      * Заставка ролика истории: один кадр вместо всего разбора.
+     * <p>
+     * Кадр помечают заставкой — по одному кадру о всём ролике не рассказывают,
+     * и модель не должна думать, что посмотрела его.
+     * <p>
+     * Видно пакету: и выбор файла, и пометку учат проверять без Telegram и без
+     * зрения.
      *
-     * @param question взгляд ради одного вопроса; пусто — обычный пересказ
+     * @param still    взгляд на кадр; вторым аргументом ему говорят, что это
+     *                 заставка, а не просмотренный ролик
      */
-    private String glanceOf(TdApi.StoryContentVideo content, String question) {
+    static String glanceOf(TdApi.StoryContentVideo content,
+                           java.util.function.BiFunction<Optional<Integer>, Boolean, String> still) {
         return content.video == null
                 ? ""
-                : look(thumbnailOf(content.video.thumbnail), Vision.Kind.VIDEO, question);
+                : still.apply(thumbnailOf(content.video.thumbnail), true);
     }
 
     /**
