@@ -169,9 +169,11 @@ public record Config(
      * @param writeToNewPeople может ли писать первой тем, с кем переписки ещё не было
      * @param stickers         пользуется ли стикерами
      * @param toolReminder     как часто напоминать, что переписка — не только текст
+     * @param kaomojiEvery     через сколько реплик этого чата текстовое лицо уместно снова
      */
     public record Behaviour(int chatHistoryLength, boolean wakeOnPinnedChat, boolean dayNaps,
-                            boolean writeToNewPeople, boolean stickers, double toolReminder) {}
+                            boolean writeToNewPeople, boolean stickers, double toolReminder,
+                            int kaomojiEvery) {}
 
     /**
      * Насколько строго ловить повторы за собой.
@@ -336,7 +338,10 @@ public record Config(
                                 "может ли писать первой тем, с кем переписки ещё не было"),
                         s.flag("use_stickers", true, "пользуется ли стикерами"),
                         s.fraction("tool_reminder_probability", 0.02,
-                                "как часто напоминать, что переписка — не только текст")),
+                                "как часто напоминать, что переписка — не только текст"),
+                        s.integer("kaomoji_every", 4,
+                                "через сколько реплик этого чата текстовое лицо (\":3\", \">_<\", \"<3\") уместно "
+                                        + "снова; 0 — не ограничивать")),
                 new Repeat(
                         s.fraction("anti_repeat_trigger_max", 0.95,
                                 "выше этой близости к одной прошлой реплике — повтор"),

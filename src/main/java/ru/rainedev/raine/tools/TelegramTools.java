@@ -108,6 +108,9 @@ public final class TelegramTools {
     private java.util.function.Supplier<String> speechPrompt =
             () -> "Exactly what you want to say in the voice message";
     private final AntiRepeat antiRepeat;
+
+    /** Счётчик текстовых лиц: свои для каждого чата. */
+    private final Kaomoji kaomoji = new Kaomoji();
     private ru.rainedev.raine.vision.TelegramMedia media;
     private ru.rainedev.raine.telegram.Stories storyFeed;
     private final StickerTools stickers;
@@ -132,6 +135,9 @@ public final class TelegramTools {
     /** Насколько часто напоминать, что можно не только писать текстом. */
     private static final double LIVELIER_REMINDER = 0.02;
 
+    /** Как часто текстовое лицо уместно, пока настройки не прочитаны. */
+    private static final int KAOMOJI_EVERY = 4;
+
     private final ru.rainedev.raine.telegram.Lockdown lockdown;
 
     /**
@@ -140,7 +146,8 @@ public final class TelegramTools {
      * новый набор мог не дойти до инструментов.
      */
     private volatile ru.rainedev.raine.config.Config.Behaviour behaviour =
-            new ru.rainedev.raine.config.Config.Behaviour(2000, false, true, false, true, LIVELIER_REMINDER);
+            new ru.rainedev.raine.config.Config.Behaviour(2000, false, true, false, true,
+                    LIVELIER_REMINDER, KAOMOJI_EVERY);
 
     public void behaviour(ru.rainedev.raine.config.Config.Behaviour behaviour) {
         this.behaviour = behaviour;
@@ -690,10 +697,12 @@ public final class TelegramTools {
                     String lastText = text;
 
                     // переносы строк внутри одной реплики — это отдельные сообщения
-                    for (String line : linesOf(text)) {
-                        // модели пишут длинное тире, а с клавиатуры набирают дефис
-                        String piece = line.replace("—", "-");
-
+                    List<String> pieces = piecesToSend(chatId, text);
+                    if (pieces.isEmpty()) {
+                        // лица срезаны, а слов за ними не было
+                        return "Nothing was sent — without the text faces this message had no words left.";
+                    }
+                    for (String piece : pieces) {
                         Typos.Slip slip = allowTypos
                                 ? Typos.maybeAdd(piece, TYPO_PROBABILITY, random)
                                 : new Typos.Slip(piece, "");
@@ -728,6 +737,22 @@ public final class TelegramTools {
                     return sendResult(inARow[0], lastSent, lastText);
                     }
                 });
+    }
+
+    /**
+     * Строки реплики — каждая своим сообщением: дефис вместо тире и текстовые
+     * лица по счётчику чата. Лицо — не подпись к каждому сообщению, а
+     * исключение: раз в N реплик.
+     * <p>
+     * Пустого куска не вернёт: от строки, состоявшей из одного лица, после
+     * срезки не остаётся ничего, а пустое сообщение не отправить.
+     */
+    List<String> piecesToSend(long chatId, String text) {
+        return linesOf(text).stream()
+                // модели пишут длинное тире, а с клавиатуры набирают дефис
+                .map(line -> kaomoji.gate(chatId, line.replace("—", "-"), behaviour.kaomojiEvery()))
+                .filter(piece -> !piece.isEmpty())
+                .toList();
     }
 
     /** Пустые строки внутри реплики отправлять незачем. */

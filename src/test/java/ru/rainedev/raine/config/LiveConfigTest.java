@@ -50,6 +50,27 @@ class LiveConfigTest {
     }
 
     @Test
+    void kaomojiCooldownIsReadAndPickedUpOnTheFly(@TempDir Path dir) throws IOException {
+        // лицо в каждой реплике лечится настройкой, а не пересборкой бота
+        assertEquals(4, Config.load(configIn(dir, "")).behaviour().kaomojiEvery(),
+                "без ключа в файле кулдаун остаётся по умолчанию");
+
+        Path file = configIn(dir, "kaomoji_every=7\n");
+        List<Integer> applied = new ArrayList<>();
+        try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
+            live.onChange(fresh -> applied.add(fresh.behaviour().kaomojiEvery()));
+            assertEquals(List.of(7), applied);
+
+            Files.writeString(file, Files.readString(file).replace("kaomoji_every=7", "kaomoji_every=2"));
+            Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(
+                    System.currentTimeMillis() + 2000));
+
+            assertTrue(live.checkOnce());
+            assertEquals(List.of(7, 2), applied);
+        }
+    }
+
+    @Test
     void untouchedFileChangesNothing(@TempDir Path dir) throws IOException {
         Path file = configIn(dir, "");
         try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
