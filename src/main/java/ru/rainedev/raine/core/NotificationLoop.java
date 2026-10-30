@@ -630,10 +630,11 @@ public final class NotificationLoop {
     /**
      * Порыв заканчивается на первом видимом действии: чат уже открыт, и
      * отправка не должна стоить дороже молчания. В обычном разговоре ход
-     * продолжается — там реплики складываются в беседу.
+     * продолжается — там реплики складываются в беседу, кроме случаев, когда
+     * дверь закрыта: после блокировки не с кем говорить.
      */
     private static boolean finishes(Notification notification, Toolbox tools, ToolCall call) {
-        if (Toolbox.FINISHING.contains(call.name())) {
+        if (Toolbox.FINISHING.contains(call.name()) || Toolbox.TERMINAL.contains(call.name())) {
             return true;
         }
         return notification.initiative() && tools.all().stream()

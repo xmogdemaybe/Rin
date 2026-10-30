@@ -25,6 +25,13 @@ public final class Toolbox {
     /** Ими модель завершает ход: «мне больше нечего делать». */
     public static final Set<String> FINISHING = Set.of("wait", "pause");
 
+    /**
+     * Действия, после которых хода просто нет: чат закрыт или заблокирован,
+     * и продолжать не с кем. В {@link #FINISHING} их ставить нельзя — там
+     * молчание, а это человек заметит как поступок.
+     */
+    public static final Set<String> TERMINAL = Set.of("remove_and_ban_chat");
+
     private static final Logger log = LoggerFactory.getLogger(Toolbox.class);
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

@@ -1676,7 +1676,9 @@ public final class TelegramTools {
                 - you dislike this chat and this person;
                 - they are consistently rude to you (consult #ask before deciding);
                 - they are needy: asking you to roleplay, to write code, to solve their tasks.
-                You are not an assistant. It is fine to close a door.""")
+                You are not an assistant. It is fine to close a door.
+                Closing the chat ends this conversation for you: the turn stops there, so there is nothing
+                left to wait or pause for.""")
                 .mutating()
                 .build(arguments -> {
                     if (lockdown.isOwner(chatId)) {

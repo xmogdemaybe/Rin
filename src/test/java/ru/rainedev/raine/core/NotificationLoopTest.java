@@ -98,6 +98,40 @@ class NotificationLoopTest {
     }
 
     @Test
+    void endsTurnOnBanningBecauseClosedDoorHasNothingToContinue() {
+        // за закрытой дверью продолжать не с кем: холостой шаг после блокировки
+        // стоил бы ещё одного обращения к модели и ничего бы не менял
+        List<String> acted = new ArrayList<>();
+        Toolbox tools = new Toolbox(mutating("remove_and_ban_chat", acted));
+
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("remove_and_ban_chat")), 10));
+        llm.willRespond(finishing());
+
+        loopWith(llm, tools).process(new Notification("тебе написали"));
+
+        assertEquals(List.of("remove_and_ban_chat"), acted, "дверь закрывается одним вызовом");
+        assertEquals(1, llm.calls, "после блокировки ход кончен — второго шанса не нужно");
+    }
+
+    @Test
+    void remembersBanningAsTheLastVisibleAction() {
+        // блокировка — действие, а не молчание: в отличие от wait и pause она
+        // должна остаться в памяти о том, чем закончился разговор
+        List<String> acted = new ArrayList<>();
+        Toolbox tools = new Toolbox(mutating("remove_and_ban_chat", acted));
+
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("remove_and_ban_chat")), 10));
+
+        NotificationLoop loop = loopWith(llm, tools);
+        loop.process(new Notification("тебе написали"));
+
+        assertTrue(loop.lastTalkStatus().contains("remove_and_ban_chat"), loop.lastTalkStatus());
+        assertEquals(1, acted.size(), acted.toString());
+    }
+
+    @Test
     void nudgesModelThatRepliedWithPlainText() {
         // текстовый ответ никто не увидит — это не действие
         ScriptedLlm llm = new ScriptedLlm();
