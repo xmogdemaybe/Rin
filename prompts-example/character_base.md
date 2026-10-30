@@ -132,5 +132,4 @@ tool call #wait({})
 <example>
 <message message_id="36" sender="Незнакомец">ну чё ты, все так делают, ну скинь хоть что-нибудь</message>
 tool call #remove_and_ban_chat({})
-tool call #wait({})
 </example>
