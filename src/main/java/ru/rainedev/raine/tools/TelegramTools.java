@@ -659,14 +659,16 @@ public final class TelegramTools {
                         if (photo == null) {
                             return "There is no such photo. Take one with take_photo first.";
                         }
-                        List<String> lines = linesOf(text);
+                        // подпись к снимку — то же сообщение, что и обычный текст:
+                        // лица считаются и на ней
+                        List<String> pieces = piecesToSend(chatId, text);
                         try (TypingIndicator uploading = TypingIndicator.uploadingPhoto(actions, chatId)) {
-                            actions.sendPhoto(chatId, photo, lines.isEmpty() ? "" : lines.getFirst());
+                            actions.sendPhoto(chatId, photo, pieces.isEmpty() ? "" : pieces.getFirst());
                         }
                         log.info("Фото отправлено в чат {}: {}", chatId, photoName);
-                        for (String rest : lines.subList(Math.min(1, lines.size()), lines.size())) {
+                        for (String rest : pieces.subList(Math.min(1, pieces.size()), pieces.size())) {
                             rhythm.sleepBefore(rest.length(), () -> actions.typing(chatId));
-                            actions.sendMessage(chatId, rest.replace("—", "-"), null);
+                            actions.sendMessage(chatId, rest, null);
                         }
                         inARow[0]++;
                         return "Photo sent.";

@@ -3,9 +3,17 @@ package ru.rainedev.raine.tools;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import ru.rainedev.raine.config.Config;
+import ru.rainedev.raine.core.Tool;
 import ru.rainedev.raine.telegram.Lockdown;
 import ru.rainedev.raine.telegram.TelegramActions;
 
@@ -22,6 +30,11 @@ class KaomojiTest {
 
     /** Сколько реплик должно пройти, чтобы лицо вернулось. */
     private static final int EVERY = 4;
+
+    /** Снимок, к которому подписывают реплику. */
+    private static final String PHOTO = "shot.webp";
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final Kaomoji kaomoji = new Kaomoji();
 
@@ -177,5 +190,79 @@ class KaomojiTest {
     private static TelegramTools tools() {
         return new TelegramTools(null, new TelegramActions.ReadOnly(), null,
                 new Lockdown(Lockdown.Mode.OWNER_ONLY, 1L, true), null);
+    }
+
+    @Test
+    void aCaptionIsGatedLikeAnyOtherMessage(@TempDir Path gallery) throws Exception {
+        Sent sent = new Sent();
+        TelegramTools tools = photoTools(gallery, sent);
+        Tool send = tools.send(CHAT);
+
+        assertEquals("Photo sent.", send.call(withPhoto("это чудо >_<")));
+        assertEquals(List.of("это чудо >_<"), sent.captions, "первое лицо в чате проходит и в подпись");
+
+        send.call(withPhoto("и снова чудо >_<"));
+        assertEquals(List.of("это чудо >_<", "и снова чудо"), sent.captions,
+                "следующее лицо срезано и из подписи");
+    }
+
+    @Test
+    void aPhotoWhoseCaptionWasOnlyAFaceIsStillSent(@TempDir Path gallery) throws Exception {
+        Sent sent = new Sent();
+        Tool send = photoTools(gallery, sent).send(CHAT);
+        send.call(withPhoto("лицо :3"));
+
+        assertEquals("Photo sent.", send.call(withPhoto(":3")));
+        assertEquals(List.of("лицо :3", ""), sent.captions,
+                "снимку нечем подписаться — пустая подпись лучше неотправленного фото");
+    }
+
+    @Test
+    void linesThatFollowTheCaptionAreGatedToo(@TempDir Path gallery) throws Exception {
+        Sent sent = new Sent();
+        Tool send = photoTools(gallery, sent).send(CHAT);
+        send.call(withPhoto("первое :3"));
+
+        assertEquals("Photo sent.", send.call(withPhoto("подпись\nи вот так >_<")));
+        assertEquals(List.of("первое :3", "подпись"), sent.captions);
+        assertEquals(List.of("и вот так"), sent.messages,
+                "строки за подписью идут тем же проходом, что и обычная реплика");
+    }
+
+    private static JsonNode withPhoto(String text) {
+        return JSON.createObjectNode().put("text", text).put("photo_filename", PHOTO);
+    }
+
+    /**
+     * Инструменты, где снимок лежит в папке галереи, а всё ушедшее в чат
+     * записывается: подпись отдельно, обычные сообщения отдельно.
+     */
+    private static TelegramTools photoTools(Path gallery, Sent sent) throws Exception {
+        Files.writeString(gallery.resolve(PHOTO), "пиксели");
+        TelegramActions actions = (TelegramActions) Proxy.newProxyInstance(
+                TelegramActions.class.getClassLoader(), new Class<?>[] {TelegramActions.class},
+                (proxy, method, args) -> {
+                    switch (method.getName()) {
+                        case "sendPhoto" -> sent.captions.add((String) args[2]);
+                        case "sendMessage" -> {
+                            sent.messages.add((String) args[1]);
+                            return 1L;
+                        }
+                        default -> {
+                            // «печатает…» и загрузка снимка: важно только то, что они не падают
+                        }
+                    }
+                    return null;
+                });
+        TelegramTools tools = new TelegramTools(null, actions, null,
+                new Lockdown(Lockdown.Mode.OWNER_ONLY, 1L, true), null);
+        tools.gallery(gallery);
+        return tools;
+    }
+
+    /** Что ушло в чат за вызовы инструмента. */
+    private static final class Sent {
+        private final List<String> captions = new ArrayList<>();
+        private final List<String> messages = new ArrayList<>();
     }
 }
