@@ -217,6 +217,44 @@ class LivelinessTest {
     }
 
     @Test
+    void sameWordsInAnotherCaseOrSpacingAreStillADuplicate() {
+        // модель дописывает пробелы и меняет регистр, а эмбеддинг при этом
+        // даёт похожий, но не предельный вектор: без нормализации этот вариант
+        // прошёл бы как новая мысль
+        LlmClient llm = new VectorsByText(Map.of(
+                "спокойной ночи", new double[] {1, 0, 0},
+                " Спокойной  НОЧИ\n", new double[] {0.6, 0.8, 0},
+                "сегодня холодно, я сплю", new double[] {0, 1, 0},
+                "а ты уже ел?", new double[] {0, 0, 1}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        antiRepeat.remember("сегодня холодно, я сплю");
+        antiRepeat.remember("а ты уже ел?");
+        antiRepeat.check("спокойной ночи");
+
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(" Спокойной  НОЧИ\n"));
+    }
+
+    @Test
+    void verbatimRefusalDoesNotBuyTheNextPhraseARelaxation() {
+        // поблажка нужна тем, кто перефразирует и упирается в отказ; дословный
+        // повтор её не зарабатывает: иначе одна промашка открывает дорогу
+        // следующей той же мысли
+        LlmClient llm = new VectorsByText(Map.of(
+                "дай посмотреть", new double[] {1, 0, 0},
+                "дай-ка посмотреть", new double[] {1, 0, 0},
+                "сегодня холодно, я сплю", new double[] {0, 1, 0},
+                "а ты уже ел?", new double[] {0, 0, 1}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        antiRepeat.remember("сегодня холодно, я сплю");
+        antiRepeat.remember("а ты уже ел?");
+        antiRepeat.check("дай посмотреть");
+
+        assertThrows(LowQualityException.class, () -> antiRepeat.check("дай посмотреть"));
+
+        assertThrows(LowQualityException.class, () -> antiRepeat.check("дай-ка посмотреть"));
+    }
+
+    @Test
     void brokenEmbeddingDoesNotBlockSending() {
         LlmClient broken = new LlmClient() {
             @Override
