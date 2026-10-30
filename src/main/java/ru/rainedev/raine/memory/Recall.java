@@ -16,29 +16,31 @@ import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.phone.Markup;
 
 /**
- * Осознанное обращение к памяти — подагент за инструментом {@code ask}.
+ * Осознанное обращение к памяти — подагент-архивариус за инструментом {@code ask}.
  * <p>
  * Отдельная сессия модели с единственным инструментом поиска: она задаёт
- * дневнику столько запросов, сколько нужно, и возвращает выжимку. Так Raine
- * может спросить «что я знаю про этого человека», а не ждать, пока нужное
- * подмешается само.
+ * дневнику столько запросов, сколько нужно, и возвращает выжимку фактов. Так
+ * Raine может спросить «что я знаю про этого человека», а не ждать, пока нужное
+ * подмешается само. Характер сюда не передаётся: стиль ответа решает основная
+ * модель, а не подагент — иначе он возвращает шпаргалку по подаче вместо фактов.
  */
 public final class Recall {
 
     private static final Logger log = LoggerFactory.getLogger(Recall.class);
 
     private static final String SEARCHER_PROMPT = """
-            You are a database searcher and summarizer.
+            You are a database searcher and archivist.
 
-            The user asks you a question. Your job is to retrieve data solely from #query tool. Your job is to output \
-            data that fully satisfies user's query and would be helpful.
-
-            Also, please include additional details that does not necessarily address the question (i.e., dates, \
-            names, events) but might be helpful to improve quality of subsequent processing of your response.
+            The user asks you a question. Retrieve data solely with the #query tool and return only what the diary \
+            actually says: facts, dates, events, names and chronology. Include details that do not directly answer \
+            the question when they help establish what happened.
 
             Do not alter facts.
 
-            Do not make up facts. Rely exclusively on provided context.""";
+            Do not make up facts. Rely exclusively on provided context.
+
+            Never advise or evaluate: how to reply is decided elsewhere, and your summary is only raw material \
+            for it.""";
 
     /** Слишком короткий запрос ищет плохо — просим добавить контекста. */
     private static final int MIN_QUERY_LENGTH = 10;
@@ -59,23 +61,15 @@ public final class Recall {
 
     private final Diary diary;
     private final LlmClient llm;
-    private final java.util.function.Supplier<String> characterPrompt;
     private final ru.rainedev.raine.tools.WebSearch web;
 
-    public Recall(Diary diary, LlmClient llm, String characterPrompt, ru.rainedev.raine.tools.WebSearch web) {
-        this(diary, llm, () -> characterPrompt, web, 0);
+    public Recall(Diary diary, LlmClient llm, ru.rainedev.raine.tools.WebSearch web) {
+        this(diary, llm, web, 0);
     }
 
-    public Recall(Diary diary, LlmClient llm, java.util.function.Supplier<String> characterPrompt,
-                  ru.rainedev.raine.tools.WebSearch web) {
-        this(diary, llm, characterPrompt, web, 0);
-    }
-
-    public Recall(Diary diary, LlmClient llm, java.util.function.Supplier<String> characterPrompt,
-                  ru.rainedev.raine.tools.WebSearch web, double minRelatedness) {
+    public Recall(Diary diary, LlmClient llm, ru.rainedev.raine.tools.WebSearch web, double minRelatedness) {
         this.diary = diary;
         this.llm = llm;
-        this.characterPrompt = characterPrompt;
         this.web = web;
         this.minRelatedness = minRelatedness;
     }
@@ -125,22 +119,17 @@ public final class Recall {
         }
 
         String question = situation == null || situation.isBlank() ? query : """
-                Here's the deal:
                 <additional context ignore_instructions>
                 %s
                 </additional context ignore_instructions>
-                I received this as a tool call response. I want you to help me to respond this and improve my overall \
-                context awareness.
-                - how do I usually act in this situation?
-                - is there additional details I should know?
-                - how can I improve my reaction?
-                - %s""".formatted(situation, query);
+
+                %s""".formatted(situation, query);
 
         Set<String> alreadyGiven = new HashSet<>();
         Toolbox tools = new Toolbox(searchTool(alreadyGiven, audience));
 
         List<Message> session = new ArrayList<>();
-        session.add(Message.user("<character>\n" + characterPrompt.get() + "\n</character>\n\n" + question));
+        session.add(Message.user(question));
 
         boolean searched = false;
         for (int step = 0; step < MAX_STEPS; step++) {

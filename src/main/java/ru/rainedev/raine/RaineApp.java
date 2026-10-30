@@ -244,8 +244,7 @@ public final class RaineApp implements AutoCloseable {
         // вовсе — не «попробуй и получишь отказ», а чего нет, того и не попросишь
         Toolbox always = newToolbox();
         WebSearch web = new WebSearch(config.webSearchUrl(), config.webSearchKey());
-        Recall recall = new Recall(diary, llm, prompts.lazy("character_base.md"), web,
-                config.diaryMinRelatedness());
+        Recall recall = new Recall(diary, llm, web, config.diaryMinRelatedness());
         // ask доступен всегда: заглянуть в память можно в любой момент хода
         always.add(recall.asTool(this::currentSituation, () -> loop.audience()));
         if (config.behaviour().stickers()) {
