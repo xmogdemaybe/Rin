@@ -6,15 +6,17 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Вызов инструмента, написанный текстом.
  * <p>
  * Модель изредка отвечает не в поле tool_calls, а строкой вида
- * {@code <call:send_telegram_message{text:привет}>}. Цикл такой ответ действием
+ * {@code <call:send_telegram_message{text:привет}>} или
+ * {@code tool call #send_telegram_message({"text":"привет"})}. Цикл такой ответ действием
  * не считал: сообщение было написано, а адресат его не увидел. Здесь текстовый
- * артефакт превращается в настоящий вызов, а служебный тег вырезается из
+ * артефакт превращается в настоящий вызов, а служебная запись вырезается из
  * видимого текста.
  */
 final class TextualToolCalls {
@@ -26,6 +28,14 @@ final class TextualToolCalls {
 
     /** После такой запятой начинается следующий аргумент, а не продолжение значения. */
     private static final Pattern NEXT_KEY = Pattern.compile("^\\s*[\"']?[A-Za-z_][A-Za-z0-9_-]*[\"']?\\s*:");
+
+    /**
+     * Вызов с решёткой — форму модель копирует из примеров характера. Скобка вокруг
+     * аргументов необязательна: в логах бывают обе. Засчитывается только с начала
+     * строки, иначе упомянутый в предложении вызов стал бы действием.
+     */
+    private static final Pattern LINE_CALL =
+            Pattern.compile("(?m)^[ \\t]*tool call #[ \\t]*([A-Za-z0-9_]+)[ \\t]*\\(?[ \\t]*\\{");
 
     private TextualToolCalls() {}
 
@@ -67,8 +77,16 @@ final class TextualToolCalls {
      * @return текст без служебных тегов и вызовы, которые в нём были
      */
     static Parsed parse(String text) {
-        if (text == null || text.isEmpty() || !text.contains("<call:")) {
+        if (text == null || text.isEmpty()) {
             return new Parsed(text == null ? "" : text, List.of());
+        }
+        Parsed tagged = taggedCalls(text);
+        return lineCalls(tagged.text(), tagged.calls());
+    }
+
+    private static Parsed taggedCalls(String text) {
+        if (!text.contains("<call:")) {
+            return new Parsed(text, List.of());
         }
         List<ToolCall> calls = new ArrayList<>();
         StringBuilder kept = new StringBuilder();
@@ -88,6 +106,62 @@ final class TextualToolCalls {
         }
         kept.append(text, cursor, text.length());
         return new Parsed(kept.toString().strip(), calls);
+    }
+
+    /**
+     * Строки {@code tool call #name({...})}: вызов становится настоящим, а строка
+     * уходит из видимого текста целиком, вместе со скобкой и переносом.
+     */
+    private static Parsed lineCalls(String text, List<ToolCall> collected) {
+        Matcher matcher = LINE_CALL.matcher(text);
+        List<ToolCall> calls = new ArrayList<>(collected);
+        StringBuilder kept = new StringBuilder();
+        int cursor = 0;
+        while (matcher.find()) {
+            int open = matcher.end() - 1;
+            int close = closingBrace(text, open);
+            if (close < 0) {
+                continue;
+            }
+            calls.add(new ToolCall("text-call-" + UUID.randomUUID(), "function",
+                    new ToolCall.Function(matcher.group(1), arguments(text.substring(open + 1, close)))));
+            kept.append(text, cursor, matcher.start());
+            cursor = endOfCallLine(text, close);
+        }
+        if (calls.size() == collected.size()) {
+            return new Parsed(text, collected);
+        }
+        kept.append(text, cursor, text.length());
+        return new Parsed(kept.toString().strip(), List.copyOf(calls));
+    }
+
+    /**
+     * @return конец вызова в строке: закрывающая скобка аргументов необязательна,
+     *         и если после неё в строке ничего не было, перенос съедается вместе с ней
+     */
+    private static int endOfCallLine(String text, int close) {
+        int i = skipSpaces(text, close + 1);
+        if (i < text.length() && text.charAt(i) == ')') {
+            i = skipSpaces(text, i + 1);
+        }
+        if (i == text.length()) {
+            return i;
+        }
+        if (text.charAt(i) == '\n') {
+            return i + 1;
+        }
+        if (text.charAt(i) == '\r') {
+            return text.startsWith("\r\n", i) ? i + 2 : i + 1;
+        }
+        return i;
+    }
+
+    private static int skipSpaces(String text, int from) {
+        int i = from;
+        while (i < text.length() && (text.charAt(i) == ' ' || text.charAt(i) == '\t')) {
+            i++;
+        }
+        return i;
     }
 
     private record Found(ToolCall call, int end) {}

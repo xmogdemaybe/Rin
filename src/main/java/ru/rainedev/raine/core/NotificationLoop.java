@@ -72,11 +72,14 @@ public final class NotificationLoop {
             [system] Note: you sent a message without consulting #ask this turn. Next time, call #ask before \
             send_telegram_message to enrich your response with memories and context.""";
 
+    /**
+     * Про синтаксис здесь не пишется: модель повторяет то, что видит, и запрет,
+     * показанный примером, работает как подсказка.
+     */
     private static final String BE_TOOL_CENTRIC = """
             Your previous answer was plain text, and plain text does nothing: it is visible only to you. \
-            Instruments are called through the tool_calls field of the assistant message — never as text \
-            in the form 'tool call #send_telegram_message({"text": "hi"})'. That text is thrown away and \
-            the turn fails.
+            Instruments are called through the tool_calls field of the assistant message, never as a line \
+            of text describing them. Such a line is thrown away and the turn fails.
 
             Repeat this step now and actually call the tool. If you truly need nothing, call #wait.""";
 

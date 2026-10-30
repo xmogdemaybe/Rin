@@ -143,6 +143,9 @@ class NotificationLoopTest {
 
         assertEquals(2, llm.calls, "после текстового ответа модель должна получить второй шанс");
         assertTrue(loop.context().stream().anyMatch(m -> m.content() != null && m.content().contains("tool_calls")));
+        // укол не показывает моделью запрещённый синтаксис: она его копирует
+        assertFalse(loop.context().stream().anyMatch(m -> m.content() != null && m.content().contains("tool call #")),
+                "в подсказке не должно быть образца текстового вызова");
         assertEquals(List.of("auto", "required"), llm.toolChoices, "повтор идёт с запретом текста");
     }
 

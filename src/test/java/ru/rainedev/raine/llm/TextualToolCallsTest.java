@@ -19,6 +19,14 @@ class TextualToolCallsTest {
             Пора спать, уже поздно. Прощальное сообщение лучше отправить сейчас.
             <call:default_api:send_telegram_message{text:Я спать собираюсь уже, соня. Споки ноки, xmogde >_< <3}></call:default_api:send_telegram_message>""";
 
+    /** Точная строка из лога 22:00:32: вызовы написаны текстом, шаг сгорел впустую. */
+    private static final String FROM_LOG_HASH = """
+            - thought: xmogde наконец-то доделал то, над чем работал.
+            - intention: ответить с любопытством и попросить показать скорее.
+
+            tool call #react_with_emoji{emoji:❤️,message_id:394264576}
+            tool call #send_telegram_message{text:очень хочу! >_< показывай скорее, что за красоту ты там натворил :3}""";
+
     @Test
     void readsTheCallThatWasWrittenAsText() {
         TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG);
@@ -167,5 +175,74 @@ class TextualToolCallsTest {
 
         assertTrue(repaired.toolCalls().isEmpty());
         assertEquals("просто мысли", repaired.text());
+    }
+
+    @Test
+    void readsCallsWrittenWithHashPrefix() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG_HASH);
+
+        assertEquals(List.of("react_with_emoji", "send_telegram_message"),
+                parsed.calls().stream().map(ToolCall::name).toList(), "оба вызова из строки находятся");
+        assertEquals("{\"emoji\":\"❤️\",\"message_id\":394264576}", parsed.calls().getFirst().arguments());
+        assertEquals("{\"text\":\"очень хочу! >_< показывай скорее, что за красоту ты там натворил :3\"}",
+                parsed.calls().get(1).arguments(), "двоеточие внутри текста не режет аргумент");
+    }
+
+    @Test
+    void hashCallLinesAreCutAndTheThoughtsStay() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG_HASH);
+
+        assertFalse(parsed.text().contains("tool call"), "строки вызова вырезаны: " + parsed.text());
+        assertTrue(parsed.text().contains("- thought:"), "мысли остаются на месте: " + parsed.text());
+    }
+
+    @Test
+    void readsTheExampleFormWithParenthesesAndQuotes() {
+        // так вызовы выглядят в примерах характера — модель копирует именно их
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(
+                "tool call #send_telegram_message({\"text\":\"Иди сюда, обниму\"})");
+
+        assertEquals(1, parsed.calls().size());
+        assertEquals("send_telegram_message", parsed.calls().getFirst().name());
+        assertEquals("{\"text\":\"Иди сюда, обниму\"}", parsed.calls().getFirst().arguments());
+        assertTrue(parsed.text().isEmpty(), "скобка после аргументов тоже съедена: " + parsed.text());
+    }
+
+    @Test
+    void aHashCallWithoutArgumentsGetsAnEmptyObject() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse("tool call #wait({})");
+
+        assertEquals("{}", parsed.calls().getFirst().arguments());
+    }
+
+    @Test
+    void aHashCallMentionedMidSentenceIsNotACall() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(
+                "не буду писать tool call #wait({}) посреди строки");
+
+        assertTrue(parsed.calls().isEmpty(), "вызовом считается только строка, начинающаяся с вызова");
+        assertEquals("не буду писать tool call #wait({}) посреди строки", parsed.text());
+    }
+
+    @Test
+    void aBrokenHashCallIsNotGuessedAt() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(
+                "tool call #send_telegram_message({\"text\":\"привет");
+
+        assertTrue(parsed.calls().isEmpty(), "без закрывающей скобки это не вызов");
+        assertTrue(parsed.text().contains("привет"), "текст не должен пропасть: " + parsed.text());
+    }
+
+    @Test
+    void repairTurnsALostStepIntoRealActions() {
+        Message message = new Message(Message.Role.ASSISTANT, FROM_LOG_HASH, List.of(), null, null);
+        ChatResponse response = new ChatResponse("id", "model",
+                List.of(new ChatResponse.Choice(0, message, "stop")), ChatResponse.Usage.EMPTY);
+
+        ChatResponse repaired = TextualToolCalls.repair(response);
+
+        assertEquals(2, repaired.toolCalls().size(), "ход не должен был сгореть на пустом шаге");
+        assertFalse(repaired.text().contains("tool call"), "служебные строки не уйдут в чат: " + repaired.text());
+        assertTrue(repaired.text().contains("- thought:"), repaired.text());
     }
 }
