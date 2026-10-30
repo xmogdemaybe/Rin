@@ -22,6 +22,9 @@ class LivelinessTest {
 
     private final Random random = new Random(42);
 
+    /** Чат, в котором идут реплики: проверка повторов смотрит на него одного. */
+    private static final long CHAT = 1L;
+
     @Test
     void swapMakesTextDifferentButSameLength() {
         String result = Typos.swapAdjacent("привет как дела", random);
@@ -139,9 +142,9 @@ class LivelinessTest {
                 "я здесь, если что", new double[] {1, 0, 0}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
 
-        antiRepeat.check("я тут, если что");
+        antiRepeat.check(CHAT, "я тут, если что");
 
-        assertThrows(LowQualityException.class, () -> antiRepeat.check("я здесь, если что"));
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(CHAT, "я здесь, если что"));
     }
 
     @Test
@@ -151,8 +154,8 @@ class LivelinessTest {
                 "слушай, а ты завтра свободен?", new double[] {0, 1, 0}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
 
-        antiRepeat.check("я тут, если что");
-        antiRepeat.check("слушай, а ты завтра свободен?");
+        antiRepeat.check(CHAT, "я тут, если что");
+        antiRepeat.check(CHAT, "слушай, а ты завтра свободен?");
     }
 
     @Test
@@ -162,11 +165,11 @@ class LivelinessTest {
         // после отказа — 0.95 + 0.07, то есть выше самого повтора
         LlmClient llm = new VectorsByText(Map.of("ой, интригуешь, давай показывай", new double[] {1, 0, 0}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
-        antiRepeat.check("ой, интригуешь, давай показывай");
+        antiRepeat.check(CHAT, "ой, интригуешь, давай показывай");
 
         for (int attempt = 1; attempt <= 10; attempt++) {
             assertThrows(LowQualityException.class,
-                    () -> antiRepeat.check("ой, интригуешь, давай показывай"),
+                    () -> antiRepeat.check(CHAT, "ой, интригуешь, давай показывай"),
                     "попытка " + attempt + ": уже сказанное не проходит ни разу");
         }
     }
@@ -179,13 +182,13 @@ class LivelinessTest {
                 "давай показывай скорее", new double[] {1, 0, 0},
                 "показывай уже скорее", new double[] {1, 0, 0}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
-        antiRepeat.remember("сегодня холодно, я сплю");
-        antiRepeat.remember("а ты уже ел?");
-        antiRepeat.check("давай показывай скорее");
+        antiRepeat.remember(CHAT, "сегодня холодно, я сплю");
+        antiRepeat.remember(CHAT, "а ты уже ел?");
+        antiRepeat.check(CHAT, "давай показывай скорее");
 
-        assertThrows(LowQualityException.class, () -> antiRepeat.check("показывай уже скорее"));
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(CHAT, "показывай уже скорее"));
 
-        antiRepeat.check("показывай уже скорее");
+        antiRepeat.check(CHAT, "показывай уже скорее");
     }
 
     @Test
@@ -194,10 +197,10 @@ class LivelinessTest {
         // температуре выдаёт ту же фразу — тогда откат стоит ещё одного шага
         LlmClient llm = new VectorsByText(Map.of("я рядом, если что", new double[] {1, 0, 0}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
-        antiRepeat.check("я рядом, если что");
+        antiRepeat.check(CHAT, "я рядом, если что");
 
         LowQualityException refusal = assertThrows(LowQualityException.class,
-                () -> antiRepeat.check("я рядом, если что"));
+                () -> antiRepeat.check(CHAT, "я рядом, если что"));
 
         assertTrue(refusal.getMessage().contains("я рядом, если что"), refusal.getMessage());
         assertTrue(refusal.getMessage().startsWith("ты повторяешься"), refusal.getMessage());
@@ -208,9 +211,9 @@ class LivelinessTest {
         String longMessage = "а".repeat(4000);
         LlmClient llm = new VectorsByText(Map.of(longMessage, new double[] {1, 0, 0}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
-        antiRepeat.check(longMessage);
+        antiRepeat.check(CHAT, longMessage);
 
-        LowQualityException refusal = assertThrows(LowQualityException.class, () -> antiRepeat.check(longMessage));
+        LowQualityException refusal = assertThrows(LowQualityException.class, () -> antiRepeat.check(CHAT, longMessage));
 
         assertTrue(refusal.getMessage().length() < 400, "длина отказа " + refusal.getMessage().length());
         assertTrue(refusal.getMessage().contains("а".repeat(50)), refusal.getMessage());
@@ -227,11 +230,11 @@ class LivelinessTest {
                 "сегодня холодно, я сплю", new double[] {0, 1, 0},
                 "а ты уже ел?", new double[] {0, 0, 1}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
-        antiRepeat.remember("сегодня холодно, я сплю");
-        antiRepeat.remember("а ты уже ел?");
-        antiRepeat.check("спокойной ночи");
+        antiRepeat.remember(CHAT, "сегодня холодно, я сплю");
+        antiRepeat.remember(CHAT, "а ты уже ел?");
+        antiRepeat.check(CHAT, "спокойной ночи");
 
-        assertThrows(LowQualityException.class, () -> antiRepeat.check(" Спокойной  НОЧИ\n"));
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(CHAT, " Спокойной  НОЧИ\n"));
     }
 
     @Test
@@ -245,13 +248,77 @@ class LivelinessTest {
                 "сегодня холодно, я сплю", new double[] {0, 1, 0},
                 "а ты уже ел?", new double[] {0, 0, 1}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
-        antiRepeat.remember("сегодня холодно, я сплю");
-        antiRepeat.remember("а ты уже ел?");
-        antiRepeat.check("дай посмотреть");
+        antiRepeat.remember(CHAT, "сегодня холодно, я сплю");
+        antiRepeat.remember(CHAT, "а ты уже ел?");
+        antiRepeat.check(CHAT, "дай посмотреть");
 
-        assertThrows(LowQualityException.class, () -> antiRepeat.check("дай посмотреть"));
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(CHAT, "дай посмотреть"));
 
-        assertThrows(LowQualityException.class, () -> antiRepeat.check("дай-ка посмотреть"));
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(CHAT, "дай-ка посмотреть"));
+    }
+
+    @Test
+    void sameWordsAddressedToAnotherChatAreNotARepeat() {
+        // «спокойной ночи» двоим — это два разных чата, а не один, где она
+        // повторяется: сравнивается только собственный чат
+        LlmClient llm = new VectorsByText(Map.of("спокойной ночи", new double[] {1, 0, 0}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+
+        antiRepeat.check(1L, "спокойной ночи");
+        antiRepeat.check(2L, "спокойной ночи");
+    }
+
+    @Test
+    void refusalsInOneChatDoNotRelaxAnother() {
+        // поблажка принадлежит чату: несколько отказов в одном не должны
+        // открывать дорогу той же мысли в другом
+        LlmClient llm = new VectorsByText(Map.of(
+                "дай посмотреть", new double[] {1, 0, 0},
+                "дай-ка посмотреть", new double[] {1, 0, 0},
+                "сегодня холодно, я сплю", new double[] {0, 1, 0},
+                "а ты уже ел?", new double[] {0, 0, 1}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        for (long chat : new long[] {1L, 2L}) {
+            antiRepeat.remember(chat, "сегодня холодно, я сплю");
+            antiRepeat.remember(chat, "а ты уже ел?");
+            antiRepeat.check(chat, "дай посмотреть");
+        }
+
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(1L, "дай-ка посмотреть"));
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(2L, "дай-ка посмотреть"));
+    }
+
+    @Test
+    void aForgottenChatTreatsItsOldPhraseAsNewAgain() {
+        // число помнящихся чатов ограничено: иначе за неделю накопится
+        // столько векторов, сколько переписок открылось
+        LlmClient llm = new VectorsByText(Map.of("спокойной ночи", new double[] {1, 0, 0}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        antiRepeat.check(0L, "спокойной ночи");
+        for (int chat = 1; chat <= AntiRepeat.MAX_CHATS; chat++) {
+            antiRepeat.remember(chat, "спокойной ночи");
+        }
+
+        antiRepeat.check(0L, "спокойной ночи");
+    }
+
+    @Test
+    void aChatInTheConversationOutlivesAnIdleOne() {
+        // на вылет идёт давний без разговора чат, а не тот, что встретился первым
+        LlmClient llm = new VectorsByText(Map.of(
+                "спокойной ночи", new double[] {1, 0, 0},
+                "а ты спишь?", new double[] {0, 0, 1}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        antiRepeat.check(0L, "спокойной ночи");
+        for (int chat = 1; chat < AntiRepeat.MAX_CHATS; chat++) {
+            antiRepeat.remember(chat, "спокойной ночи");
+        }
+        antiRepeat.check(0L, "а ты спишь?");
+        antiRepeat.remember(AntiRepeat.MAX_CHATS, "спокойной ночи");
+
+        assertThrows(LowQualityException.class, () -> antiRepeat.check(0L, "спокойной ночи"));
+
+        antiRepeat.check(1L, "спокойной ночи");
     }
 
     @Test
@@ -268,10 +335,10 @@ class LivelinessTest {
             }
         };
         AntiRepeat antiRepeat = new AntiRepeat(broken, "ты повторяешься");
-        antiRepeat.remember("что-то");
+        antiRepeat.remember(CHAT, "что-то");
 
         // проверка не обязательна — без неё разговор просто менее строгий
-        antiRepeat.check("что угодно");
+        antiRepeat.check(CHAT, "что угодно");
         assertFalse(false);
     }
 }

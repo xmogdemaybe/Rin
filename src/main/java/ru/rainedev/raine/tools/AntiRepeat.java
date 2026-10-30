@@ -32,12 +32,18 @@ public final class AntiRepeat {
     /** Сколько слов уже сказанного показывать модели в отказе. */
     private static final int QUOTE_LIMIT = 200;
 
+    /**
+     * Сколько чатов помнить. У каждого свой край по числу сообщений, а без
+     * этого края память росла бы вместе со списком всех переписок.
+     */
+    static final int MAX_CHATS = 64;
+
     private final LlmClient llm;
     private final java.util.function.Supplier<String> rejectionPrompt;
     private volatile ru.rainedev.raine.config.Config.Repeat limits;
-    private final Map<String, double[]> spoken = new LinkedHashMap<>();
 
-    private double indulgence;
+    /** Разговор каждого чата и поблажка, накопленная именно в нём. */
+    private final LinkedHashMap<Long, Chat> chats = new LinkedHashMap<>(16, 0.75f, true);
 
     public AntiRepeat(LlmClient llm, String rejectionPrompt) {
         this(llm, () -> rejectionPrompt);
@@ -59,28 +65,30 @@ public final class AntiRepeat {
     }
 
     /** Сообщения из истории чата — чтобы не повторяться и после перезапуска. */
-    public void remember(String text) {
+    public void remember(long chatId, String text) {
         if (text == null || text.isBlank()) {
             return;
         }
+        Chat chat = chat(chatId);
         String key = normalize(text);
-        if (spoken.containsKey(key)) {
+        if (chat.spoken.containsKey(key)) {
             return;
         }
         try {
-            spoken.put(key, llm.embedding(text));
+            chat.spoken.put(key, llm.embedding(text));
         } catch (RuntimeException e) {
             log.debug("Не удалось запомнить сообщение для проверки на повтор: {}", e.getMessage());
         }
-        forgetOldest();
+        forgetOldest(chat);
     }
 
     /**
      * @throws LowQualityException если сказанное слишком похоже на уже сказанное
      */
-    public void check(String text) {
-        if (spoken.isEmpty()) {
-            remember(text);
+    public void check(long chatId, String text) {
+        Chat chat = chat(chatId);
+        if (chat.spoken.isEmpty()) {
+            remember(chatId, text);
             return;
         }
 
@@ -88,8 +96,8 @@ public final class AntiRepeat {
         // перефразованных слов как раз его и пропускала: схожесть равна 1.00,
         // а порог после отказа поднимается выше. В чате это второй тот же текст.
         String key = normalize(text);
-        if (spoken.containsKey(key)) {
-            refuse("повтор дословно сказанного", text, false);
+        if (chat.spoken.containsKey(key)) {
+            refuse(chat, "повтор дословно сказанного", text, false);
         }
 
         double[] target;
@@ -103,32 +111,49 @@ public final class AntiRepeat {
 
         double maxSimilarity = 0;
         double sum = 0;
-        for (double[] previous : spoken.values()) {
+        for (double[] previous : chat.spoken.values()) {
             double similarity = Similarity.cosine(target, previous);
             maxSimilarity = Math.max(maxSimilarity, similarity);
             sum += similarity;
         }
-        double avgSimilarity = sum / spoken.size();
+        double avgSimilarity = sum / chat.spoken.size();
 
-        if (maxSimilarity > limits.triggerMax() + indulgence) {
-            refuse("повтор сказанного ранее, схожесть %.2f".formatted(maxSimilarity), text, true);
+        if (maxSimilarity > limits.triggerMax() + chat.indulgence) {
+            refuse(chat, "повтор сказанного ранее, схожесть %.2f".formatted(maxSimilarity), text, true);
         }
-        if (avgSimilarity > limits.triggerAvg() + indulgence) {
-            refuse("хождение по кругу, средняя схожесть %.2f".formatted(avgSimilarity), text, true);
+        if (avgSimilarity > limits.triggerAvg() + chat.indulgence) {
+            refuse(chat, "хождение по кругу, средняя схожесть %.2f".formatted(avgSimilarity), text, true);
         }
 
-        indulgence = 0;
-        spoken.put(key, target);
-        forgetOldest();
+        chat.indulgence = 0;
+        chat.spoken.put(key, target);
+        forgetOldest(chat);
+    }
+
+    /**
+     * Память и поблажка — свои на каждый чат: «спокойной ночи» двоим это не
+     * повтор, а отказы в одной переписке не расслабляют другую. Давний без
+     * разговора чат вытесняется первым.
+     */
+    private Chat chat(long chatId) {
+        Chat chat = chats.get(chatId);
+        if (chat == null) {
+            chat = new Chat();
+            chats.put(chatId, chat);
+            while (chats.size() > MAX_CHATS) {
+                chats.remove(chats.keySet().iterator().next());
+            }
+        }
+        return chat;
     }
 
     /**
      * @param indulges копить ли поблажку: у перефразированных слов есть шанс
      *                 стать новыми, а у дословного повтора отправленного — нет.
      */
-    private void refuse(String reason, String text, boolean indulges) {
+    private void refuse(Chat chat, String reason, String text, boolean indulges) {
         if (indulges) {
-            indulgence += INDULGENCE_STEP;
+            chat.indulgence += INDULGENCE_STEP;
         }
         log.info("Отклонено как повтор: {}", reason);
         // без этих слов модель не знает, от чего именно её отвернули, и при
@@ -147,9 +172,15 @@ public final class AntiRepeat {
         return safe.length() <= QUOTE_LIMIT ? safe : safe.substring(0, QUOTE_LIMIT) + "…";
     }
 
-    private void forgetOldest() {
-        while (spoken.size() > limits.maxHistory()) {
-            spoken.remove(spoken.keySet().iterator().next());
+    private void forgetOldest(Chat chat) {
+        while (chat.spoken.size() > limits.maxHistory()) {
+            chat.spoken.remove(chat.spoken.keySet().iterator().next());
         }
+    }
+
+    /** Недавние реплики одного чата и то, насколько он уже надоел отказами. */
+    private static final class Chat {
+        private final Map<String, double[]> spoken = new LinkedHashMap<>();
+        private double indulgence;
     }
 }

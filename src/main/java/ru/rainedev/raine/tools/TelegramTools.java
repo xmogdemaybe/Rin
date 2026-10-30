@@ -415,7 +415,7 @@ public final class TelegramTools {
                     .filter(message -> message.senderId instanceof TdApi.MessageSenderUser sender
                             && sender.userId == telegram.myId())
                     .filter(message -> message.content instanceof TdApi.MessageText)
-                    .forEach(message -> antiRepeat.remember(((TdApi.MessageText) message.content).text.text));
+                    .forEach(message -> antiRepeat.remember(chatId, ((TdApi.MessageText) message.content).text.text));
 
             // пустой чат — это человек, с которым она ещё не говорила ни разу.
             // Заговаривать с незнакомыми первой можно разрешить настройкой,
@@ -681,7 +681,7 @@ public final class TelegramTools {
                     }
 
                     maybeSuggestSomethingLivelier();
-                    antiRepeat.check(text);
+                    antiRepeat.check(chatId, text);
 
                     boolean allowTypos = !"false".equalsIgnoreCase(arguments.path("allow_typos").asText("true"));
                     Long quoted = quotedCheck;
