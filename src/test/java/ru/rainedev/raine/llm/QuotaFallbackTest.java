@@ -31,6 +31,8 @@ class QuotaFallbackTest {
     private final Queue<Integer> codes = new ArrayDeque<>();
     private String error = "{\"error\":{\"message\":\"endpoint error\"}}";
     private String success = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}";
+    /** null — заголовка нет: задержку придётся брать из тела. */
+    private String retryAfter = "120";
 
     private Config config(String extra) throws IOException {
         Path file = dir.resolve("config.properties");
@@ -51,8 +53,15 @@ class QuotaFallbackTest {
             requests.add(request);
             bodies.add(mapper.readTree(bodyOf(request)));
             int status = codes.isEmpty() ? 200 : codes.remove();
-            return new Reply(status, status == 200 ? success : error, request);
+            return new Reply(status, status == 200 ? success : error, request, headers());
         }, pauses::add);
+    }
+
+    private HttpHeaders headers() {
+        if (retryAfter == null) {
+            return HttpHeaders.of(Map.of(), (a, b) -> true);
+        }
+        return HttpHeaders.of(Map.of("Retry-After", List.of(retryAfter)), (a, b) -> true);
     }
 
     @Test
@@ -87,13 +96,81 @@ class QuotaFallbackTest {
 
     @ParameterizedTest
     @ValueSource(ints = {402, 429})
-    void quotaWithoutReserveKeepsOldPolicy(int status) throws Exception {
+    void quotaWithoutReserveStopsAfterASingleRateLimitRetry(int status) throws Exception {
         codes.addAll(List.of(status, status, status));
         var client = client("");
         var failure = assertThrows(LlmFailure.class, () -> client.chat("test", List.of(), null));
         assertEquals(status, failure.status());
-        assertEquals(status == 402 ? 1 : 3, requests.size());
+        assertEquals(status == 402 ? 1 : 2, requests.size());
         assertTrue(models().stream().allMatch("primary"::equals));
+    }
+
+    @Test
+    void googleRetryInfoSetsTheDelayForTheOnlyRetry() throws Exception {
+        // Google кладёт срок в details; без заголовка раньше ждали наугад
+        retryAfter = null;
+        codes.addAll(List.of(429, 200));
+        error = """
+                {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[
+                {"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3s"}]}}
+                """;
+        assertEquals("ok", client("").chat("test", List.of(), null).text());
+        assertEquals(2, requests.size());
+        assertEquals(List.of(Duration.ofSeconds(3)), pauses);
+    }
+
+    @Test
+    void openAiTryAgainHintBecomesTheDelay() throws Exception {
+        retryAfter = null;
+        codes.addAll(List.of(429, 200));
+        error = "{\"error\":{\"message\":\"Rate limit reached; please try again in 4s.\","
+                + "\"code\":\"rate_limit_exceeded\"}}";
+        assertEquals("ok", client("").chat("test", List.of(), null).text());
+        assertEquals(List.of(Duration.ofSeconds(4)), pauses);
+    }
+
+    @Test
+    void subSecondRetryDelayWaitsAtLeastASecond() throws Exception {
+        retryAfter = null;
+        codes.addAll(List.of(429, 200));
+        error = """
+                {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[
+                {"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"0.2s"}]}}
+                """;
+        assertEquals("ok", client("").chat("test", List.of(), null).text());
+        assertEquals(List.of(Duration.ofSeconds(1)), pauses);
+    }
+
+    @Test
+    void rateLimitWithoutAnyHintWaitsLongerThanTheOldFastRetries() throws Exception {
+        // без подсказок пол — пять секунд: прежние две только продлевали лимит
+        retryAfter = null;
+        codes.addAll(List.of(429, 200));
+        assertEquals("ok", client("").chat("test", List.of(), null).text());
+        assertEquals(List.of(Duration.ofSeconds(5)), pauses);
+    }
+
+    @Test
+    void rateLimitBodyIsLoggedMasked() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(OpenAiCompatibleClient.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            codes.addAll(List.of(429, 429));
+            error = "{\"error\":{\"message\":\"quota exceeded for test-primary-key\","
+                    + "\"code\":\"RESOURCE_EXHAUSTED\"}}";
+            assertThrows(LlmFailure.class, () -> client("").chat("test", List.of(), null));
+            String logged = appender.list.stream()
+                    .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            assertTrue(logged.contains("RESOURCE_EXHAUSTED"), logged);
+            assertTrue(logged.contains("[скрыто]"), logged);
+            assertFalse(logged.contains("test-primary-key"), logged);
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     @ParameterizedTest
@@ -142,7 +219,7 @@ class QuotaFallbackTest {
         codes.addAll(List.of(429, 429, 429));
         var client = client("fallback_model=reserve\n");
         assertThrows(LlmFailure.class, () -> client.embedding("memory"));
-        assertEquals(List.of("embedding-test", "embedding-test", "embedding-test"), models());
+        assertEquals(List.of("embedding-test", "embedding-test"), models());
         assertTrue(requests.stream().allMatch(r -> r.uri().getPath().equals("/v1/embeddings")));
     }
 
@@ -220,7 +297,7 @@ class QuotaFallbackTest {
         assertThrows(LlmFailure.class, () -> client.describeImage("vision", "test", "test", new byte[]{1}));
         codes.addAll(List.of(429, 429, 429));
         assertThrows(LlmFailure.class, () -> client.hear("audio", "test", "test", new byte[]{1}, "wav"));
-        assertEquals(List.of("vision", "vision", "vision", "audio", "audio", "audio"), models());
+        assertEquals(List.of("vision", "vision", "audio", "audio"), models());
     }
 
     @Test
@@ -361,9 +438,9 @@ class QuotaFallbackTest {
         return result.join();
     }
 
-    private record Reply(int statusCode, String body, HttpRequest request) implements HttpResponse<String> {
+    private record Reply(int statusCode, String body, HttpRequest request,
+                         HttpHeaders headers) implements HttpResponse<String> {
         public Optional<HttpResponse<String>> previousResponse() { return Optional.empty(); }
-        public HttpHeaders headers() { return HttpHeaders.of(Map.of("Retry-After", List.of("120")), (a, b) -> true); }
         public Optional<SSLSession> sslSession() { return Optional.empty(); }
         public URI uri() { return request.uri(); }
         public HttpClient.Version version() { return HttpClient.Version.HTTP_1_1; }

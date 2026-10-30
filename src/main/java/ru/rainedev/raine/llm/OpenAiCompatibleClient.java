@@ -28,7 +28,23 @@ import ru.rainedev.raine.config.Config;
 public final class OpenAiCompatibleClient implements LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleClient.class);
+
+    /**
+     * Сколько всего попыток на одну ошибку. На 429 их меньше: повтор ровно один,
+     * потому что спешка продлевает лимит, а не обходит его.
+     */
     private static final int MAX_ATTEMPTS = 3;
+
+    /** Google просит подождать в RetryInfo: {"retryDelay":"17s"}. */
+    private static final java.util.regex.Pattern GOOGLE_DELAY =
+            java.util.regex.Pattern.compile("(\\d+(?:\\.\\d+)?)s");
+
+    /** OpenAI пишет срок в текст ошибки: «Please try again in 20ms». */
+    private static final java.util.regex.Pattern TRY_AGAIN =
+            java.util.regex.Pattern.compile("(?i)try again in\\s+(\\d+(?:\\.\\d+)?)\\s*(ms|s|m)\\b");
+
+    /** Дольше часа ждать незачем: уведомление и так устареет. */
+    private static final long MAX_RETRY_SECONDS = 3600;
 
     /**
      * Предел длины ответа. Без него модель изредка застревает в бесконечном
@@ -319,6 +335,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
         boolean retryPrimary = false;
         String toolChoice = body.path("tool_choice").asText("");
         RuntimeException lastFailure = null;
+        int rateLimited = 0;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             if (conversation) {
                 if (!toolChoice.isEmpty() && !(fallback ? fallbackToolChoiceUnsupported : toolChoiceUnsupported)) {
@@ -334,6 +351,10 @@ public final class OpenAiCompatibleClient implements LlmClient {
                 int status = response.statusCode();
                 if (status / 100 == 2) {
                     return new Response(response.body(), fallback);
+                }
+                if (status == 429) {
+                    // для контроля TPM: в теле видно, какой именно лимит выбран
+                    log.warn("Эндпоинт ответил 429: {}", maskedBody(response.body()));
                 }
                 if (conversation && !fallback && !config.fallbackModel().isBlank()
                         && quotaFailure(status, response.body())) {
@@ -373,8 +394,18 @@ public final class OpenAiCompatibleClient implements LlmClient {
                     throw failure;
                 }
                 lastFailure = failure;
+                if (status == 429 && rateLimited >= 1) {
+                    // второй повтор только продлил бы бан: лимит считается по минутам
+                    throw failure;
+                }
                 if (attempt < MAX_ATTEMPTS) {
-                    Duration delay = retryDelay(response.headers().firstValue("Retry-After").orElse(""), attempt);
+                    Duration delay;
+                    if (status == 429) {
+                        rateLimited++;
+                        delay = rateLimitDelay(response, attempt);
+                    } else {
+                        delay = retryDelay(response.headers().firstValue("Retry-After").orElse(""), attempt);
+                    }
                     log.warn("Эндпоинт {}, повтор через {} с", status, delay.toSeconds());
                     pause.accept(delay);
                     continue;
@@ -437,15 +468,102 @@ public final class OpenAiCompatibleClient implements LlmClient {
     }
 
     static Duration retryDelay(String header, int attempt) {
-        long seconds = 2L * attempt;
-        try { seconds = Math.max(seconds, Long.parseLong(header.strip())); }
-        catch (NumberFormatException ignored) {
+        long seconds = Math.max(2L * attempt, retryAfterSeconds(header));
+        return clampDelay(seconds);
+    }
+
+    /** Сколько секунд просит выждать заголовок: число либо дата по RFC 1123. */
+    private static long retryAfterSeconds(String header) {
+        try {
+            return Long.parseLong(header.strip());
+        } catch (NumberFormatException ignored) {
             try {
                 var date = java.time.ZonedDateTime.parse(header, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME);
-                seconds = Math.max(seconds, Duration.between(java.time.Instant.now(), date.toInstant()).toSeconds());
-            } catch (java.time.format.DateTimeParseException invalid) { /* use backoff */ }
+                return Duration.between(java.time.Instant.now(), date.toInstant()).toSeconds();
+            } catch (java.time.format.DateTimeParseException invalid) {
+                return 0;
+            }
         }
-        return Duration.ofSeconds(Math.clamp(seconds, 1, 3600));
+    }
+
+    /** Тело ошибки для журнала: ключи вырезаны, разметка и управляющие символы тоже. */
+    private String maskedBody(String body) {
+        return ErrorNote.of((body == null ? "" : body)
+                .replace(config.apiKey(), "[скрыто]")
+                .replace(config.fallbackApiKey(), "[скрыто]"));
+    }
+
+    /**
+     * Сколько ждать после 429. Сначала то, что назвал сам эндпоинт: retryDelay
+     * из тела, затем Retry-After. Если молчит — пол в пять секунд: прежние две
+     * только продлевали лимит.
+     */
+    private Duration rateLimitDelay(HttpResponse<String> response, int attempt) {
+        java.util.Optional<Duration> stated = retryDelayFromBody(response.body());
+        if (stated.isPresent()) {
+            return clampDelay(stated.get().toSeconds());
+        }
+        long header = retryAfterSeconds(response.headers().firstValue("Retry-After").orElse(""));
+        if (header > 0) {
+            return clampDelay(header);
+        }
+        return clampDelay(5L * attempt);
+    }
+
+    /** Срок из тела 429: Google RetryInfo в details или подсказка OpenAI в тексте. */
+    private java.util.Optional<Duration> retryDelayFromBody(String body) {
+        JsonNode root;
+        try {
+            root = mapper.readTree(body);
+        } catch (IOException e) {
+            return java.util.Optional.empty();
+        }
+        java.util.Optional<Duration> stated = durationOf(root.path("retryDelay"))
+                .or(() -> durationOf(root.path("error").path("retryDelay")))
+                .or(() -> firstRetryDelay(root.path("error").path("details")))
+                .or(() -> firstRetryDelay(root.path("details")));
+        if (stated.isPresent()) {
+            return stated;
+        }
+        java.util.regex.Matcher hint = TRY_AGAIN.matcher(root.path("error").path("message").asText(""));
+        if (!hint.find()) {
+            return java.util.Optional.empty();
+        }
+        double amount = Double.parseDouble(hint.group(1));
+        long seconds = switch (hint.group(2).toLowerCase(java.util.Locale.ROOT)) {
+            case "ms" -> (long) Math.ceil(amount / 1000);
+            case "m" -> (long) Math.ceil(amount * 60);
+            default -> (long) Math.ceil(amount);
+        };
+        return java.util.Optional.of(Duration.ofSeconds(seconds));
+    }
+
+    private static java.util.Optional<Duration> firstRetryDelay(JsonNode details) {
+        if (!details.isArray()) {
+            return java.util.Optional.empty();
+        }
+        for (JsonNode detail : details) {
+            java.util.Optional<Duration> parsed = durationOf(detail.path("retryDelay"));
+            if (parsed.isPresent()) {
+                return parsed;
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
+    private static java.util.Optional<Duration> durationOf(JsonNode node) {
+        if (!node.isTextual()) {
+            return java.util.Optional.empty();
+        }
+        java.util.regex.Matcher matcher = GOOGLE_DELAY.matcher(node.asText().strip());
+        if (!matcher.matches()) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(Duration.ofSeconds((long) Math.ceil(Double.parseDouble(matcher.group(1)))));
+    }
+
+    private static Duration clampDelay(long seconds) {
+        return Duration.ofSeconds(Math.clamp(seconds, 1, MAX_RETRY_SECONDS));
     }
 
     private static void sleep(Duration duration) {
