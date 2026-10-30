@@ -148,6 +148,94 @@ class NotificationLoopTest {
         assertEquals(3, llm.calls);
     }
 
+    /** Действие, видимое человеку: отправка, реакция, стикер. */
+    private static Tool mutating(String name, List<String> acted) {
+        return Tool.named(name).describedAs(name).mutating().build(arguments -> {
+            acted.add(name);
+            return "ok";
+        });
+    }
+
+    /** Чат открывается сам и приносит инструменты переписки. */
+    private static Tool opening(Tool... appears) {
+        return Tool.named("open").describedAs("opens the chat").buildContextual((arguments, addTool) -> {
+            for (Tool tool : appears) {
+                addTool.accept(tool);
+            }
+            return "CHAT OPENED";
+        });
+    }
+
+    private static String seenText(ScriptedLlm llm) {
+        return String.join("\n", llm.seenContexts.getLast().stream()
+                .map(Message::content)
+                .filter(text -> text != null)
+                .toList());
+    }
+
+    @Test
+    void anImpulseActsInOneStepLikeSilence() {
+        // чат открыт на шаге 0, поэтому отправка — первый и единственный шаг:
+        // бездействие не должно быть дешевле действия
+        List<String> acted = new ArrayList<>();
+        Toolbox available = new Toolbox(opening(mutating("send_telegram_message", acted)));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.process(new Notification("порыв", available, true, 777, 777).onOwnInitiative());
+
+        assertEquals(1, llm.calls, "действие не должно стоить дороже молчания");
+        assertEquals(List.of("send_telegram_message"), acted);
+        assertTrue(seenText(llm).contains("CHAT OPENED"), "история открытого чата видна сразу");
+    }
+
+    @Test
+    void anImpulseStillCostsOneStepForSilence() {
+        List<String> acted = new ArrayList<>();
+        Toolbox available = new Toolbox(opening(mutating("send_telegram_message", acted)));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.process(new Notification("порыв", available, true, 777, 777).onOwnInitiative());
+
+        assertEquals(1, llm.calls);
+        assertTrue(acted.isEmpty());
+    }
+
+    @Test
+    void anImpulseIsNotNaggedAboutAsk() {
+        // самостоятельный порыв не обязан консультироваться с памятью
+        List<String> acted = new ArrayList<>();
+        Toolbox always = new Toolbox(Tool.named("ask").describedAs("память").build(arguments -> "memory"));
+        Toolbox available = new Toolbox(opening(mutating("send_telegram_message", acted)));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+
+        loopWith(llm, always).process(new Notification("порыв", available, true, 777, 777).onOwnInitiative());
+
+        String seen = seenText(llm);
+        assertFalse(seen.contains("Have you called #ask yet"), seen);
+        assertFalse(seen.contains("without consulting #ask"), seen);
+    }
+
+    @Test
+    void lastTalkStatusNamesWhenAndWhat() {
+        List<String> acted = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+        loop.process(new Notification("тебе написали"));
+
+        String status = loop.lastTalkStatus();
+        assertTrue(status.contains("last conversation"), status);
+        assertTrue(status.contains("send_telegram_message"), status);
+        assertTrue(status.contains("now"), status);
+    }
+
     @Test
     void rollsBackLowQualityAnswerWithoutStoringIt() {
         Toolbox tools = new Toolbox(Tool.simple("send", "Отправляет", arguments -> {

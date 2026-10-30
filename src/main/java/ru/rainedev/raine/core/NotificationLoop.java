@@ -58,8 +58,11 @@ public final class NotificationLoop {
     /** Как долго после последнего хода разговор считается ещё живым. */
     private static final java.time.Duration TALK_GRACE = java.time.Duration.ofMinutes(10);
 
-    /** Конец последнего живого хода. Пишет и читает один и тот же поток ядра. */
-    private java.time.Instant lastTalk = Instant.EPOCH;
+    /** Конец последнего живого хода. Читает и планировщик порывов. */
+    private volatile java.time.Instant lastTalk = Instant.EPOCH;
+
+    /** Чем закончился последний ход: отправка, реакция или молчание. */
+    private volatile String lastTalkAction = "";
 
     private static final String ASK_REMINDER = """
             [system] Have you called #ask yet this turn? If the message involves personal topics, past events, \
@@ -118,6 +121,8 @@ public final class NotificationLoop {
         boolean prepared;
         /** До первого текстового промаха шаги свободные, дальше до конца хода — только вызовы. */
         boolean forceToolCall;
+        /** Последнее действие, видимое человеку: send_telegram_message, react_with_emoji. */
+        String lastAction = "";
         Turn(Notification notification) { this.notification = notification; }
     }
 
@@ -313,6 +318,36 @@ public final class NotificationLoop {
         return List.copyOf(context);
     }
 
+    /** Краткий статус последнего завершённого разговора для спонтанного порыва. */
+    public String lastTalkStatus() {
+        Instant at = lastTalk;
+        if (at.equals(Instant.EPOCH)) {
+            return "";
+        }
+        String action = lastTalkAction.isEmpty() ? "stayed silent" : lastTalkAction;
+        return "The last conversation ended %s; the last action was %s."
+                .formatted(ago(Duration.between(at, Instant.now())), action);
+    }
+
+    private static String ago(Duration elapsed) {
+        long minutes = elapsed.toMinutes();
+        if (minutes < 1) {
+            return "just now";
+        }
+        if (minutes < 60) {
+            return minutes + (minutes == 1 ? " minute ago" : " minutes ago");
+        }
+        long hours = elapsed.toHours();
+        if (hours < 24) {
+            long rest = minutes % 60;
+            return rest == 0
+                    ? hours + (hours == 1 ? " hour ago" : " hours ago")
+                    : hours + " h " + rest + " min ago";
+        }
+        long days = hours / 24;
+        return days + (days == 1 ? " day ago" : " days ago");
+    }
+
     public void clearContext() {
         context.clear();
         // разговор ушёл в дневник — следующему его метка достаться не должна
@@ -454,7 +489,8 @@ public final class NotificationLoop {
             // набор пересобирается каждый шаг: инструменты появляются по ходу дела.
             // открытие чата добавляет отправку — со снимком, снятым заранее, её бы не было
             Toolbox tools = withFinishingTools(notification.tools());
-            if (!turn.prepared && !askedThisTurn && tools.names().contains("ask")) {
+            if (!turn.prepared && !askedThisTurn && !notification.initiative()
+                    && tools.names().contains("ask")) {
                 // напоминание встаёт прямо перед выбором действия, чтобы модель его заметила
                 appendToLast(ASK_REMINDER);
             }
@@ -505,7 +541,7 @@ public final class NotificationLoop {
                 recallMemories = false;
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
-                    lastTalk = Instant.now();
+                    endTurn(turn);
                     active = null;
                     return;
                 }
@@ -517,7 +553,7 @@ public final class NotificationLoop {
                 if (response.totalTokens() > contextTokenLimit) {
                     log.warn("Контекст переполнен, а подходящий ответ не найден — сбрасываем");
                     onContextOverflow.run();
-                    lastTalk = Instant.now();
+                    endTurn(turn);
                     active = null;
                     return;
                 }
@@ -527,6 +563,11 @@ public final class NotificationLoop {
             context.add(response.firstMessage().orElseThrow());
             context.addAll(results);
 
+            String visible = visibleAction(calls, tools);
+            if (!visible.isEmpty()) {
+                turn.lastAction = visible;
+            }
+
             // после отправки сообщения за воспоминаниями не ходим: подмешанные между
             // репликами, они сбивают мысль, и вместо связного ответа выходит поток
             // случайных фактов
@@ -534,17 +575,17 @@ public final class NotificationLoop {
             askedThisTurn |= calls.stream().anyMatch(call -> "ask".equals(call.name()));
             turn.asked = askedThisTurn;
             turn.recall = recallMemories;
-            if (!askedThisTurn && !recallMemories) {
+            if (!notification.initiative() && !askedThisTurn && !recallMemories) {
                 appendToLast(ASK_MISSED);
             }
 
-            if (calls.stream().anyMatch(call -> Toolbox.FINISHING.contains(call.name()))) {
+            if (calls.stream().anyMatch(call -> finishes(notification, tools, call))) {
                 reportCost(startedAt, spentTokens, step + 1);
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
                 }
                 // ход кончился — разговор только что был живым, ночь подождёт
-                lastTalk = Instant.now();
+                endTurn(turn);
                 active = null;
                 return;
             }
@@ -557,8 +598,46 @@ public final class NotificationLoop {
 
         reportCost(startedAt, spentTokens, MAX_STEPS_PER_NOTIFICATION);
         log.warn("Достигнут предел шагов — прекращаем ход принудительно");
-        lastTalk = Instant.now();
+        endTurn(turn);
         active = null;
+    }
+
+    /** Ход закончился: запоминаем время и последнее видимое действие. */
+    private void endTurn(Turn turn) {
+        lastTalkAction = turn.lastAction;
+        lastTalk = Instant.now();
+    }
+
+    /**
+     * Действие, которое человек увидит: отправка, реакция, стикер. Служебные
+     * шаги вроде поиска по чатам сюда не входят — о них пора вспоминать незачем.
+     */
+    private static String visibleAction(List<ToolCall> calls, Toolbox tools) {
+        String acted = "";
+        for (ToolCall call : calls) {
+            if (Toolbox.FINISHING.contains(call.name())) {
+                continue;
+            }
+            boolean mutating = tools.all().stream()
+                    .anyMatch(tool -> tool.name().equals(call.name()) && tool.mutates());
+            if (mutating) {
+                acted = call.name();
+            }
+        }
+        return acted;
+    }
+
+    /**
+     * Порыв заканчивается на первом видимом действии: чат уже открыт, и
+     * отправка не должна стоить дороже молчания. В обычном разговоре ход
+     * продолжается — там реплики складываются в беседу.
+     */
+    private static boolean finishes(Notification notification, Toolbox tools, ToolCall call) {
+        if (Toolbox.FINISHING.contains(call.name())) {
+            return true;
+        }
+        return notification.initiative() && tools.all().stream()
+                .anyMatch(tool -> tool.name().equals(call.name()) && tool.mutates());
     }
 
     /**

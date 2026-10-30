@@ -35,21 +35,19 @@ public final class Spontaneity implements AutoCloseable {
     private static final double CHANCE = 0.5;
 
     private static final String PROMPT = """
-            </your_diary_page>
-
             It's time to reflect on your thoughts!
               - maybe make some reasoning?
               - maybe do some reflection?
-              - maybe write to a person and initiate a dialogue? whom you would like to write? maybe call \
-            #get_telegram_chats? You can open one chat at a time - choose wisely!
-            Act proactively!""";
+            %s
+              - If you truly have nothing to say, call #wait. Staying silent is a real choice, not an obligation.""";
 
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("rin-impulse").factory());
 
     private final NotificationLoop loop;
     private final Diary diary;
-    private final Toolbox tools;
+    private final Toolbox ownerChat;
+    private final long personId;
     private final RandomGenerator random;
 
     private java.util.function.BooleanSupplier asleep = () -> false;
@@ -62,10 +60,17 @@ public final class Spontaneity implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicBoolean acting =
             new java.util.concurrent.atomic.AtomicBoolean();
 
-    public Spontaneity(NotificationLoop loop, Diary diary, Toolbox tools, RandomGenerator random) {
+    /**
+     * @param ownerChat набор с инструментом открытия лички владельца: он же
+     *                  открывается на шаге 0, поэтому писать можно без разведки
+     * @param personId  владелец порыва; ноль — писать некому, останется размышление
+     */
+    public Spontaneity(NotificationLoop loop, Diary diary, Toolbox ownerChat, long personId,
+                       RandomGenerator random) {
         this.loop = loop;
         this.diary = diary;
-        this.tools = tools;
+        this.ownerChat = ownerChat;
+        this.personId = personId;
         this.random = random;
     }
 
@@ -121,7 +126,7 @@ public final class Spontaneity implements AutoCloseable {
             }
             log.info("Захотелось написать самой");
             acting.set(true);
-            Notification impulse = new Notification(buildPrompt(), tools);
+            Notification impulse = buildImpulse();
             pending.set(impulse);
             loop.submit(impulse);
         } catch (RuntimeException e) {
@@ -139,7 +144,26 @@ public final class Spontaneity implements AutoCloseable {
     String buildPrompt() {
         StringBuilder prompt = new StringBuilder("<your_diary_page just_for_reasoning no_plagiarism no_copy>\n");
         randomEntry().ifPresent(entry -> prompt.append(Markup.body(entry.body())).append('\n'));
-        return prompt.append(PROMPT).toString();
+        prompt.append("</your_diary_page>\n\n");
+        // без этого порыв слеп к тому, что было совсем недавно: она писала бы
+        // снова через минуту после разговора или будила бы человека ночью
+        String status = loop.lastTalkStatus();
+        if (!status.isEmpty()) {
+            prompt.append("<last_conversation>\n").append(status).append("\n</last_conversation>\n\n");
+        }
+        String invitation = ownerChat.isEmpty()
+                ? "  - maybe write to someone? You may need to open a chat first."
+                : "  - maybe write to someone? The chat is already open — you can send a message or react "
+                        + "right away.";
+        return prompt.append(PROMPT.formatted(invitation)).toString();
+    }
+
+    /**
+     * Порыв с уже открытым чатом владельца: шаг 0 — открытие, шаг 1 — действие
+     * или молчание. Набор намеренно узкий, остальные инструменты добавит цикл.
+     */
+    Notification buildImpulse() {
+        return new Notification(buildPrompt(), ownerChat, true, personId, personId).onOwnInitiative();
     }
 
     /**

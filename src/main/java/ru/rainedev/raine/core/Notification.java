@@ -13,8 +13,15 @@ package ru.rainedev.raine.core;
  * @param chatId   чат, из которого пришёл повод. Ответа не досталось — чат
  *                 снова повиснет непрочитанным, иначе его уже не найти. Ноль —
  *                 событие не из переписки и отмечать негде
+ * @param initiative порыв, а не ответ: чат уже открыт, отправка заканчивает ход,
+ *                 и напоминать про #ask не нужно — она сама решила заговорить
  */
-public record Notification(String text, Toolbox tools, boolean ownText, long personId, long chatId) {
+public record Notification(String text, Toolbox tools, boolean ownText, long personId, long chatId,
+                           boolean initiative) {
+
+    public Notification(String text, Toolbox tools, boolean ownText, long personId, long chatId) {
+        this(text, tools, ownText, personId, chatId, false);
+    }
 
     public Notification(String text, Toolbox tools, boolean ownText) {
         this(text, tools, ownText, 0, 0);
@@ -30,7 +37,12 @@ public record Notification(String text, Toolbox tools, boolean ownText, long per
 
     /** То же событие, но теперь известно, кто его принёс. */
     public Notification about(long personId) {
-        return new Notification(text, tools, ownText, personId, chatId);
+        return new Notification(text, tools, ownText, personId, chatId, initiative);
+    }
+
+    /** Тот же повод, но заговорить с ним решила она сама. */
+    public Notification onOwnInitiative() {
+        return new Notification(text, tools, ownText, personId, chatId, true);
     }
 
     /**
@@ -39,6 +51,6 @@ public record Notification(String text, Toolbox tools, boolean ownText, long per
      * вернуть в непрочитанные.
      */
     public Notification from(long chatId) {
-        return new Notification(text, tools, ownText, personId, chatId);
+        return new Notification(text, tools, ownText, personId, chatId, initiative);
     }
 }

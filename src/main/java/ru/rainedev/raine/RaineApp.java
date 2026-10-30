@@ -430,7 +430,13 @@ public final class RaineApp implements AutoCloseable {
         log.info("Рост личности: {}", config.characterGrowthEnabled() ? "включён" : "выключен");
         log.info("Счёт доверия: {}", config.trustLedgerEnabled() ? "ведётся" : "не ведётся");
 
-        spontaneity = new Spontaneity(loop, diary, always, random);
+        // порыв адресован владельцу, поэтому его личка открывается на шаге 0:
+        // отправка и реакция доступны сразу, как и молчание
+        Toolbox ownerChat = newToolbox();
+        if (config.ownerId() > 0) {
+            ownerChat.add(tools.open(config.ownerId()));
+        }
+        spontaneity = new Spontaneity(loop, diary, ownerChat, config.ownerId(), random);
         spontaneity.asleepWhen(rest::isResting);
         tools.actingOnImpulse(spontaneity::isActing);
         spontaneity.start();
