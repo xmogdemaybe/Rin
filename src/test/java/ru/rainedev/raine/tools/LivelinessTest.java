@@ -156,28 +156,64 @@ class LivelinessTest {
     }
 
     @Test
-    void relaxesAfterRejectionSoItDoesNotLoopForever() {
-        // иначе модели, которой нечего добавить, отказывают до предела шагов
-        LlmClient llm = new VectorsByText(Map.of("одно и то же", new double[] {1, 0, 0}));
+    void verbatimRepeatOfASentMessageNeverGetsThrough() {
+        // поблажка придумана для перефраз, но именно она пропускала в чат
+        // слово в слово отправленное: схожесть повтора равна 1.00, а порог
+        // после отказа — 0.95 + 0.07, то есть выше самого повтора
+        LlmClient llm = new VectorsByText(Map.of("ой, интригуешь, давай показывай", new double[] {1, 0, 0}));
         AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
-        antiRepeat.check("одно и то же");
+        antiRepeat.check("ой, интригуешь, давай показывай");
 
-        assertThrows(LowQualityException.class, () -> antiRepeat.check("одно и то же"));
-
-        // послабление копится: рано или поздно даже дословный повтор проходит,
-        // иначе ход упрётся в предел шагов и Raine промолчит
-        int attempts = 0;
-        boolean accepted = false;
-        while (attempts++ < 10 && !accepted) {
-            try {
-                antiRepeat.check("одно и то же");
-                accepted = true;
-            } catch (LowQualityException ignored) {
-                // ещё не отпустило
-            }
+        for (int attempt = 1; attempt <= 10; attempt++) {
+            assertThrows(LowQualityException.class,
+                    () -> antiRepeat.check("ой, интригуешь, давай показывай"),
+                    "попытка " + attempt + ": уже сказанное не проходит ни разу");
         }
-        assertTrue(accepted, "отказ не должен быть вечным, попыток: " + attempts);
-        assertTrue(attempts < 6, "но и упрямиться слишком долго незачем, попыток: " + attempts);
+    }
+
+    @Test
+    void relaxesAfterRejectionSoRephrasingGetsThrough() {
+        // иначе модели, которой нечего добавить, отказывают до предела шагов:
+        // новые слова, похожие по смыслу, должны пройти после первой поблажки
+        LlmClient llm = new VectorsByText(Map.of(
+                "давай показывай скорее", new double[] {1, 0, 0},
+                "показывай уже скорее", new double[] {1, 0, 0}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        antiRepeat.remember("сегодня холодно, я сплю");
+        antiRepeat.remember("а ты уже ел?");
+        antiRepeat.check("давай показывай скорее");
+
+        assertThrows(LowQualityException.class, () -> antiRepeat.check("показывай уже скорее"));
+
+        antiRepeat.check("показывай уже скорее");
+    }
+
+    @Test
+    void refusalNamesTheWordsAlreadySent() {
+        // без них модель не знает, от чего именно её отвернули, и при низкой
+        // температуре выдаёт ту же фразу — тогда откат стоит ещё одного шага
+        LlmClient llm = new VectorsByText(Map.of("я рядом, если что", new double[] {1, 0, 0}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        antiRepeat.check("я рядом, если что");
+
+        LowQualityException refusal = assertThrows(LowQualityException.class,
+                () -> antiRepeat.check("я рядом, если что"));
+
+        assertTrue(refusal.getMessage().contains("я рядом, если что"), refusal.getMessage());
+        assertTrue(refusal.getMessage().startsWith("ты повторяешься"), refusal.getMessage());
+    }
+
+    @Test
+    void refusalQuoteStaysShort() {
+        String longMessage = "а".repeat(4000);
+        LlmClient llm = new VectorsByText(Map.of(longMessage, new double[] {1, 0, 0}));
+        AntiRepeat antiRepeat = new AntiRepeat(llm, "ты повторяешься");
+        antiRepeat.check(longMessage);
+
+        LowQualityException refusal = assertThrows(LowQualityException.class, () -> antiRepeat.check(longMessage));
+
+        assertTrue(refusal.getMessage().length() < 400, "длина отказа " + refusal.getMessage().length());
+        assertTrue(refusal.getMessage().contains("а".repeat(50)), refusal.getMessage());
     }
 
     @Test

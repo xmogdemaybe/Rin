@@ -1,12 +1,14 @@
 package ru.rainedev.raine.tools;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.LowQualityException;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.memory.Similarity;
+import ru.rainedev.raine.phone.Markup;
 
 /**
  * Ловит повторы: самое заметное, что выдаёт бота — одно и то же разными словами.
@@ -26,6 +28,9 @@ public final class AntiRepeat {
      * снова получает отказ, и так до предела шагов.
      */
     private static final double INDULGENCE_STEP = 0.07;
+
+    /** Сколько слов уже сказанного показывать модели в отказе. */
+    private static final int QUOTE_LIMIT = 200;
 
     private final LlmClient llm;
     private final java.util.function.Supplier<String> rejectionPrompt;
@@ -55,11 +60,15 @@ public final class AntiRepeat {
 
     /** Сообщения из истории чата — чтобы не повторяться и после перезапуска. */
     public void remember(String text) {
-        if (text == null || text.isBlank() || spoken.containsKey(text)) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        String key = normalize(text);
+        if (spoken.containsKey(key)) {
             return;
         }
         try {
-            spoken.put(text, llm.embedding(text));
+            spoken.put(key, llm.embedding(text));
         } catch (RuntimeException e) {
             log.debug("Не удалось запомнить сообщение для проверки на повтор: {}", e.getMessage());
         }
@@ -73,6 +82,14 @@ public final class AntiRepeat {
         if (spoken.isEmpty()) {
             remember(text);
             return;
+        }
+
+        // Дословный повтор уже отправленного — не перефраз, и поблажка для
+        // перефразованных слов как раз его и пропускала: схожесть равна 1.00,
+        // а порог после отказа поднимается выше. В чате это второй тот же текст.
+        String key = normalize(text);
+        if (spoken.containsKey(key)) {
+            refuse("повтор дословно сказанного", text, false);
         }
 
         double[] target;
@@ -94,21 +111,40 @@ public final class AntiRepeat {
         double avgSimilarity = sum / spoken.size();
 
         if (maxSimilarity > limits.triggerMax() + indulgence) {
-            reject("повтор сказанного ранее, схожесть %.2f".formatted(maxSimilarity));
+            refuse("повтор сказанного ранее, схожесть %.2f".formatted(maxSimilarity), text, true);
         }
         if (avgSimilarity > limits.triggerAvg() + indulgence) {
-            reject("хождение по кругу, средняя схожесть %.2f".formatted(avgSimilarity));
+            refuse("хождение по кругу, средняя схожесть %.2f".formatted(avgSimilarity), text, true);
         }
 
         indulgence = 0;
-        spoken.put(text, target);
+        spoken.put(key, target);
         forgetOldest();
     }
 
-    private void reject(String reason) {
-        indulgence += INDULGENCE_STEP;
+    /**
+     * @param indulges копить ли поблажку: у перефразированных слов есть шанс
+     *                 стать новыми, а у дословного повтора отправленного — нет.
+     */
+    private void refuse(String reason, String text, boolean indulges) {
+        if (indulges) {
+            indulgence += INDULGENCE_STEP;
+        }
         log.info("Отклонено как повтор: {}", reason);
-        throw new LowQualityException(rejectionPrompt.get());
+        // без этих слов модель не знает, от чего именно её отвернули, и при
+        // низкой температуре выдаёт ту же фразу ещё раз — за ещё один шаг
+        throw new LowQualityException(rejectionPrompt.get() + "\n- you already sent exactly this: «"
+                + quote(text) + "»");
+    }
+
+    /** Сравнение повторов не должно зависеть от пробелов и регистра. */
+    private static String normalize(String text) {
+        return text.replaceAll("\\s+", " ").strip().toLowerCase(Locale.ROOT);
+    }
+
+    private static String quote(String text) {
+        String safe = Markup.body(text).replaceAll("\\s+", " ").strip();
+        return safe.length() <= QUOTE_LIMIT ? safe : safe.substring(0, QUOTE_LIMIT) + "…";
     }
 
     private void forgetOldest() {
