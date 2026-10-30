@@ -389,22 +389,34 @@ public interface TelegramActions {
             TdApi.Chat chat = ask(new TdApi.GetChat(chatId));
 
             TdApi.SetMessageSenderBlockList request = new TdApi.SetMessageSenderBlockList();
-            // в личке блокируют человека, а не чат: с типом чата запрос проходит,
-            // но никого не блокирует
-            request.senderId = chat.type instanceof TdApi.ChatTypePrivate priv
-                    ? new TdApi.MessageSenderUser(priv.userId)
-                    : new TdApi.MessageSenderChat(chatId);
+            request.senderId = blockTarget(chatId, chat);
             request.blockList = new TdApi.BlockListMain();
             ask(request);
 
-            // из группы и канала просто уходят
-            if (!(chat.type instanceof TdApi.ChatTypePrivate)) {
-                try {
-                    ask(new TdApi.LeaveChat(chatId));
-                } catch (RuntimeException e) {
-                    log.debug("Не удалось выйти из чата {}: {}", chatId, e.getMessage());
-                }
+            if (!shouldLeaveChat(chat)) {
+                return;
             }
+            // из группы и канала просто уходят
+            try {
+                ask(new TdApi.LeaveChat(chatId));
+            } catch (RuntimeException e) {
+                log.debug("Не удалось выйти из чата {}: {}", chatId, e.getMessage());
+            }
+        }
+
+        /**
+         * Кого ставить в блок-лист: в личке блокируют человека, а не чат —
+         * с идентификатором чата запрос проходит, но никого не блокирует.
+         */
+        static TdApi.MessageSender blockTarget(long chatId, TdApi.Chat chat) {
+            return chat.type instanceof TdApi.ChatTypePrivate priv
+                    ? new TdApi.MessageSenderUser(priv.userId)
+                    : new TdApi.MessageSenderChat(chatId);
+        }
+
+        /** Из приватного чата не выходят: там нечего покидать, остаётся только блок. */
+        static boolean shouldLeaveChat(TdApi.Chat chat) {
+            return !(chat.type instanceof TdApi.ChatTypePrivate);
         }
     }
 
