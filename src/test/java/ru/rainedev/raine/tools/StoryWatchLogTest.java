@@ -14,9 +14,9 @@ class StoryWatchLogTest {
 
     @Test
     void theLogNamesTheStoryAndWhatWasSeen() {
-        String note = TelegramTools.watched(5501583141L, 12, "<photo description>\nснег\n</photo>");
+        String note = TelegramTools.watched(7770000001L, 12, "<photo description>\nснег\n</photo>");
 
-        assertTrue(note.contains("Историю 12 чата 5501583141"), note);
+        assertTrue(note.contains("Историю 12 чата 7770000001"), note);
         assertTrue(note.contains("снег"), "без содержимого строчка бесполезна: " + note);
     }
 

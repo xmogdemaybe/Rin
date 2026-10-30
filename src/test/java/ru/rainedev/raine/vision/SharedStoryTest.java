@@ -243,12 +243,12 @@ class SharedStoryTest {
         // описание встаёт один раз, а вернуться к истории можно и позже — для
         // этого нужны чат автора и её номер, больше взять их неоткуда
         TdApi.MessageStory shared = new TdApi.MessageStory();
-        shared.storyPosterChatId = 5501583141L;
+        shared.storyPosterChatId = 7770000001L;
         shared.storyId = 12;
 
         String marker = MessageContent.describe(shared);
 
-        assertTrue(marker.contains("chat_id=5501583141"), marker);
+        assertTrue(marker.contains("chat_id=7770000001"), marker);
         assertTrue(marker.contains("story_id=12"), marker);
     }
 
