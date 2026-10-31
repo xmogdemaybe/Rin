@@ -124,9 +124,17 @@ public final class Spontaneity implements AutoCloseable {
             if (random.nextDouble() >= CHANCE) {
                 return;
             }
+            // порыв строится на воспоминании: без него в промпт ложится пустой
+            // тег, и тяжёлый запрос уходит в модель лишь затем, чтобы та
+            // подтвердила, что сказать нечего
+            java.util.Optional<DiaryEntry> reason = randomEntry();
+            if (reason.isEmpty()) {
+                log.debug("Вспомнить нечего — порыв не идёт в модель");
+                return;
+            }
             log.info("Захотелось написать самой");
             acting.set(true);
-            Notification impulse = buildImpulse();
+            Notification impulse = buildImpulse(reason);
             pending.set(impulse);
             loop.submit(impulse);
         } catch (RuntimeException e) {
@@ -142,8 +150,12 @@ public final class Spontaneity implements AutoCloseable {
      * не заглядывая в планировщик.
      */
     String buildPrompt() {
+        return buildPrompt(randomEntry());
+    }
+
+    private String buildPrompt(java.util.Optional<DiaryEntry> reason) {
         StringBuilder prompt = new StringBuilder("<your_diary_page just_for_reasoning no_plagiarism no_copy>\n");
-        randomEntry().ifPresent(entry -> prompt.append(Markup.body(entry.body())).append('\n'));
+        reason.ifPresent(entry -> prompt.append(Markup.body(entry.body())).append('\n'));
         prompt.append("</your_diary_page>\n\n");
         // без этого порыв слеп к тому, что было совсем недавно: она писала бы
         // снова через минуту после разговора или будила бы человека ночью
@@ -163,7 +175,11 @@ public final class Spontaneity implements AutoCloseable {
      * или молчание. Набор намеренно узкий, остальные инструменты добавит цикл.
      */
     Notification buildImpulse() {
-        return new Notification(buildPrompt(), ownerChat, true, personId, personId).onOwnInitiative();
+        return buildImpulse(randomEntry());
+    }
+
+    private Notification buildImpulse(java.util.Optional<DiaryEntry> reason) {
+        return new Notification(buildPrompt(reason), ownerChat, true, personId, personId).onOwnInitiative();
     }
 
     /**

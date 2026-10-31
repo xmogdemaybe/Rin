@@ -181,6 +181,23 @@ class SpontaneityTest {
     }
 
     @Test
+    void withoutAMemoryThereIsNothingToAsk(@TempDir Path dir) {
+        // пустой тег вместо воспоминания: тяжёлый запрос уходит в модель, а
+        // та лишь подтверждает, что сказать нечего
+        Diary diary = new Diary(dir);
+        NotificationLoop loop = loop();
+
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, new Random(1))) {
+            for (int attempt = 0; attempt < 40; attempt++) {
+                spontaneity.actNow();
+            }
+
+            assertEquals(0, loop.queued(), "без повода порыв не идёт в модель");
+            assertFalse(spontaneity.isActing(), "и не остаётся висеть незакрытым");
+        }
+    }
+
+    @Test
     void impulseDoesNotConsumeTheDiary(@TempDir Path dir) {
         // повод вспомнить не стирает само воспоминание: иначе после нескольких
         // порывов в дневнике оставалось бы всё меньше того, что видно
