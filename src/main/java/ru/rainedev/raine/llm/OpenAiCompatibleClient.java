@@ -359,6 +359,11 @@ public final class OpenAiCompatibleClient implements LlmClient {
                 if (status / 100 == 2) {
                     return new Response(response.body(), fallback);
                 }
+                if (conversation) {
+                    // отвергнутый запрос разбирают по той же паре файлов: текст
+                    // ошибки не говорит, какое именно тело ему не понравилось
+                    Transcript.save(body, response.body());
+                }
                 if (status == 429) {
                     // для контроля TPM: в теле видно, какой именно лимит выбран
                     log.warn("Эндпоинт ответил 429: {}", maskedBody(response.body()));
@@ -378,6 +383,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
                     if (fallback) fallbackUsesSignatures = true;
                     else primaryUsesSignatures = true;
                     attempt--;
+                    log.warn("Эндпоинт потребовал thought_signature — повторяю с маркером импортированной истории");
                     continue;
                 }
                 if (conversation && status == 400 && TOOL_CHOICE_REQUIRED.equals(body.path("tool_choice").asText())) {

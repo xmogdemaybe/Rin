@@ -433,6 +433,26 @@ class QuotaFallbackTest {
                 .at("/messages/1/tool_calls/0/extra_content/google/thought_signature").asText());
     }
 
+    /** Отказ эндпоинта без записи разговора разбирается вслепую. */
+    @Test
+    void rejectedRequestIsTranscribedLikeASuccessfulOne() throws Exception {
+        codes.addAll(List.of(400, 400, 400));
+        error = "{\"error\":{\"message\":\"Function call is missing a thought_signature\"}}";
+        assertThrows(LlmFailure.class,
+                () -> client("").chat("test", List.of(Message.user("привет")), null));
+
+        Path transcript = dir.resolve("transcript");
+        assertTrue(Files.isDirectory(transcript), "отказ не оставил ни одной записи");
+        List<String> kept;
+        try (var files = Files.list(transcript)) {
+            kept = files.map(path -> path.getFileName().toString()).sorted().toList();
+        }
+        String request = kept.stream().filter(name -> name.endsWith(".0request.json")).findFirst().orElse("");
+        String response = kept.stream().filter(name -> name.endsWith(".1response.json")).findFirst().orElse("");
+        assertTrue(Files.readString(transcript.resolve(request)).contains("привет"), kept.toString());
+        assertTrue(Files.readString(transcript.resolve(response)).contains("thought_signature"), kept.toString());
+    }
+
     private static String signedTool(String signature) {
         return """
                 {"choices":[{"message":{"role":"assistant","tool_calls":[{
