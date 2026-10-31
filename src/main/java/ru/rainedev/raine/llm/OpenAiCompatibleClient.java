@@ -310,10 +310,17 @@ public final class OpenAiCompatibleClient implements LlmClient {
 
     private synchronized void rememberThoughtSignatures(ChatResponse parsed, String response, String model,
                                                        boolean fallback) throws IOException {
-        JsonNode calls = mapper.readTree(response).path("choices").path(0).path("message").path("tool_calls");
+        JsonNode message = mapper.readTree(response).path("choices").path(0).path("message");
+        JsonNode calls = message.path("tool_calls");
+        // у вызова, написанного текстом, своей записи в tool_calls нет: тогда
+        // модель помечает подписью сообщение целиком
+        String messageSignature = message.path("extra_content").path("google").path("thought_signature").asText("");
         List<ToolCall> parsedCalls = parsed.toolCalls();
         for (int c = 0; c < parsedCalls.size(); c++) {
             String signature = calls.path(c).path("extra_content").path("google").path("thought_signature").asText("");
+            if (signature.isBlank()) {
+                signature = messageSignature;
+            }
             if (!signature.isBlank()) {
                 if (fallback) fallbackUsesSignatures = true;
                 else primaryUsesSignatures = true;

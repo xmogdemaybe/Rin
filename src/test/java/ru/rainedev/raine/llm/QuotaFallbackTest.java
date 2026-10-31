@@ -410,6 +410,29 @@ class QuotaFallbackTest {
         assertEquals("Пора спать.", response.text());
     }
 
+    /**
+     * Когда вызов приходит текстом, Gemini ставит подпись не у вызова, а у
+     * сообщения целиком. Без неё следующий шаг с восстановленным вызовом
+     * отбивается 400, и решение теряется вместе с сообщением.
+     */
+    @Test
+    void aTextCallCarriesTheSignatureOfItsMessage() throws Exception {
+        success = """
+                {"choices":[{"message":{"role":"assistant","content":
+                "tool call #send_telegram_message({text:Споки ноки})",
+                "extra_content":{"google":{"thought_signature":"message-signature"}}}}]}
+                """;
+        var tools = mapper.readTree("[{\"type\":\"function\",\"function\":{\"name\":\"send_telegram_message\"}}]");
+        var client = client("");
+        var written = client.chat("test", List.of(), tools).firstMessage().orElseThrow();
+
+        client.chat("test", List.of(written,
+                Message.toolResult(written.toolCallsOrEmpty().getFirst().id(), "ok")), tools);
+
+        assertEquals("message-signature", bodies.get(1)
+                .at("/messages/1/tool_calls/0/extra_content/google/thought_signature").asText());
+    }
+
     private static String signedTool(String signature) {
         return """
                 {"choices":[{"message":{"role":"assistant","tool_calls":[{
