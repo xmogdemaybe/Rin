@@ -742,19 +742,47 @@ public final class RaineApp implements AutoCloseable {
         if (handledAsCommand(message, senderId)) {
             return;
         }
-        notifyAbout(message, senderId);
+        notifyAbout(message, senderId, false);
     }
 
-    private void noticeLater() {
-        int seconds = settings == null ? config.noticeDelaySeconds() : settings.current().noticeDelaySeconds();
-        if (seconds <= 0) {
+    private void noticeLater(NoticeLane lane) {
+        Config current = settings == null ? config : settings.current();
+        long millis = noticeDelayMillis(lane, current.noticeDelaySeconds(),
+                current.noticeDelayOtherMinSeconds(), current.noticeDelayOtherMaxSeconds(), random);
+        if (millis <= 0) {
             return;
         }
         try {
-            Thread.sleep(java.time.Duration.ofMillis(random.nextInt(seconds * 1000)));
+            Thread.sleep(java.time.Duration.ofMillis(millis));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /** Чьё сообщение она замечает: важное, чужое или то, что пришло без неё. */
+    enum NoticeLane { IMPORTANT, OTHER, CAUGHT_UP }
+
+    /**
+     * Сколько прождать, прежде чем уведомление до неё дойдёт.
+     * <p>
+     * Важное — папик и закреплённые чаты — идёт по прежней полосе от нуля до
+     * notice_delay_seconds. Остальным нужен разброс «глянула на экране
+     * блокировки», с обоими краями включительно: мгновенный ответ чужому
+     * сообщению выдаёт бота. Догон непрочитанного не ждёт ничего — после
+     * простоя экран уже виден, а пауза на каждый чат вешала бы очередь
+     * на минуты.
+     */
+    static long noticeDelayMillis(NoticeLane lane, int ownerSeconds, int otherMin, int otherMax,
+                                  java.util.random.RandomGenerator random) {
+        if (lane == NoticeLane.CAUGHT_UP) {
+            return 0;
+        }
+        if (lane == NoticeLane.IMPORTANT) {
+            return ownerSeconds <= 0 ? 0 : random.nextLong(ownerSeconds * 1000L);
+        }
+        int top = Math.max(0, otherMax);
+        int bottom = Math.min(Math.max(0, otherMin), top);
+        return top == 0 ? 0 : bottom * 1000L + random.nextLong((top - bottom) * 1000L + 1);
     }
 
     /**
@@ -784,7 +812,7 @@ public final class RaineApp implements AutoCloseable {
                 if (!lockdown.allows(chat, telegram.isContact(senderId))) {
                     continue;
                 }
-                notifyAbout(chat.lastMessage, senderId);
+                notifyAbout(chat.lastMessage, senderId, true);
                 found++;
             }
             if (found > 0) {
@@ -822,12 +850,24 @@ public final class RaineApp implements AutoCloseable {
         return version == null ? "из исходников" : version;
     }
 
-    private void notifyAbout(TdApi.Message message, long senderId) {
-        // человек не бросается к телефону в ту же секунду: он замечает уведомление
-        // не сразу. Без этой паузы ответ приходит подозрительно мгновенно
-        noticeLater();
-
+    /**
+     * @param caughtUp это догон непрочитанного: после простоя она экран уже
+     *                 видела, и делать вид, что замечает сообщение спустя
+     *                 полминуты, незачем
+     */
+    private void notifyAbout(TdApi.Message message, long senderId, boolean caughtUp) {
         TdApi.Chat chat = telegram.chat(message.chatId);
+
+        // сообщение владельца и закреплённые чаты идут вне очереди: остальное
+        // подождёт, а это — то, ради чего она вообще здесь
+        boolean important = senderId == config.ownerId()
+                || (behaviour().wakeOnPinnedChat() && telegram.isPinned(chat.id));
+
+        // она замечает уведомление не сразу: без паузы ответ приходит подозрительно мгновенно
+        NoticeLane lane = caughtUp ? NoticeLane.CAUGHT_UP
+                : important ? NoticeLane.IMPORTANT : NoticeLane.OTHER;
+        noticeLater(lane);
+
         ChatKind kind = ChatKind.of(chat);
 
         String text = switch (kind) {
@@ -848,10 +888,6 @@ public final class RaineApp implements AutoCloseable {
         // непрочитанным, и догон после перезапуска его найдёт
         Notification notice = new Notification(text, available).about(senderId).from(chat.id);
 
-        // сообщение владельца и закреплённые чаты идут вне очереди: остальное
-        // подождёт, а это — то, ради чего она вообще здесь
-        boolean important = senderId == config.ownerId()
-                || (behaviour().wakeOnPinnedChat() && telegram.isPinned(chat.id));
         if (important) {
             loop.submitFirst(notice);
             log.info("Уведомление из чата \"{}\" — вне очереди", chat.title);

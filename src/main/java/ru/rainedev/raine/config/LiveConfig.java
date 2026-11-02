@@ -43,7 +43,10 @@ public final class LiveConfig implements AutoCloseable {
         var changes = new java.util.ArrayList<String>();
         var hot = java.util.Set.of("lockdown", "lockdownAllowChannels", "behaviour", "repeat",
                 "diaryInjectionMaxLength", "diaryMinRelatedness", "llmTranscript", "sleepConsolidation",
-                "characterGrowthEnabled", "trustLedgerEnabled", "consolidation", "diaryConsolidationBudget");
+                "characterGrowthEnabled", "trustLedgerEnabled", "consolidation", "diaryConsolidationBudget",
+                // задержки внимания правят, пока она отвечает невпопад по скорости, —
+                // перезапуск ради цифры в файле обиднее самой правки
+                "noticeDelaySeconds", "noticeDelayOtherMinSeconds", "noticeDelayOtherMaxSeconds");
         for (var component : Config.class.getRecordComponents()) {
             if (hot.contains(component.getName())) continue;
             try {

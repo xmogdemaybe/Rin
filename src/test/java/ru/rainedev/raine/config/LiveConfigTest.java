@@ -70,6 +70,27 @@ class LiveConfigTest {
         }
     }
 
+    /**
+     * Полосу «сколько она смотрит на экран» правят именно тогда, когда скорость
+     * ответа не понравилась, — посреди живого разговора. Цифра паузы, ради которой
+     * нужно поднимать бота заново, этой правки не стоит.
+     */
+    @Test
+    void attentionDelaysAreFixedWithoutARestart(@TempDir Path dir) throws IOException {
+        Path file = configIn(dir, "notice_delay_other_min_seconds=10\nnotice_delay_other_max_seconds=40\n");
+        try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
+            Files.writeString(file, Files.readString(file).replace("notice_delay_other_max_seconds=40",
+                    "notice_delay_other_max_seconds=90"));
+            Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(
+                    System.currentTimeMillis() + 2000));
+
+            assertTrue(live.checkOnce());
+            assertEquals(90, live.current().noticeDelayOtherMaxSeconds(), "новая полоса подхвачена на ходу");
+            assertTrue(live.restartRequired().isEmpty(),
+                    "смена паузы не должна требовать перезапуска: " + live.restartRequired());
+        }
+    }
+
     @Test
     void untouchedFileChangesNothing(@TempDir Path dir) throws IOException {
         Path file = configIn(dir, "");
