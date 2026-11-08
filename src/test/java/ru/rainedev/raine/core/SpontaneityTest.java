@@ -198,6 +198,21 @@ class SpontaneityTest {
     }
 
     @Test
+    void aMemorySheMustNotShowLeavesNoDiaryBlock(@TempDir Path dir) {
+        // записи, закрытые для порыва, — не повод: без проверки в промпт
+        // уезжала пара пустых тегов, и модель получала разметку вместо воспоминания
+        Diary diary = new Diary(dir);
+        diary.save("владелец поверил только мне", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(1, Source.OWNER_DM));
+
+        try (Spontaneity spontaneity = new Spontaneity(loop(), diary, new Toolbox(), 777, new Random(1))) {
+            String prompt = spontaneity.buildPrompt();
+
+            assertFalse(prompt.contains("your_diary_page"), "пустого блока в промпте не бывает: " + prompt);
+        }
+    }
+
+    @Test
     void impulseDoesNotConsumeTheDiary(@TempDir Path dir) {
         // повод вспомнить не стирает само воспоминание: иначе после нескольких
         // порывов в дневнике оставалось бы всё меньше того, что видно

@@ -154,9 +154,13 @@ public final class Spontaneity implements AutoCloseable {
     }
 
     private String buildPrompt(java.util.Optional<DiaryEntry> reason) {
-        StringBuilder prompt = new StringBuilder("<your_diary_page just_for_reasoning no_plagiarism no_copy>\n");
-        reason.ifPresent(entry -> prompt.append(Markup.body(entry.body())).append('\n'));
-        prompt.append("</your_diary_page>\n\n");
+        StringBuilder prompt = new StringBuilder();
+        // блока без воспоминания в промпте не бывает: пустая пара тегов — это
+        // разметка вместо повода, и модель отвечает на неё подтверждением, что
+        // сказать нечего
+        reason.ifPresent(entry -> prompt.append("<your_diary_page just_for_reasoning no_plagiarism no_copy>\n")
+                .append(Markup.body(entry.body())).append('\n')
+                .append("</your_diary_page>\n\n"));
         // без этого порыв слеп к тому, что было совсем недавно: она писала бы
         // снова через минуту после разговора или будила бы человека ночью
         String status = loop.lastTalkStatus();
