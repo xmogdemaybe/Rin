@@ -788,6 +788,14 @@ public final class TelegramTools {
 
     /** Реакция — способ откликнуться, не заводя разговор. */
     public Tool react(long chatId) {
+        return react(chatId, messageId -> telegram.message(chatId, messageId));
+    }
+
+    /**
+     * @param target как достать сообщение: в проверках подшается без клиента
+     *               Telegram, в работе это обычный запрос к нему
+     */
+    Tool react(long chatId, java.util.function.LongFunction<java.util.Optional<TdApi.Message>> target) {
         return Tool.named("react_with_emoji")
                 .describedAs("Reacts to a message with an emoji. A subtle way to acknowledge something without "
                         + "sending a full reply. Allowed: " + String.join(" ", Emoji.ALLOWED))
@@ -806,10 +814,20 @@ public final class TelegramTools {
                     // сначала — есть ли вообще такое сообщение. Промах по номеру
                     // выглядел как «здесь нельзя реагировать», она делала вывод,
                     // что реакции сломаны, и неделями сообщала об этом как о баге
-                    if (telegram.message(chatId, messageId).isEmpty()) {
+                    TdApi.Message found = target.apply(messageId).orElse(null);
+                    if (found == null) {
                         log.info("Реакция не поставлена: сообщения {} нет в чате {}", messageId, chatId);
                         return "There is no message with id " + messageId + " in this chat. Look at the "
                                 + "message_id values you actually see here and pick one of those.";
+                    }
+
+                    // снимок чата берётся на шаге открытия, а сообщение человека
+                    // может прийти секундой позже — и самым свежим на экране
+                    // останется её же реплика, на которую она и ставит сердечко
+                    String selfLike = ownMessageRefusal(found);
+                    if (!selfLike.isEmpty()) {
+                        log.info("Реакция на своё сообщение {} — отказ", messageId);
+                        return selfLike;
                     }
 
                     // берём ту форму эмодзи, которую называет сам Telegram: у одних
@@ -1826,6 +1844,19 @@ public final class TelegramTools {
     static boolean isHers(TdApi.Message message, long myId) {
         // ноль — это служебное сообщение без автора; подставлять под неё его нельзя
         return myId != 0 && senderOf(message) == myId;
+    }
+
+    /**
+     * Её ли это сообщение — но для реакции, где отвечать надо чужому. Здесь
+     * довольно признак {@code isOutgoing}: автор сравнивать не с кем, своего
+     * идентификатора у проверки нет да и не нужен он.
+     *
+     * @return пустая строка, если реагировать можно
+     */
+    static String ownMessageRefusal(TdApi.Message message) {
+        return message.isOutgoing
+                ? "That is your own message. React to what the other person said, or just say it in a reply."
+                : "";
     }
 
     /** Потолок на идентификаторы в одном вызове — общий для пересылки, правки и удаления. */
