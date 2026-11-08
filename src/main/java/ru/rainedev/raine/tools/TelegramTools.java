@@ -792,7 +792,7 @@ public final class TelegramTools {
     }
 
     /**
-     * @param target как достать сообщение: в проверках подшается без клиента
+     * @param target как достать сообщение: в проверках подставляется без клиента
      *               Telegram, в работе это обычный запрос к нему
      */
     Tool react(long chatId, java.util.function.LongFunction<java.util.Optional<TdApi.Message>> target) {
