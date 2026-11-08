@@ -29,6 +29,8 @@
 
 ## Install
 
+Step by step, per distribution: [docs/install.md](docs/install.md).
+
 You need:
 
 - **Java 25**;
