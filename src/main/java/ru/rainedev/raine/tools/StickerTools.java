@@ -68,12 +68,17 @@ public final class StickerTools {
      * Целый пак по ссылке. Присланный пак — обычный подарок в переписке,
      * и брать из него можно было бы только то, что человек прислал поштучно:
      * поиск по имени открывает весь набор разом.
+     * <p>
+     * Открытый пак ещё и ставится себе, поэтому это действие: ссылку мог
+     * прислать кто угодно, а в безопасном режиме у аккаунта ничего не должно
+     * появляться по чужой просьбе.
      */
     public Tool pack() {
         return Tool.named("sticker_pack")
                 .describedAs("Opens a whole sticker pack and keeps it: pass a t.me/addstickers/... link "
                         + "or just the pack name. Returns every sticker in it, ready for #sticker_send.")
                 .requiredString("name", "Pack link or its short name")
+                .mutating()
                 .build(arguments -> {
                     String name = arguments.path("name").asText("");
                     var found = telegram.stickerSet(name);
