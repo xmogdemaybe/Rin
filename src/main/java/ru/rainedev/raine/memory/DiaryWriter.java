@@ -2,7 +2,11 @@ package ru.rainedev.raine.memory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.ChatResponse;
@@ -22,6 +26,9 @@ public final class DiaryWriter {
 
     /** Короче этого — обрывок, а не воспоминание. */
     private static final int MIN_ENTRY_LENGTH = 20;
+
+    /** Дословная цитата: в «ёлочках» или в прямых кавычках, но не через всю страницу. */
+    private static final Pattern QUOTE = Pattern.compile("«([^»\\n]+)»|\"([^\"\\n]+)\"");
 
     private static final int MAX_ATTEMPTS = 3;
 
@@ -137,18 +144,54 @@ public final class DiaryWriter {
         return saved;
     }
 
-    /** То же самое, но другими словами, память не обогащает — только раздувает. */
+    /**
+     * То же самое, но другими словами, память не обогащает — только раздувает.
+     * <p>
+     * Одного косинуса тут мало: записи устроены одинаково — те же названия
+     * полей, те же имена, те же подсказки поиска, — и свежий отрезок разговора
+     * против прежней записи даёт 0.98. Различаются они только дословными
+     * цитатами, которые промпт велит не перефразировать. Поэтому кусок
+     * сбрасывается, лишь когда ни одной новой цитаты в нём нет.
+     */
     private boolean isPlagiarism(double[] embedding, String part) {
-        List<Diary.Match> matches = diary.query(embedding);
-        if (matches.isEmpty()) {
+        List<Diary.Match> similar = diary.query(embedding).stream()
+                .filter(match -> match.relatedness() > plagiarismThreshold)
+                .toList();
+        if (similar.isEmpty()) {
             return false;
         }
-        Diary.Match closest = matches.getFirst();
-        if (closest.relatedness() > plagiarismThreshold) {
-            log.info("Уже записано (близость {}), пропускаю: {}",
-                    String.format("%.3f", closest.relatedness()), part.lines().findFirst().orElse("").strip());
-            return true;
+        Set<Long> known = new HashSet<>();
+        for (Diary.Match match : similar) {
+            for (String quote : quotes(match.entry().body())) {
+                known.add(Fingerprint.of(quote));
+            }
         }
-        return false;
+        int fresh = 0;
+        for (String quote : quotes(part)) {
+            if (known.add(Fingerprint.of(quote))) {
+                fresh++;
+            }
+        }
+        if (fresh > 0) {
+            log.info("Близость {} высока, но цитат новых: {} — сохраняю",
+                    String.format("%.3f", similar.getFirst().relatedness()), fresh);
+            return false;
+        }
+        log.info("Уже записано (близость {}), пропускаю: {}",
+                String.format("%.3f", similar.getFirst().relatedness()), part.lines().findFirst().orElse("").strip());
+        return true;
+    }
+
+    /** Дословные цитаты пересказа — и в «ёлочках», и в прямых кавычках. */
+    private static List<String> quotes(String text) {
+        List<String> found = new ArrayList<>();
+        Matcher matcher = QUOTE.matcher(text);
+        while (matcher.find()) {
+            String quote = matcher.group(1) == null ? matcher.group(2) : matcher.group(1);
+            if (!quote.isBlank()) {
+                found.add(quote);
+            }
+        }
+        return found;
     }
 }

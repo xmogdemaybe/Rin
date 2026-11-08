@@ -139,6 +139,38 @@ class DiaryWriterTest {
     }
 
     @Test
+    void aLongerWindowSurvivesDedupEvenAtHighCosine(@TempDir Path dir) {
+        // косинус на структурированных записях держится названиями полей и
+        // именами, а не содержанием: свежий отрезок разговора даёт 0.98 против
+        // прежней записи и молча пропадал вместе со стёртым контекстом
+        Diary diary = new Diary(dir);
+        diary.save("""
+                - timestamps: 16:14 UTC
+                - key messages:
+                  - xmogde: "Хэй, я нашел тебя"
+                - retrieval cues: переписка после перерыва""", new double[] {1, 0, 0});
+
+        String newerWindow = """
+                - timestamps: 16:14 - 16:58 UTC
+                - key messages:
+                  - xmogde: "Хэй, я нашел тебя"
+                  - Rin: "привет, объявился наконец"
+                - retrieval cues: переписка после перерыва""";
+
+        ScriptedLlm llm = new ScriptedLlm().willAnswer(newerWindow);
+        llm.vector = new double[] {1, 0, 0};
+        List<DiaryEntry> saved = new DiaryWriter(diary, llm, "запиши дневник", 0.97).save("промпт", CONTEXT);
+
+        assertEquals(1, saved.size(), "реплика «объявился наконец» новая — это не повтор");
+
+        // тот же кусок вторично дедуп ловить обязан: иначе правка развернула бы его на 180 градусов
+        ScriptedLlm repeat = new ScriptedLlm().willAnswer(newerWindow);
+        repeat.vector = new double[] {1, 0, 0};
+        assertTrue(new DiaryWriter(diary, repeat, "запиши дневник", 0.97).save("промпт", CONTEXT).isEmpty(),
+                "дословный повтор память не обогащает");
+    }
+
+    @Test
     void emptyConversationIsNotWorthSaving(@TempDir Path dir) {
         ScriptedLlm llm = new ScriptedLlm();
 
