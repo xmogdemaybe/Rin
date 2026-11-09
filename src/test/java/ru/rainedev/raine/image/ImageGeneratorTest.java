@@ -89,6 +89,21 @@ class ImageGeneratorTest {
     }
 
     @Test
+    void standingTagsTravelWithTheImageRequestOnly() {
+        // связка тегов переехала из character_appearance.md сюда: у текстовой
+        // модели разговора повторы возраста больше не читаются целиком
+        ImageGenerator camera = new ImageGenerator(
+                new HordeClient("http://127.0.0.1:9/", "ключ", java.util.List.of("модель")),
+                null, null, java.nio.file.Path.of("/tmp"), "Rin", "модель", 1);
+
+        String request = camera.engineerRequest("Угольный кара, серая повязка на глазу.", "селфи у окна");
+
+        assertTrue(request.contains("1girl, solo"), "теги доезжают до инженера: " + request);
+        assertTrue(request.contains("Угольный кара"), "человеческое описание остаётся при нём");
+        assertTrue(request.contains("селфи у окна"), request);
+    }
+
+    @Test
     void unreachableQueueFailsLoudlyInsteadOfHanging() {
         // порт 9 всегда отвергает соединение; важно, что вызов падает,
         // а не зависает — ошибку цикл покажет модели текстом

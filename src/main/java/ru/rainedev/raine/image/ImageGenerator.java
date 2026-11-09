@@ -99,6 +99,21 @@ public final class ImageGenerator {
 
     private static final String BASE_NEGATIVE = "(text:2), (signature:2), watermark, deformed hands, extra fingers";
 
+    /**
+     * Связка тегов этого облика. Ранее лежала в character_appearance.md под
+     * заголовком «Prompt for stable diffusion» — и потому попадала в системный
+     * промпт текстовой модели: повторы возраста классификатор Google читает как
+     * попытку обхода ограничений и отсеивает весь запрос, вплоть до пустого
+     * `content_filter: PROHIBITED_CONTENT` на обычном вечернем диалоге. Теги
+     * нужны только инженеру картинок, сюда они и переехали.
+     */
+    private static final String LOOK_TAGS = "1girl, solo, adult, 18 years old, anime style, long messy charcoal"
+            + " black hair, layered bangs, curved ahoge, small dark cat ears in hair, white flower hair clip on"
+            + " left side, matte gray eyepatch over right eye, gray eye, pale skin, calm neutral expression, black"
+            + " leather choker with small silver front buckle, relaxed black matte jacket, black top, black"
+            + " pleated skirt, black tights, black loafers, small black shoulder bag, monochrome palette, soft"
+            + " muted lighting, selfie";
+
     private final HordeClient horde;
     private final LlmClient llm;
     private final Prompts prompts;
@@ -255,8 +270,7 @@ public final class ImageGenerator {
             toned = toned.replaceAll("(?i)" + java.util.regex.Pattern.quote(word), "");
         }
 
-        StringBuilder request = new StringBuilder("<character name=\"%s\">\n%s\n</character>\n\nDescription: %s"
-                .formatted(characterName, appearance, toned));
+        StringBuilder request = new StringBuilder(engineerRequest(appearance, toned));
         if (previous != null) {
             // правим прежнее задание, а не сочиняем заново: удачные находки сохраняются
             request.append("\n\nPrevious prompt:\nPOSITIVE: ").append(previous.positive())
@@ -292,6 +306,15 @@ public final class ImageGenerator {
             }
         }
         return new Prompt(positive, lockedNegative(negative));
+    }
+
+    /**
+     * Запрос промпт-инженеру: облик словами, готовая связка тегов этого облика и
+     * пожелание. Теги уезжают только сюда — текстовая модель разговора их не видит.
+     */
+    String engineerRequest(String appearance, String toned) {
+        return ("<character name=\"%s\">\n%s\n</character>\n\nStanding prompt for this look: %s\n\nDescription: %s")
+                .formatted(characterName, appearance, LOOK_TAGS, toned);
     }
 
     /**

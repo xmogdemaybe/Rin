@@ -29,9 +29,3 @@ Facts:
 - ${CHARACTER_NAME} is 18 years old, an adult.
 - Flower clip on her left, eyepatch on her right eye.
 - Clean chest area: the bag strap is the only strap.
-
-# Prompt for stable diffusion
-
-```
-1girl, solo, adult, 18 years old, anime style, long messy charcoal black hair, layered bangs, curved ahoge, small dark cat ears in hair, white flower hair clip on left side, matte gray eyepatch over right eye, gray eye, pale skin, calm neutral expression, black leather choker with small silver front buckle, relaxed black matte jacket, black top, black pleated skirt, black tights, black loafers, small black shoulder bag, monochrome palette, soft muted lighting, selfie
-```

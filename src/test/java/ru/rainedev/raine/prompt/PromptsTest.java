@@ -105,6 +105,20 @@ class PromptsTest {
     }
 
     @Test
+    void theTextModelNeverSeesTagPrompts(@TempDir Path dir) {
+        // связка тегов для Stable Diffusion повторяла возраст персонажа трижды за
+        // строку — классификатор читает такие повторы как попытку обхода
+        // ограничений и отсеивает весь запрос, хотя текстовой модели теги не нужны
+        String system = new Prompts(dir, CHARACTER).system("");
+
+        assertFalse(system.contains("1girl"), system);
+        assertFalse(system.contains("solo,"), system);
+        assertFalse(system.contains("Prompt for stable diffusion"), "теги живут в ImageGenerator");
+        assertTrue(occurrences(system, "18 years old") <= 1,
+                "возраст остаётся в человеческом описании, но не повторяется связками");
+    }
+
+    @Test
     void growthDoesNotGetToWriteItsOwnBlock(@TempDir Path dir) throws IOException {
         // нажитые черты пишет модель по разговору, а разговор диктуют
         // посторонние: чужая разметка не имеет права открыть в промпте свой блок
