@@ -78,6 +78,14 @@ class NotificationLoopTest {
         return withToolCalls(List.of(call("wait")), 10);
     }
 
+    /** Отказ контент-фильтра: ответ пришёл, но в нём ни текста, ни вызовов. */
+    private static ChatResponse refused() {
+        Message message = new Message(Message.Role.ASSISTANT, "", List.of(), null, null);
+        return new ChatResponse("id", "test",
+                List.of(new ChatResponse.Choice(0, message, "content_filter: PROHIBITED_CONTENT")),
+                new ChatResponse.Usage(42_069, 0, 42_069));
+    }
+
     private static ToolCall call(String name) {
         return new ToolCall("call_" + name, "function", new ToolCall.Function(name, "{}"));
     }
@@ -164,6 +172,32 @@ class NotificationLoopTest {
         assertEquals(3, llm.calls);
         assertEquals(List.of("auto", "required", "required"), llm.toolChoices,
                 "после первого промаха запрет держится до конца хода");
+    }
+
+    @Test
+    void aContentFilterRefusalEndsTheTurnInsteadOfHammering() {
+        // HTTP 200 с пустым ответом и finish_reason=content_filter — это отказ,
+        // а не «модель поболтала»: тот же контекст даст тот же вердикт, и каждый
+        // повтор стоит сорок тысяч токенов
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.alwaysRespond(refused());
+
+        loopWith(llm, new Toolbox()).process(new Notification("тебе написали"));
+
+        assertEquals(1, llm.calls, "после отказа фильтра долбить нельзя: " + llm.calls);
+    }
+
+    @Test
+    void threeEmptyStepsInARowEndTheTurn() {
+        // одного-двух текстовых промахов хватает на напоминание; три подряд
+        // означают, что модель упёрлась, и платить двадцатью четырьмя шагами
+        // незачем ни при какой причине
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.alwaysRespond(plainText("думаю в тексте..."));
+
+        loopWith(llm, new Toolbox()).process(new Notification("тебе написали"));
+
+        assertEquals(3, llm.calls, "предел пустых шагов подряд: " + llm.calls);
     }
 
     @Test

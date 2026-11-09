@@ -32,6 +32,13 @@ public final class NotificationLoop {
     /** Страховка от зацикливания: живой ход столько шагов не занимает. */
     private static final int MAX_STEPS_PER_NOTIFICATION = 24;
 
+    /**
+     * Сколько шагов подряд модель может не звать ни одного инструмента. Живой
+     * ответ спотыкается один-два раза, третий подряд означает, что она упёрлась,
+     * и каждый следующий шаг — это полный контекст за деньги.
+     */
+    private static final int MAX_EMPTY_STEPS = 3;
+
     /** Сколько раз возвращаться к уведомлению, пока не вернётся сеть. */
     private static final int MAX_RETRIES = 5;
 
@@ -124,6 +131,8 @@ public final class NotificationLoop {
         boolean prepared;
         /** До первого текстового промаха шаги свободные, дальше до конца хода — только вызовы. */
         boolean forceToolCall;
+        /** Сколько шагов подряд модель не позвала ни одного инструмента. */
+        int emptySteps;
         /** Последнее действие, видимое человеку: send_telegram_message, react_with_emoji. */
         String lastAction = "";
         Turn(Notification notification) { this.notification = notification; }
@@ -518,13 +527,36 @@ public final class NotificationLoop {
             }
 
             if (calls.isEmpty()) {
+                // пустота пустоте рознь: без finish_reason в журнале остаётся
+                // только номер шага, а отказ фильтра неотличим от «поболтала»
+                String reason = response.finishReason();
+                log.warn("Модель не вызвала ни одного инструмента: шаг {}, finish_reason={}, текста {} симв., "
+                                + "токенов {}",
+                        step, reason.isBlank() ? "нет" : reason, response.text().length(), response.totalTokens());
+                if (reason.startsWith("content_filter")) {
+                    // это не забывчивость, а вердикт: тот же контекст даст тот же
+                    // ответ, и напоминание под required лишь умножает счёт
+                    log.warn("Модель отказала контент-фильтром — ход прекращён");
+                    reportCost(startedAt, spentTokens, step + 1);
+                    endTurn(turn);
+                    active = null;
+                    return;
+                }
+                if (++turn.emptySteps >= MAX_EMPTY_STEPS) {
+                    // страховка от любой другой молчаливой петли, а не только от фильтра
+                    log.warn("Подряд {} шагов без вызова инструментов — ход прекращён", turn.emptySteps);
+                    reportCost(startedAt, spentTokens, step + 1);
+                    endTurn(turn);
+                    active = null;
+                    return;
+                }
                 // ответ текстом действием не является — напоминаем, и до конца
                 // хода текст запрещён: каждый следующий шаг обязан содержать вызов
-                log.warn("Модель не вызвала ни одного инструмента, шаг {}", step);
                 context.add(Message.user(BE_TOOL_CENTRIC));
                 turn.forceToolCall = true;
                 continue;
             }
+            turn.emptySteps = 0;
 
             List<Message> results;
             try {

@@ -59,6 +59,17 @@ public record ChatResponse(String id, String model, List<Choice> choices, Usage 
         return firstMessage().map(Message::content).orElse("");
     }
 
+    /**
+     * Чем эндпоинт закончил ответ. Пустая строка — посредник ничего не сказал.
+     * Без этого пустой ответ неотличим от отказа: в журнале остаётся только
+     * факт «вызовов нет», а причин у него несколько и лечатся они по-разному.
+     */
+    public String finishReason() {
+        return choices == null || choices.isEmpty() || choices.getFirst().finishReason() == null
+                ? ""
+                : choices.getFirst().finishReason();
+    }
+
     public long totalTokens() {
         return usage == null ? 0 : usage.totalTokens();
     }
