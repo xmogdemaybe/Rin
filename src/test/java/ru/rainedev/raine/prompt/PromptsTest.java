@@ -106,9 +106,9 @@ class PromptsTest {
 
     @Test
     void theTextModelNeverSeesTagPrompts(@TempDir Path dir) {
-        // связка тегов для Stable Diffusion повторяла возраст персонажа трижды за
-        // строку — классификатор читает такие повторы как попытку обхода
-        // ограничений и отсеивает весь запрос, хотя текстовой модели теги не нужны
+        // связка тегов для Stable Diffusion добавляла к возрасту персонажа ещё
+        // одно упоминание подряд — классификатор читает такие повторы как попытку
+        // обхода ограничений и отсеивает весь запрос целиком
         String system = new Prompts(dir, CHARACTER).system("");
 
         assertFalse(system.contains("1girl"), system);
