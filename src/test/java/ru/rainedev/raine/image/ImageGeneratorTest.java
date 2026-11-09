@@ -77,6 +77,18 @@ class ImageGeneratorTest {
     }
 
     @Test
+    void appearanceNegativesLiveInTheImageRequestNotInThePrompt() {
+        // строку перенесли из character_appearance.md сюда: текстовая модель не
+        // должна видеть то, что нужно только генератору картинок
+        String negative = ImageGenerator.lockedNegative("");
+
+        assertTrue(negative.contains("glossy plastic skin"), "дефекты облика дописаны: " + negative);
+        assertTrue(negative.contains("loli"), "стоп-слова про ребёнка остаются у картинок");
+        assertTrue(negative.contains("(text:2)"), negative);
+        assertEquals(1, negative.split("loli", -1).length - 1, "слова не дублируются из двух мест");
+    }
+
+    @Test
     void unreachableQueueFailsLoudlyInsteadOfHanging() {
         // порт 9 всегда отвергает соединение; важно, что вызов падает,
         // а не зависает — ошибку цикл покажет модели текстом

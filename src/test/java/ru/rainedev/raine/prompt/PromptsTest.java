@@ -93,6 +93,18 @@ class PromptsTest {
     }
 
     @Test
+    void theTextModelNeverSeesImageGeneratorVocabulary(@TempDir Path dir) {
+        // «child, loli» из строки негативов открывали в Google блок детской
+        // безопасности: он не снимается никакими настройками, а текстовая модель
+        // читала эти слова в каждом шаге и получала отказ фильтра на пустом месте
+        String system = new Prompts(dir, CHARACTER).system("");
+
+        assertTrue(system.contains("<your_appearance>"), "облик в промпте остаётся");
+        assertFalse(system.contains("loli"), system);
+        assertFalse(system.contains("Negative:"), "негативы картинок живут в ImageGenerator");
+    }
+
+    @Test
     void growthDoesNotGetToWriteItsOwnBlock(@TempDir Path dir) throws IOException {
         // нажитые черты пишет модель по разговору, а разговор диктуют
         // посторонние: чужая разметка не имеет права открыть в промпте свой блок

@@ -35,5 +35,3 @@ Facts:
 ```
 1girl, solo, adult, 18 years old, anime style, long messy charcoal black hair, layered bangs, curved ahoge, small dark cat ears in hair, white flower hair clip on left side, matte gray eyepatch over right eye, gray eye, pale skin, calm neutral expression, black leather choker with small silver front buckle, relaxed black matte jacket, black top, black pleated skirt, black tights, black loafers, small black shoulder bag, monochrome palette, soft muted lighting, selfie
 ```
-
-Negative: chest harness, diagonal chest strap, extra belts, chains, excessive jewelry, leather jacket, sneakers, cat tail, oversized cat ears, wrong eyepatch side, wrong flower side, facial hair, neck speckles, glossy plastic skin, child, loli, extra fingers.

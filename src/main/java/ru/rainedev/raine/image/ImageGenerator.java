@@ -80,6 +80,17 @@ public final class ImageGenerator {
     /** Не убирается ни при каких настройках. */
     private static final String HARD_NEGATIVE = "child, kid, teen, loli, shota";
 
+    /**
+     * Дефекты именно этого облика. Строка лежала в character_appearance.md и
+     * вместе с описанием уезжала в текстовую модель, а «child» и «loli» открывают
+     * в Google фильтр детской безопасности — он не снимается никакими
+     * настройками, и вместо ответа приходил пустой отказ. У картинок эти слова
+     * остаются, у текстовой модели их больше нет.
+     */
+    private static final String APPEARANCE_NEGATIVE = "chest harness, diagonal chest strap, extra belts, chains,"
+            + " excessive jewelry, leather jacket, sneakers, cat tail, oversized cat ears, wrong eyepatch side,"
+            + " wrong flower side, facial hair, neck speckles, glossy plastic skin";
+
     /** Длиннее — облик персонажа начинает плыть. */
     private static final int MAX_PROMPT_WORDS = 60;
 
@@ -280,7 +291,15 @@ public final class ImageGenerator {
                 positive += ", " + word;
             }
         }
-        return new Prompt(positive, join(BASE_NEGATIVE, negative, HARD_NEGATIVE));
+        return new Prompt(positive, lockedNegative(negative));
+    }
+
+    /**
+     * Собирает итоговый запрет для генератора: что добавил инженер, плюс то,
+     * что дописывается независимо от его вкуса.
+     */
+    static String lockedNegative(String engineered) {
+        return join(BASE_NEGATIVE, engineered, APPEARANCE_NEGATIVE, HARD_NEGATIVE);
     }
 
     private String ask(List<Message> conversation) {
