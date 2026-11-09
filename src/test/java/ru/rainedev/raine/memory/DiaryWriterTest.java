@@ -22,10 +22,17 @@ class DiaryWriterTest {
         private final Deque<String> answers = new ArrayDeque<>();
         private double[] vector;
         boolean breaksEmbeddings;
+        boolean refuses;
         int chatCalls;
 
         ScriptedLlm willAnswer(String text) {
             answers.addLast(text);
+            return this;
+        }
+
+        /** Ответ фильтр-политики: текст пустой, но в finish_reason сказано почему. */
+        ScriptedLlm refusesByContentFilter() {
+            refuses = true;
             return this;
         }
 
@@ -40,7 +47,8 @@ class DiaryWriterTest {
             chatCalls++;
             String text = answers.isEmpty() ? "" : answers.removeFirst();
             Message message = new Message(Message.Role.ASSISTANT, text, List.of(), null, null);
-            return new ChatResponse("id", "test", List.of(new ChatResponse.Choice(0, message, "stop")),
+            return new ChatResponse("id", "test", List.of(new ChatResponse.Choice(0, message,
+                    refuses ? "content_filter: PROHIBITED_CONTENT" : "stop")),
                     ChatResponse.Usage.EMPTY);
         }
 
@@ -124,6 +132,19 @@ class DiaryWriterTest {
 
         assertEquals(1, writerFor(dir, llm).save("промпт", CONTEXT).size());
         assertEquals(2, llm.chatCalls);
+    }
+
+    @Test
+    void aContentFilterRefusalIsNotRetried(@TempDir Path dir) {
+        // пустой ответ без причины — обидно, но повтор имеет смысл; отказ
+        // фильтр-политики даёт тот же вердикт на том же контексте, а каждая
+        // попытка стоит весь разговор целиком
+        ScriptedLlm llm = new ScriptedLlm().refusesByContentFilter();
+
+        List<DiaryEntry> saved = writerFor(dir, llm).save("промпт", CONTEXT);
+
+        assertTrue(saved.isEmpty(), "отказанный пересказ не записывается");
+        assertEquals(1, llm.chatCalls, "после отказа фильтра долбить нельзя: " + llm.chatCalls);
     }
 
     @Test

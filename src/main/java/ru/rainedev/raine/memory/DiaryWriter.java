@@ -97,6 +97,12 @@ public final class DiaryWriter {
             ChatResponse response = llm.chat(systemPrompt, conversation, null);
             String content = response.text() == null ? "" : response.text().strip();
 
+            if (response.finishReason().startsWith("content_filter")) {
+                // вердикт фильтр-политики, а не забывчивость: тот же разговор
+                // даст тот же отказ, и каждый повтор оплачивается заново
+                log.warn("Модель отказала контент-фильтром — пересказ не получится");
+                return "";
+            }
             if (content.isBlank()) {
                 // модель попыталась действовать инструментом, хотя их здесь нет
                 conversation.add(Message.user("Tools are not available; write the summary without tools."));
