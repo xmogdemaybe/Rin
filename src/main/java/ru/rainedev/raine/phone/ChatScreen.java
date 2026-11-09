@@ -2,6 +2,8 @@ package ru.rainedev.raine.phone;
 
 import it.tdlight.jni.TdApi;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import ru.rainedev.raine.prompt.Prompts;
 
 /**
@@ -18,6 +20,14 @@ public final class ChatScreen {
 
     /** У скольких последних сообщений разглядывать вложения. */
     private int recentDepth = 8;
+
+    /**
+     * Что уже попало в снимок этого чата: id сообщения -> отметка последней
+     * правки. Разговор живёт в контексте, и перепечатывать прочитанное в каждом
+     * следующем снимке незачем: пять копий одного текста в хвосте запроса — это
+     * и лишние тысячи токенов, и наведённый на фильтр Google вопрос.
+     */
+    private final Map<Long, Map<Long, Integer>> shown = new ConcurrentHashMap<>();
 
     public ChatScreen recentDepth(int depth) {
         this.recentDepth = depth;
@@ -38,6 +48,11 @@ public final class ChatScreen {
         return this;
     }
 
+    /** Забыть, какие сообщения уже попадали в снимок: контекст пустеет вместе с ними. */
+    public void forgetShown() {
+        shown.clear();
+    }
+
     /**
      * @param text текст для модели
      * @param kind тип чата — по нему вызывающий решает, какие инструменты выдать
@@ -47,6 +62,17 @@ public final class ChatScreen {
     /** @param messages от старых к новым — порядок чтения переписки */
     public Screen render(TdApi.Chat chat, List<TdApi.Message> messages, MessageFormatter.ChatView view) {
         ChatKind kind = ChatKind.of(chat);
+        Map<Long, Integer> seen = shown.computeIfAbsent(chat.id, id -> new ConcurrentHashMap<>());
+
+        // правка меняет текст, не меняя номера: такое сообщение читается заново
+        List<TdApi.Message> fresh = messages.stream()
+                .filter(message -> !seen.containsKey(message.id) || message.editDate != seen.get(message.id))
+                .toList();
+        if (fresh.isEmpty() && !messages.isEmpty()) {
+            // новых сообщений нет, но экран без тела она прочтёт как пустой чат
+            fresh = List.of(messages.get(messages.size() - 1));
+        }
+        int skipped = messages.size() - fresh.size();
 
         StringBuilder text = new StringBuilder(
                 "You switched to the chat \"%s\" in Telegram. You see last messages:\n"
@@ -55,17 +81,21 @@ public final class ChatScreen {
         if (messages.isEmpty()) {
             text.append("This chat is empty! Only proceed if you looked up a @username and it led you here.\n");
         }
+        if (skipped > 0) {
+            text.append("(%d messages of this chat are not repeated here — you have already read them.)\n"
+                    .formatted(skipped));
+        }
 
         // вложения свежих сообщений разглядываются заранее и все сразу: по одному
         // это минута молчания, пока собеседник смотрит на непрочитанное
-        int from = Math.max(0, messages.size() - recentDepth);
-        List<TdApi.Message> recent = messages.subList(from, messages.size());
+        int from = Math.max(0, fresh.size() - recentDepth);
+        List<TdApi.Message> recent = fresh.subList(from, fresh.size());
         MediaAhead.look(formatter.media(), recent);
         // ссылки раскрываются тем же приёмом и тоже только у свежих сообщений:
         // краткая разметка старых чужие посты за собой не тянет
         formatter.links().lookAhead(recent);
 
-        for (TdApi.Message message : messages) {
+        for (TdApi.Message message : fresh) {
             String rendered = recent.contains(message)
                     ? formatter.format(message, view)
                     : formatter.formatBriefly(message, view);
@@ -73,6 +103,7 @@ public final class ChatScreen {
                 rendered = note.addTo(chat, message, rendered);
             }
             text.append(rendered);
+            seen.put(message.id, message.editDate);
         }
 
         text.append(instructions(chat, kind));

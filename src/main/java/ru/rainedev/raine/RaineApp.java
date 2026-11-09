@@ -210,8 +210,8 @@ public final class RaineApp implements AutoCloseable {
         telegramMedia.markHeardDelay(config.readOnly() ? 0 : config.hearing().markHeardDelaySeconds());
 
         AntiRepeat antiRepeat = new AntiRepeat(llm, prompts.lazy("anti_repeat.md"), config.repeat());
-        tools = new TelegramTools(telegram, actions, new ChatScreen(formatter, prompts).recentDepth(config.vision().recentDepth()),
-                lockdown, antiRepeat);
+        ChatScreen screen = new ChatScreen(formatter, prompts).recentDepth(config.vision().recentDepth());
+        tools = new TelegramTools(telegram, actions, screen, lockdown, antiRepeat);
         tools.media(telegramMedia);
         tools.storyFeed(stories);
         // галерея — папка из настроек, а не часть генератора: снимки, которые в
@@ -353,6 +353,9 @@ public final class RaineApp implements AutoCloseable {
             diary.reload();
         };
         loop.onContextOverflow(() -> rememberConversation.accept("Контекст переполнен"));
+        // контекст выброшен — снимки чатов начинают печатать историю заново,
+        // иначе новые уведомления приходят в пустой разговор без старых сообщений
+        loop.onContextCleared(screen::forgetShown);
 
         // ход закончен — выходим из чатов, в которые заходили
         loop.onNotificationDone(done -> tools.closeOpened());

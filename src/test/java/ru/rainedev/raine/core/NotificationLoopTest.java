@@ -377,6 +377,22 @@ class NotificationLoopTest {
         assertTrue(dumped[0], "распухший контекст пора сбрасывать в память");
     }
 
+    /** Контекст выброшен — снимки чатов не должны считать свои сообщения уже показанными. */
+    @Test
+    void clearingTheContextForggetsTheScreens() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        List<String> forgotten = new ArrayList<>();
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.onContextCleared(() -> forgotten.add("снимки"));
+        loop.process(new Notification("тебе написали"));
+        loop.clearContext();
+
+        assertEquals(List.of("снимки"), forgotten,
+                "сообщений в контексте нет, а пометка о них осталась бы — следующие снимки вышли бы пустыми");
+    }
+
     @Test
     void stopsAfterStepLimitWhenModelNeverFinishes() {
         // модель зациклилась и не зовёт wait — цикл обязан выйти сам

@@ -39,6 +39,75 @@ class ChatScreenTest {
         assertFalse(result.text().contains("#post_to_channel"), result.text());
     }
 
+    /** Второй снимок того же чата не перепечатывает то, что уже стоит в контексте. */
+    @Test
+    void aSecondScreenOfTheSameChatSkipsWhatSheAlreadySaw() {
+        TdApi.Chat dm = chat(1L, "John", new TdApi.ChatTypePrivate(JOHN));
+        screen.render(dm, List.of(message(600L, "привет"), message(601L, "как дела")), view);
+
+        ChatScreen.Screen second = screen.render(dm,
+                List.of(message(600L, "привет"), message(601L, "как дела"), message(602L, "поговорим")), view);
+
+        assertTrue(second.text().contains("поговорим"), second.text());
+        assertFalse(second.text().contains("как дела"), "прочитанное в этом же разговоре дважды не нужно");
+        assertFalse(second.text().contains("привет"), second.text());
+        assertTrue(second.text().contains("2 messages of this chat are not repeated"), second.text());
+    }
+
+    /** Разговор ушёл в дневник — следующий снимок снова печатает историю целиком. */
+    @Test
+    void forgettingTheScreensBringsTheWholeHistoryBack() {
+        TdApi.Chat dm = chat(1L, "John", new TdApi.ChatTypePrivate(JOHN));
+        List<TdApi.Message> history = List.of(message(600L, "привет"));
+        screen.render(dm, history, view);
+
+        screen.forgetShown();
+        ChatScreen.Screen again = screen.render(dm, history, view);
+
+        assertTrue(again.text().contains("привет"), again.text());
+        assertFalse(again.text().contains("not repeated"), again.text());
+    }
+
+    /** Исправленное сообщение — это новый текст, а не повтор прочитанного. */
+    @Test
+    void anEditedMessageIsNewsAgain() {
+        TdApi.Chat dm = chat(1L, "John", new TdApi.ChatTypePrivate(JOHN));
+        screen.render(dm, List.of(message(600L, "привет"), message(601L, "как дела")), view);
+        TdApi.Message edited = message(600L, "привет, я опечаталась");
+        edited.editDate = 1_780_000_500;
+
+        ChatScreen.Screen second = screen.render(dm, List.of(edited, message(601L, "как дела")), view);
+
+        assertTrue(second.text().contains("опечаталась"), second.text());
+    }
+
+    /** Новых сообщений нет — экран не должен оставаться без тела. */
+    @Test
+    void aScreenWithNothingNewStillShowsTheLatestMessage() {
+        TdApi.Chat dm = chat(1L, "John", new TdApi.ChatTypePrivate(JOHN));
+        List<TdApi.Message> history = List.of(message(600L, "привет"), message(601L, "как дела"));
+        screen.render(dm, history, view);
+
+        ChatScreen.Screen second = screen.render(dm, history, view);
+
+        assertTrue(second.text().contains("как дела"), "последнее сообщение остаётся на экране");
+        assertFalse(second.text().contains("привет"), second.text());
+    }
+
+    /** Пометки одного чата не прикрывают другой: идентификаторы сообщений не глобальные. */
+    @Test
+    void anotherChatDoesNotInheritTheMarksOfTheFirst() {
+        screen.render(chat(1L, "John", new TdApi.ChatTypePrivate(JOHN)),
+                List.of(message(600L, "привет"), message(601L, "как дела")), view);
+
+        ChatScreen.Screen other = screen.render(chat(2L, "Маша", new TdApi.ChatTypePrivate(200L)),
+                List.of(message(600L, "видела?"), message(601L, "новости")), view);
+
+        assertTrue(other.text().contains("видела?"), other.text());
+        assertTrue(other.text().contains("новости"), other.text());
+        assertFalse(other.text().contains("not repeated"), other.text());
+    }
+
     @Test
     void channelAllowsOnlyOptionalPostingNotConversationReplies() {
         TdApi.ChatTypeSupergroup type = new TdApi.ChatTypeSupergroup();

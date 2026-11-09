@@ -155,6 +155,9 @@ public final class NotificationLoop {
     /** Что делать с распухшим контекстом. Позже здесь появится запись в дневник. */
     private Runnable onContextOverflow = () -> {};
 
+    /** Что сделать, когда контекст выброшен: вместе с ним забываются снимки чатов. */
+    private Runnable onContextCleared = () -> {};
+
     private Memory memory = Memory.NONE;
 
     /**
@@ -215,6 +218,11 @@ public final class NotificationLoop {
 
     public void onContextOverflow(Runnable action) {
         this.onContextOverflow = action;
+    }
+
+    /** Куда позвонить, когда контекст выброшен: снимки чатов пора забыть. */
+    public void onContextCleared(Runnable action) {
+        this.onContextCleared = action;
     }
 
     public void memory(Memory memory) {
@@ -364,6 +372,9 @@ public final class NotificationLoop {
         context.clear();
         // разговор ушёл в дневник — следующему его метка достаться не должна
         contextOrigin.set(Origin.GENERAL);
+        // сообщений прошлых снимков в контексте больше нет, а метка «это уже
+        // читали» осталась бы — следующие снимки вышли бы пустыми
+        onContextCleared.run();
     }
 
     /** Бесконечный цикл. Прерывается только остановкой потока. */
@@ -881,7 +892,9 @@ public final class NotificationLoop {
         if (e instanceof ru.rainedev.raine.llm.LlmFailure failure && failure.status() == 400
                 && String.valueOf(failure.getMessage()).toLowerCase().contains("json")) {
             log.warn("Контекст повреждён, сбрасываем");
-            context.clear();
+            // тот же сброс, что после дневника: вместе с сообщениями должны
+            // уйти и пометки о том, что она уже видела в снимках чатов
+            clearContext();
         }
     }
 }
