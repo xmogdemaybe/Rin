@@ -689,7 +689,6 @@ public final class TelegramTools {
                         return "Voice message sent.";
                     }
 
-                    maybeSuggestSomethingLivelier();
                     antiRepeat.check(chatId, text);
 
                     boolean allowTypos = !"false".equalsIgnoreCase(arguments.path("allow_typos").asText("true"));
@@ -736,7 +735,7 @@ public final class TelegramTools {
                     // считаем вызовы, а не строки: реплика, разбитая на три части,
                     // остаётся одной репликой
                     inARow[0]++;
-                    return sendResult(inARow[0], lastSent, lastText);
+                    return textSendResult(inARow[0], lastSent, lastText);
                     }
                 });
     }
@@ -1928,6 +1927,16 @@ public final class TelegramTools {
     }
 
     /**
+     * Чем заканчивается удачная отправка текста: настоящий результат тулзы и,
+     * изредка, совет кода рядом с ним. Откатом это не становится никогда —
+     * реплика уже в чате, а выкинутый из контекста совет цикл клал бы репликой
+     * собеседника, и она отвечала на него вслух живому человеку.
+     */
+    String textSendResult(int inARow, long messageId, String text) {
+        return sendResult(inARow, messageId, text) + livelinessNote();
+    }
+
+    /**
      * Ответ на отправку. Идентификатор нужен, чтобы она могла поправить своё же
      * сообщение — без него исправить опечатку нечем.
      */
@@ -1947,26 +1956,50 @@ public final class TelegramTools {
     }
 
     /**
-     * Изредка напоминает, что переписка не обязана состоять из одного текста.
-     * Сообщение при этом не уходит: она отправит вместо него что-то живее.
+     * Строка, дописываемая к результату отправки. Редко и только когда есть из
+     * чего выбирать: при одном доступном способе «разнообразие» превращается в
+     * навязчивый стикер, а на пустом списке тут и вовсе падал `nextInt(0)`.
      */
-    private void maybeSuggestSomethingLivelier() {
-        if (random.nextDouble() >= behaviour.toolReminder()) {
-            return;
+    static String livelinessAdvice(List<String> options, double chance, java.util.random.RandomGenerator random) {
+        if (options.size() < 2 || random.nextDouble() >= chance) {
+            return "";
         }
+        return "\n\nThis is the code's note, not a request from your participant: a chat doesn't have to be "
+                + "one wall of text. You could " + options.get(random.nextInt(options.size()))
+                + " — but only when it fits, and silence about it is fine too.";
+    }
+
+    /** Чем можно оживить переписку прямо сейчас. */
+    private List<String> livelinessOptions() {
         List<String> options = new java.util.ArrayList<>();
         if (behaviour.stickers()) {
-            options.add("- отправить стикер (#sticker_send)");
+            options.add("send a sticker (#sticker_send)");
         }
         if (camera != null && camera.isAvailable()) {
-            options.add("- сделать снимок (#take_photo) или отправить старый из галереи");
+            options.add("take a photo (#take_photo) or send an old one from the gallery");
         }
         if (voice != null && voice.isAvailable()) {
-            options.add("- записать голосовое (#record_audio)");
+            options.add("record a voice message (#record_audio)");
         }
-        String suggestion = options.get(random.nextInt(options.size()));
-        log.info("Напоминаю разнообразить общение: {}", suggestion);
-        throw new LowQualityException("Один сплошной текст — скучно. Попробуй вместо этого:\n" + suggestion);
+        return options;
+    }
+
+    /**
+     * Изредка напоминает, что переписка не обязана состоять из одного текста.
+     * <p>
+     * Раньше это был откат: брошенное {@code LowQualityException} сообщение
+     * выкидывалось из контекста, а текст напоминания цикл клал рядом как реплику
+     * собеседника — и она отвечала на него вслух живому человеку («да не хочу я
+     * стикеры отправлять»), теряя собственное сообщение. Теперь это строчка
+     * результата тулзы: отправленное остаётся отправленным.
+     */
+    private String livelinessNote() {
+        List<String> options = livelinessOptions();
+        String advice = livelinessAdvice(options, behaviour.toolReminder(), random);
+        if (!advice.isEmpty()) {
+            log.info("Напоминаю разнообразить общение: {}", advice.strip());
+        }
+        return advice;
     }
 
     /**

@@ -7,16 +7,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import ru.rainedev.raine.config.Config;
 import ru.rainedev.raine.core.LowQualityException;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.speech.VoiceGenerator;
+import ru.rainedev.raine.telegram.Lockdown;
+import ru.rainedev.raine.telegram.TelegramActions;
 
 class LivelinessTest {
 
@@ -340,5 +346,61 @@ class LivelinessTest {
         // проверка не обязательна — без неё разговор просто менее строгий
         antiRepeat.check(CHAT, "что угодно");
         assertFalse(false);
+    }
+
+    /** Совет исходит от кода, а не от собеседника: иначе на него отвечают вслух. */
+    @Test
+    void livelinessAdviceIsMarkedAsCodeNotAsAParticipant() {
+        String advice = TelegramTools.livelinessAdvice(
+                List.of("отправить стикер (#sticker_send)", "записать голосовое (#record_audio)"), 1.0, random);
+
+        assertFalse(advice.isEmpty(), "при двух доступных способах совет есть");
+        assertTrue(advice.contains("not a request from your participant"), advice);
+    }
+
+    /** Один доступный способ — не разнообразие: напоминание выключается само. */
+    @Test
+    void noLivelinessAdviceWhenOnlyOneKindOfMessageIsAvailable() {
+        for (int attempt = 0; attempt < 50; attempt++) {
+            assertEquals("", TelegramTools.livelinessAdvice(List.of("отправить стикер (#sticker_send)"), 1.0, random),
+                    "попытка " + attempt + ": предлагать нечего, а вероятность просит напомнить");
+        }
+    }
+
+    /** Напоминание редкое, а не через каждое сообщение. */
+    @Test
+    void livelinessAdviceIsRareNotConstant() {
+        List<String> options = List.of("отправить стикер (#sticker_send)", "сделать снимок (#take_photo)",
+                "записать голосовое (#record_audio)");
+        int notes = 0;
+        for (int i = 0; i < 1000; i++) {
+            if (!TelegramTools.livelinessAdvice(options, 0.02, random).isEmpty()) {
+                notes++;
+            }
+        }
+
+        assertTrue(notes > 0 && notes < 200, "напоминаний должно быть немного, вышло: " + notes);
+    }
+
+    /**
+     * Совет едет в результате тулзы, а не откатом: отправленное остаётся
+     * отправленным, и в разговоре не появляется реплика, которой человек не
+     * писал. Именно этот вброс она в 23:07 ответила вслух: «да не хочу я
+     * стикеры отправлять».
+     */
+    @Test
+    void theLivelinessNoteTravelsInTheToolResult(@TempDir Path dir) {
+        TelegramTools tools = new TelegramTools(null, new TelegramActions.ReadOnly(), null,
+                new Lockdown(Lockdown.Mode.OWNER_ONLY, 1L, true), null);
+        tools.behaviour(new Config.Behaviour(2000, false, true, false, true, 1.0, 4));
+        tools.voice(new VoiceGenerator(new Config.Voice(true, "https://example.invalid", "ключ-не-секрет",
+                        "model", "voice", "ru", 1.0, 24000, 48, dir), dir), dir, () -> "prompt");
+
+        String result = tools.textSendResult(3, 42L, "привет");
+
+        assertTrue(result.startsWith("Message sent"), result);
+        assertTrue(result.contains("not a request from your participant"),
+                "совет помечен как реплика кода: " + result);
+        assertFalse(result.contains("Попробуй вместо этого"), "откатного текста не осталось: " + result);
     }
 }
