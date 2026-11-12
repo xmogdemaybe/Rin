@@ -106,8 +106,29 @@ public final class ChatScreen {
             seen.put(message.id, message.editDate);
         }
 
+        text.append(unreadHint(fresh, view));
         text.append(instructions(chat, kind));
         return new Screen(text.toString(), kind);
+    }
+
+    /**
+     * Когда подряд прилетело несколько сообщений, ответ «на всё сразу» часто
+     * приходит невпопад: собеседник не понимает, на какую из его реплик
+     * отвечаетают. Считаются только чужие сообщения ниже границы прочитанного —
+     * свои собственные непрочитанными не бывают.
+     */
+    private String unreadHint(List<TdApi.Message> shown, MessageFormatter.ChatView view) {
+        long unread = shown.stream()
+                .filter(message -> message.senderId instanceof TdApi.MessageSenderUser sender
+                        && sender.userId != view.myId())
+                .filter(message -> message.id > view.lastReadInboxMessageId())
+                .count();
+        if (unread < 2) {
+            return "";
+        }
+        return ("(%d messages here are still unread. One reply may cover them all; if you answer different "
+                + "thoughts, point each with reply_to_message_id so it is clear what you are replying to.)\n")
+                .formatted(unread);
     }
 
     /**

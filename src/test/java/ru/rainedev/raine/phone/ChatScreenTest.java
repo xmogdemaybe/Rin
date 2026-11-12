@@ -108,6 +108,39 @@ class ChatScreenTest {
         assertFalse(other.text().contains("not repeated"), other.text());
     }
 
+    /** Несколько непрочитанных — есть что разложить по цитатам. */
+    @Test
+    void severalUnreadMessagesAreOfferedAQuote() {
+        ChatScreen.Screen result = screen.render(
+                chat(1L, "John", new TdApi.ChatTypePrivate(JOHN)),
+                List.of(message(600L, "ты спишь?"), message(601L, "я вообще-то про другое")), view);
+
+        assertTrue(result.text().contains("2 messages here are still unread"), result.text());
+        assertTrue(result.text().contains("reply_to_message_id"),
+                "иначе она ответит на всё одной репликой не туда: " + result.text());
+    }
+
+    /** Одно сообщение — не пачка, подсказка про цитаты ему не к месту. */
+    @Test
+    void oneUnreadMessageIsNotOfferedAQuote() {
+        ChatScreen.Screen result = screen.render(
+                chat(1L, "John", new TdApi.ChatTypePrivate(JOHN)), List.of(message(600L, "привет")), view);
+
+        assertFalse(result.text().contains("reply_to_message_id"), result.text());
+    }
+
+    /** Свои реплики непрочитанными не бывают — их считать нельзя. */
+    @Test
+    void whatSheWroteHerselfIsNotUnreadNews() {
+        TdApi.Message own = message(601L, "а я как раз об этом");
+        own.senderId = new TdApi.MessageSenderUser(MY_ID);
+
+        ChatScreen.Screen result = screen.render(chat(1L, "John", new TdApi.ChatTypePrivate(JOHN)),
+                List.of(message(600L, "ты спишь?"), own), view);
+
+        assertFalse(result.text().contains("reply_to_message_id"), result.text());
+    }
+
     @Test
     void channelAllowsOnlyOptionalPostingNotConversationReplies() {
         TdApi.ChatTypeSupergroup type = new TdApi.ChatTypeSupergroup();

@@ -11,6 +11,7 @@ import ru.rainedev.raine.config.Config;
 import ru.rainedev.raine.core.Goodnights;
 import ru.rainedev.raine.core.Notification;
 import ru.rainedev.raine.core.NotificationLoop;
+import ru.rainedev.raine.core.NoticeWindow;
 import ru.rainedev.raine.core.Rest;
 import ru.rainedev.raine.core.Spontaneity;
 import ru.rainedev.raine.core.Toolbox;
@@ -106,6 +107,9 @@ public final class RaineApp implements AutoCloseable {
     /** Насколько часто сообщение из заглушённого чата остаётся без внимания. */
     private static final double MUTED_IGNORE_CHANCE = 0.8;
     private Spontaneity spontaneity;
+
+    /** Скользящее окно уведомлений: пока в чат пишут, она к нему не идёт. */
+    private NoticeWindow notices = new NoticeWindow();
 
     public RaineApp(SimpleTelegramClientBuilder builder,
                     SimpleAuthenticationSupplier<?> authentication,
@@ -748,28 +752,17 @@ public final class RaineApp implements AutoCloseable {
         notifyAbout(message, senderId, false);
     }
 
-    private void noticeLater(NoticeLane lane) {
-        Config current = settings == null ? config : settings.current();
-        long millis = noticeDelayMillis(lane, current.noticeDelaySeconds(),
-                current.noticeDelayOtherMinSeconds(), current.noticeDelayOtherMaxSeconds(), random);
-        if (millis <= 0) {
-            return;
-        }
-        try {
-            Thread.sleep(java.time.Duration.ofMillis(millis));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
     /** Чьё сообщение она замечает: важное, чужое или то, что пришло без неё. */
     enum NoticeLane { IMPORTANT, OTHER, CAUGHT_UP }
 
     /**
-     * Сколько прождать, прежде чем уведомление до неё дойдёт.
+     * Сколько прождать, прежде чем уведомление до неё дойдёт. Это выдержка
+     * скользящего окна ({@code NoticeWindow}): она отсчитывается заново от
+     * каждого нового сообщения того же чата, но не дольше потолка окна.
      * <p>
-     * Важное — папик и закреплённые чаты — идёт по прежней полосе от нуля до
-     * notice_delay_seconds. Остальным нужен разброс «глянула на экране
+     * Важное — папик и закреплённые чаты — ждёт ровно {@code notice_delay_seconds}
+     * и ни секундой меньше: случайный провал в ноль превращал окно в лотерею и
+     * лишал дебаунс смысла. Остальным нужна полоса «глянула на экране
      * блокировки», с обоими краями включительно: мгновенный ответ чужому
      * сообщению выдаёт бота. Догон непрочитанного не ждёт ничего — после
      * простоя экран уже виден, а пауза на каждый чат вешала бы очередь
@@ -781,7 +774,7 @@ public final class RaineApp implements AutoCloseable {
             return 0;
         }
         if (lane == NoticeLane.IMPORTANT) {
-            return ownerSeconds <= 0 ? 0 : random.nextLong(ownerSeconds * 1000L);
+            return Math.max(0, ownerSeconds) * 1000L;
         }
         int top = Math.max(0, otherMax);
         int bottom = Math.min(Math.max(0, otherMin), top);
@@ -866,11 +859,6 @@ public final class RaineApp implements AutoCloseable {
         boolean important = senderId == config.ownerId()
                 || (behaviour().wakeOnPinnedChat() && telegram.isPinned(chat.id));
 
-        // она замечает уведомление не сразу: без паузы ответ приходит подозрительно мгновенно
-        NoticeLane lane = caughtUp ? NoticeLane.CAUGHT_UP
-                : important ? NoticeLane.IMPORTANT : NoticeLane.OTHER;
-        noticeLater(lane);
-
         ChatKind kind = ChatKind.of(chat);
 
         String text = switch (kind) {
@@ -878,9 +866,6 @@ public final class RaineApp implements AutoCloseable {
             case GROUP -> Notifications.groupMessage(chat, telegram.nameOf(senderId), senderId);
             case CHANNEL -> Notifications.channelPost(chat);
         };
-
-        // уведомление устарело, если такое же уже стоит в очереди по этому чату
-        loop.discardMatching(Notifications.openingTag(chat.id));
 
         // набор живёт вместе с уведомлением: инструменты одного чата не должны
         // оставаться доступными, когда разговор идёт уже в другом
@@ -891,6 +876,25 @@ public final class RaineApp implements AutoCloseable {
         // непрочитанным, и догон после перезапуска его найдёт
         Notification notice = new Notification(text, available).about(senderId).from(chat.id);
 
+        NoticeLane lane = caughtUp ? NoticeLane.CAUGHT_UP
+                : important ? NoticeLane.IMPORTANT : NoticeLane.OTHER;
+        long window = noticeWindow(lane);
+        Runnable deliver = () -> deliver(chat, notice, important);
+        if (window <= 0) {
+            deliver.run();
+            return;
+        }
+        // выдержка скользящая: пока в чат дописывают, отсчёт идёт заново, и в
+        // очередь уходит одно уведомление на всю пачку, а не по одному на реплику
+        notices.defer(chat.id, window, deliver);
+    }
+
+    /**
+     * Уведомление дошло до цикла. Всё, что по этому чату ещё стоит в очереди,
+     * устарело: снимок чата покажет накопившееся целиком.
+     */
+    private void deliver(TdApi.Chat chat, Notification notice, boolean important) {
+        loop.discardMatching(Notifications.openingTag(chat.id));
         if (important) {
             loop.submitFirst(notice);
             log.info("Уведомление из чата \"{}\" — вне очереди", chat.title);
@@ -898,6 +902,13 @@ public final class RaineApp implements AutoCloseable {
             loop.submit(notice);
             log.info("Уведомление из чата \"{}\" поставлено в очередь", chat.title);
         }
+    }
+
+    /** Сколько ждать именно этому уведомлению: цифра читается из живых настроек. */
+    private long noticeWindow(NoticeLane lane) {
+        Config current = settings == null ? config : settings.current();
+        return noticeDelayMillis(lane, current.noticeDelaySeconds(),
+                current.noticeDelayOtherMinSeconds(), current.noticeDelayOtherMaxSeconds(), random);
     }
 
     /**
@@ -1002,6 +1013,9 @@ public final class RaineApp implements AutoCloseable {
         if (spontaneity != null) {
             spontaneity.close();   // новых порывов не заводим
         }
+        // недоданные уведомления не догоняем: чат остаётся непрочитанным, и его
+        // найдёт догон при следующем запуске
+        notices.close();
         if (loop != null) {
             loop.stop();
             if (!loop.awaitStopped(SHUTDOWN_GRACE)) {

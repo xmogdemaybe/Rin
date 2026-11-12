@@ -51,14 +51,19 @@ class NoticeDelayTest {
         return new long[] {millis, random.askedBound};
     }
 
+    /**
+     * Пауза владельца — окно, а не лотерея: в ней сидит скользящий дебаунс, и
+     * провал в ноль наполовину сообщений лишил бы его смысла.
+     */
     @Test
-    void theOwnerKeepsTheScatterThatWasHisBefore() {
+    void theOwnerWaitsTheWholeWindow() {
         Random random = new Random(7);
-        for (int i = 0; i < 400; i++) {
-            long millis = RaineApp.noticeDelayMillis(NoticeLane.IMPORTANT, 30, 10, 40, random);
-            assertTrue(millis >= 0 && millis < 30_000,
-                    "папику не положено ждать дольше notice_delay_seconds: " + millis);
+        for (int i = 0; i < 40; i++) {
+            assertEquals(30_000, RaineApp.noticeDelayMillis(NoticeLane.IMPORTANT, 30, 10, 40, random),
+                    "папик ждёт всю полосу, но не дольше неё");
         }
+        assertEquals(-1, asked(NoticeLane.IMPORTANT, 30, 10, 40, 0)[1],
+                "случайность для этого не спрашивается вовсе");
     }
 
     @Test
@@ -83,8 +88,6 @@ class NoticeDelayTest {
         assertEquals(30_001, bottom[1], "полоса 10..40 спрашивается целиком, с обоими краями");
         assertEquals(10_000, bottom[0], "дно полосы — ровно min");
         assertEquals(40_000, asked(NoticeLane.OTHER, 30, 10, 40, 30_000)[0], "верх полосы — ровно max");
-        assertEquals(30_000, asked(NoticeLane.IMPORTANT, 30, 10, 40, 0)[1],
-                "папик не унаследовал чужую полосу");
     }
 
     @Test
