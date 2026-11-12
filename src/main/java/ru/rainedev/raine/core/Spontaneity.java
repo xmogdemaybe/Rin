@@ -1,6 +1,7 @@
 package ru.rainedev.raine.core;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -34,6 +35,9 @@ public final class Spontaneity implements AutoCloseable {
     /** Срабатывает примерно в половине случаев. */
     private static final double CHANCE = 0.5;
 
+    /** Как часто признаться в журнале, что порыв не состоялся. */
+    private static final Duration SKIP_REPORT = Duration.ofHours(6);
+
     private static final String PROMPT = """
             It's time to reflect on your thoughts!
               - maybe make some reasoning?
@@ -49,6 +53,8 @@ public final class Spontaneity implements AutoCloseable {
     private final Toolbox ownerChat;
     private final long personId;
     private final RandomGenerator random;
+
+    private Instant lastSkipReport = Instant.EPOCH;
 
     private java.util.function.BooleanSupplier asleep = () -> false;
 
@@ -118,7 +124,7 @@ public final class Spontaneity implements AutoCloseable {
             // спящему человеку ничего не приходит в голову: ни разговоров,
             // ни записей в память, ни строчек в журнале
             if (asleep.getAsBoolean()) {
-                log.debug("Сплю — порыв подождёт до пробуждения");
+                reportSkip("отдыхает — порыв подождёт пробуждения");
                 return;
             }
             if (random.nextDouble() >= CHANCE) {
@@ -126,10 +132,10 @@ public final class Spontaneity implements AutoCloseable {
             }
             // порыв строится на воспоминании: без него в промпт ложится пустой
             // тег, и тяжёлый запрос уходит в модель лишь затем, чтобы та
-            // подтвердила, что сказать нечего
+            // подтвердила, что сказать нечего. Почему воспоминания нет — видно
+            // в журнале, это решает сам перебор
             java.util.Optional<DiaryEntry> reason = randomEntry();
             if (reason.isEmpty()) {
-                log.debug("Вспомнить нечего — порыв не идёт в модель");
                 return;
             }
             log.info("Захотелось написать самой");
@@ -196,19 +202,24 @@ public final class Spontaneity implements AutoCloseable {
     private final java.util.Deque<String> recent = new java.util.ArrayDeque<>();
 
     private synchronized java.util.Optional<DiaryEntry> randomEntry() {
-        // порыв не привязан к чату и уходит в случайный разговор: поводом не
-        // может становиться то, что сказано в личке или в чужой переписке
-        List<Diary.Match> all = diary.query(new double[0]).stream()
-                .filter(match -> match.entry().origin().source() == Source.GENERAL)
+        Source ceiling = ceiling();
+        List<Diary.Match> all = diary.query(new double[0]);
+        // поводом служит то, что можно сказать именно этому адресату: личное
+        // чужой переписки не уезжает в случайный разговор даже в порыве
+        List<Diary.Match> allowed = all.stream()
+                .filter(match -> match.entry().origin().source().noStricterThan(ceiling))
                 .toList();
-        if (all.isEmpty()) {
+        if (allowed.isEmpty()) {
+            reportSkip(all.isEmpty()
+                    ? "дневник пуст"
+                    : "записей в дневнике: " + all.size() + ", доступных адресату: 0");
             return java.util.Optional.empty();
         }
-        List<Diary.Match> fresh = all.stream()
+        List<Diary.Match> fresh = allowed.stream()
                 .filter(match -> !recent.contains(match.entry().id()))
                 .toList();
         // всё уже служило поводом — пусть повторится, чем молчать
-        List<Diary.Match> choice = fresh.isEmpty() ? all : fresh;
+        List<Diary.Match> choice = fresh.isEmpty() ? allowed : fresh;
         Diary.Match chosen = choice.get(random.nextInt(choice.size()));
         diary.use(chosen);
         recent.addLast(chosen.entry().id());
@@ -216,6 +227,30 @@ public final class Spontaneity implements AutoCloseable {
             recent.removeFirst();
         }
         return java.util.Optional.of(chosen.entry());
+    }
+
+    /**
+     * Строжайшая метка записи, которую адресату порыва ещё можно вспомнить.
+     * Личка владельца открыта заранее — значит порыв идёт ему, и строже
+     * владелецской тайны ничего не бывает. Иначе разговор она выбирает сама,
+     * и личное — даже владелецское — уехало бы случайному человеку.
+     */
+    private Source ceiling() {
+        return ownerChat.isEmpty() ? Source.GENERAL : Source.OWNER_DM;
+    }
+
+    /**
+     * Причина молчания в журнале. Без неё трое суток выглядели как «фича не
+     * работает», хотя причин было три разные и все молчаливые.
+     */
+    private void reportSkip(String reason) {
+        Instant now = Instant.now();
+        if (now.isBefore(lastSkipReport.plus(SKIP_REPORT))) {
+            log.debug("Порыв пропущен: {}", reason);
+            return;
+        }
+        lastSkipReport = now;
+        log.info("Порыв пропущен: {}", reason);
     }
 
     @Override

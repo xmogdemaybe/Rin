@@ -4,6 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -14,6 +18,7 @@ import java.util.Random;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
@@ -209,6 +214,63 @@ class SpontaneityTest {
             String prompt = spontaneity.buildPrompt();
 
             assertFalse(prompt.contains("your_diary_page"), "пустого блока в промпте не бывает: " + prompt);
+        }
+    }
+
+    /** Дневник из владелецских записей — не повод молчать: порыв идёт именно владельцу. */
+    @Test
+    void anOwnerDirectedImpulseMayRememberOwnerChats(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("владелец поверил только мне", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(1, Source.OWNER_DM));
+        Tool open = Tool.named("open").describedAs("open chat")
+                .buildContextual((arguments, addTool) -> "CHAT OPENED");
+        NotificationLoop loop = loop();
+
+        try (Spontaneity spontaneity =
+                     new Spontaneity(loop, diary, new Toolbox(open), 777, new Random(1))) {
+            for (int attempt = 0; attempt < 40 && loop.queued() == 0; attempt++) {
+                spontaneity.actNow();
+            }
+
+            assertTrue(loop.queued() > 0, "личка владельца — законный повод написать владельцу");
+            assertTrue(spontaneity.buildPrompt().contains("поверил только мне"),
+                    "и повод этот доезжает до промпта, а не вычёркивается молча");
+        }
+    }
+
+    /** Причина молчания обязана быть видна в журнале, но не на каждом тике. */
+    @Test
+    void theReasonForSilenceReachesTheLogOnce(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("владелец поверил только мне", new double[] {1, 0, 0}, 0, List.of(),
+                new Origin(1, Source.OWNER_DM));
+        NotificationLoop loop = loop();
+        Logger logger = (Logger) LoggerFactory.getLogger(Spontaneity.class);
+        // в тестовом logback корень стоит на WARN, поэтому INFO надо поднять явно —
+        // иначе проверка молчит не потому, что строчки нет, а потому что её не видно
+        Level before = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 0, new Random(1))) {
+            for (int attempt = 0; attempt < 20; attempt++) {
+                spontaneity.actNow();
+            }
+
+            List<String> reasons = logs.list.stream()
+                    .filter(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.contains("Порыв пропущен"))
+                    .toList();
+            assertEquals(1, reasons.size(), "одна строчка на все тики, а не спам: " + reasons);
+            assertTrue(reasons.getFirst().contains("0"), "число доступных записей должно быть видно: " + reasons);
+            assertEquals(0, loop.queued(), "но порыва это не создаёт");
+        } finally {
+            logger.detachAppender(logs);
+            logger.setLevel(before);
         }
     }
 

@@ -52,4 +52,13 @@ public enum Source {
     public Source strictest(Source other) {
         return ordinal() <= other.ordinal() ? this : other;
     }
+
+    /**
+     * @param ceiling строжайший уровень, который этому собеседнику ещё можно
+     *                показать: ниже по шкале — закрыто
+     * @return true, если запись не секретнее разрешённого
+     */
+    public boolean noStricterThan(Source ceiling) {
+        return ordinal() >= ceiling.ordinal();
+    }
 }
