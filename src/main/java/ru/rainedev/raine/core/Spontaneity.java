@@ -56,6 +56,13 @@ public final class Spontaneity implements AutoCloseable {
 
     private Instant lastSkipReport = Instant.EPOCH;
 
+    /**
+     * Тик, который пришёлся на сон. Флаг один на всю ночь: будильник за это
+     * время успеет прозвенеть с десяток раз, а порыв с утра должен быть один.
+     */
+    private final java.util.concurrent.atomic.AtomicBoolean deferred =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
     private java.util.function.BooleanSupplier asleep = () -> false;
 
     /** Порыв, который сейчас в очереди или в работе. */
@@ -119,12 +126,33 @@ public final class Spontaneity implements AutoCloseable {
         maybeAct();
     }
 
+    /**
+     * Пробуждение: то, что не пришло во сне, приходит сейчас — и ровно один раз,
+     * сколько бы тиков ни было пропущено за ночь. Решение принимается заново, со
+     * своей монеткой и своим поводом: ночной тик не гарантирует, что утром будет
+     * о чём сказать.
+     */
+    public void wokenUp() {
+        if (!deferred.compareAndSet(true, false)) {
+            return;
+        }
+        maybeAct();
+    }
+
     private void maybeAct() {
         try {
             // спящему человеку ничего не приходит в голову: ни разговоров,
             // ни записей в память, ни строчек в журнале
             if (asleep.getAsBoolean()) {
-                reportSkip("отдыхает — порыв подождёт пробуждения");
+                deferred.set(true);
+                reportSkip("отдыхает — порыв дождётся пробуждения");
+                return;
+            }
+            if (loop.initiativeStalled()) {
+                // прошлый порыв кончился молчанием, и с тех пор в разговоре не
+                // прибавилось ни строчки: тот же контекст даст то же молчание,
+                // а стоит он десятков тысяч токенов
+                reportSkip("после молчаливого порыва ничего нового не произошло");
                 return;
             }
             if (random.nextDouble() >= CHANCE) {
