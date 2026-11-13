@@ -33,6 +33,20 @@ fallback_api_key=
 # где хранится сессия Telegram
 session_dir=session
 
+# Прокси для Telegram. mtproto — собственный прокси из ссылки вида
+# t.me/proxy?server=...&port=...&secret=..., которой делятся, когда Telegram
+# заблокирован; socks5 — любой локальный туннель (его же даёт ssh -D).
+# Пустой тип — ходить напрямую. Настройки читаются при сборке соединения,
+# поэтому меняются перезапуском.
+telegram_proxy_type=
+telegram_proxy_server=
+telegram_proxy_port=443
+# секрет mtproto из той же ссылки; для socks5 не нужен. Чужой секрет (например
+# из чужой ссылки-образца) не подпустит к прокси вовсе.
+telegram_proxy_secret=
+telegram_proxy_username=
+telegram_proxy_password=
+
 # папка с промптами
 prompts_dir=prompts
 
@@ -50,6 +64,10 @@ diary_plagiarism_threshold=0.97
 
 # ниже этой близости запись не вспоминается: ни сама в разговоре, ни по запросу #ask
 diary_min_relatedness=0.8
+
+# сколько букв записей сводится за один заход пересмотра во сне;
+# больше — сильнее сжимается память, меньше — бережнее
+diary_consolidation_length=8000
 
 # видит ли она картинки и видео
 vision_enabled=true
@@ -160,6 +178,11 @@ web_search_key=
 
 # температура модели
 llm_temperature=0.2
+
+# HTTP-прокси для запросов к ИИ: host:port; пусто — напрямую. Нужен, когда
+# адрес модели доступен только через туннель; Telegram ходит своими настройками
+# выше. Читается при создании клиента, то есть меняется перезапуском.
+llm_proxy=
 
 # модель для векторов памяти
 embedding_model=openai/text-embedding-3-large
