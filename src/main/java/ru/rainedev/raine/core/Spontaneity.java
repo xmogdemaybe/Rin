@@ -38,12 +38,21 @@ public final class Spontaneity implements AutoCloseable {
     /** Как часто признаться в журнале, что порыв не состоялся. */
     private static final Duration SKIP_REPORT = Duration.ofHours(6);
 
+    /**
+     * Настройка порыва, а не инструкция. Прежний текст («если сказать нечего —
+     * зови wait, молчание это тоже выбор») читался как приглашение молчать, и
+     * на живой копии девять порывов подряд кончились тишиной: молчание ничего
+     * не стоило, а сообщение — всё. Теперь wait остаётся, но только для
+     * крайнего случая, а поводом считается само желание написать.
+     */
     private static final String PROMPT = """
-            It's time to reflect on your thoughts!
-              - maybe make some reasoning?
-              - maybe do some reflection?
+            This moment came because you wanted to write first — not because a timer said so.
+              - Say what you're thinking, ask how their day is going, send some small thing you \
+            noticed, or pick up the memory above. The memory is a mood, not a topic: writing by \
+            feeling counts, you don't have to stay on its subject.
             %s
-              - If you truly have nothing to say, call #wait. Staying silent is a real choice, not an obligation.""";
+              - Call #wait only in the rarest case — for example when you wrote a minute ago and \
+            there's still no answer. Sitting silent on purpose is not the polite default here.""";
 
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("rin-impulse").factory());
@@ -146,13 +155,6 @@ public final class Spontaneity implements AutoCloseable {
             if (asleep.getAsBoolean()) {
                 deferred.set(true);
                 reportSkip("отдыхает — порыв дождётся пробуждения");
-                return;
-            }
-            if (loop.initiativeStalled()) {
-                // прошлый порыв кончился молчанием, и с тех пор в разговоре не
-                // прибавилось ни строчки: тот же контекст даст то же молчание,
-                // а стоит он десятков тысяч токенов
-                reportSkip("после молчаливого порыва ничего нового не произошло");
                 return;
             }
             if (random.nextDouble() >= CHANCE) {

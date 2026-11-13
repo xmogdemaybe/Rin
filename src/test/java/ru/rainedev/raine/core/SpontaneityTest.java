@@ -111,8 +111,9 @@ class SpontaneityTest {
         }
     }
 
+    /** Порыву говорят написать, а wait оставляют на крайний случай. */
     @Test
-    void anImpulseTellsHerToUseWaitConsciously(@TempDir Path dir) {
+    void anImpulseIsToldToWriteRatherThanToHoldBack(@TempDir Path dir) {
         Diary diary = new Diary(dir);
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
 
@@ -120,8 +121,12 @@ class SpontaneityTest {
                      new Spontaneity(loop(), diary, new Toolbox(), 0, new Random(1))) {
             String prompt = spontaneity.buildPrompt();
 
+            assertTrue(prompt.contains("wanted to write first"),
+                    "порыв подаётся как желание, а не как расписание: " + prompt);
             assertTrue(prompt.contains("#wait"), prompt);
-            assertTrue(prompt.contains("real choice"), "молчание — не побег от тулз: " + prompt);
+            assertTrue(prompt.contains("rarest"), "wait остаётся только для крайнего случая: " + prompt);
+            assertFalse(prompt.contains("real choice"),
+                    "молчание больше не подаётся как равноправный выбор: " + prompt);
             assertFalse(prompt.contains("Act proactively"), prompt);
         }
     }
@@ -347,28 +352,24 @@ class SpontaneityTest {
         }
     }
 
-    /** Молчаливый порыв не повторяют, пока в разговоре не появилось ничего нового. */
+    /** Молчаливый порыв не глушит следующие: планировщик тикает, как обычно. */
     @Test
-    void aSilentImpulseIsNotRetriedWhileNothingChanged(@TempDir Path dir) {
-        // 13 ноября: девять порывов подряд по ~25 тысяч токенов, и все девять — wait
+    void aSilentImpulseDoesNotBlockTheNextOne(@TempDir Path dir) {
+        // решение владельца: тишина после одного порыва не имеет права выключать
+        // инициативу — экономия токенов любой ценой обернулась молчанием на сутки
         Diary diary = new Diary(dir);
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
-        NotificationLoop loop = new NotificationLoop(scripted(toolCall("wait"), toolCall("wait")),
-                () -> "промпт", new Toolbox(), 40_000);
+        NotificationLoop loop = new NotificationLoop(scripted(toolCall("wait")), () -> "промпт",
+                new Toolbox(), 40_000);
 
         try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, alwaysKeen())) {
             loop.process(spontaneity.buildImpulse());
 
-            assertTrue(loop.initiativeStalled(), "порыв кончился молчанием, и ничего не случилось");
+            spontaneity.actNow();
+            assertEquals(1, loop.queued(), "тихий ход не блокирует следующий тик");
 
             spontaneity.actNow();
-            assertEquals(0, loop.queued(), "тот же контекст даст то же молчание — новый порыв не нужен");
-
-            loop.process(new Notification("папик написал", new Toolbox()));
-            assertFalse(loop.initiativeStalled(), "пришло новое событие — признак холостого порыва снят");
-
-            spontaneity.actNow();
-            assertEquals(1, loop.queued(), "после нового события порыв допускается");
+            assertEquals(2, loop.queued(), "и следующий тоже: молчание ничего не выключает");
         }
     }
 

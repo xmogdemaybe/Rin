@@ -71,9 +71,6 @@ public final class NotificationLoop {
     /** Чем закончился последний ход: отправка, реакция или молчание. */
     private volatile String lastTalkAction = "";
 
-    /** Порыв, который кончился молчанием и после которого ничего не случилось. */
-    private volatile boolean silentInitiative;
-
     private static final String ASK_REMINDER = """
             [system] Have you called #ask yet this turn? If the message involves personal topics, past events, \
             questions, or people you know — call #ask BEFORE send_telegram_message.""";
@@ -655,21 +652,10 @@ public final class NotificationLoop {
         active = null;
     }
 
-    /** Ход закончился: запоминаем время, последнее видимое действие и холостой порыв. */
+    /** Ход закончился: запоминаем время и последнее видимое действие. */
     private void endTurn(Turn turn) {
         lastTalkAction = turn.lastAction;
         lastTalk = Instant.now();
-        silentInitiative = turn.notification.initiative() && turn.lastAction.isEmpty();
-    }
-
-    /**
-     * Последний завершившийся ход — её собственный порыв, и кончился он
-     * молчанием. Любое следующее событие снимает этот признак, поэтому он и
-     * значит «ничего нового не произошло»: тот же контекст даст то же молчание,
-     * а стоит он десятков тысяч токенов.
-     */
-    public boolean initiativeStalled() {
-        return silentInitiative;
     }
 
     /**
