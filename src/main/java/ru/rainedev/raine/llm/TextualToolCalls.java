@@ -29,6 +29,9 @@ final class TextualToolCalls {
     /** После такой запятой начинается следующий аргумент, а не продолжение значения. */
     private static final Pattern NEXT_KEY = Pattern.compile("^\\s*[\"']?[A-Za-z_][A-Za-z0-9_-]*[\"']?\\s*:");
 
+    /** Служебная пометка перед аргументами в форме шлюза: `… json='{"text":"…"}'`. */
+    private static final Pattern JSON_MARKER = Pattern.compile("(?i)\\bjson\\s*[=:]?\\s*[\"']?$");
+
     /**
      * Вызов с решёткой — форму модель копирует из примеров характера. Скобка вокруг
      * аргументов необязательна: в логах бывают обе. Засчитывается только с начала
@@ -184,6 +187,16 @@ final class TextualToolCalls {
         while (end < text.length() && Character.isWhitespace(text.charAt(end))) {
             end++;
         }
+        if (end < text.length() && (text.charAt(end) == '\'' || text.charAt(end) == '"')) {
+            // форма шлюза держит аргументы в кавычке: json='{"text":"…"}'
+            end++;
+        }
+        while (end < text.length() && Character.isWhitespace(text.charAt(end))) {
+            end++;
+        }
+        if (end < text.length() && text.charAt(end) == '/') {
+            end++;   // и закрывает тег сама: <call:…/>
+        }
         if (end < text.length() && text.charAt(end) == '>') {
             end++;
         }
@@ -197,10 +210,15 @@ final class TextualToolCalls {
                 new ToolCall.Function(name, arguments)), end);
     }
 
-    /** Пространство имён отбрасывается: имена инструментов живут без него. */
+    /**
+     * Пространство имён отбрасывается: имена инструментов живут без него.
+     * Шлюз умеет писать ещё и `json='{"text":"…"}'` — пометка перед аргументами
+     * тоже не часть имени, иначе вызов остаётся текстом и шаг сгорает впустую.
+     */
     private static String nameOf(String raw) {
         String name = raw.strip();
         name = name.substring(name.lastIndexOf(':') + 1).strip();
+        name = JSON_MARKER.matcher(name).replaceAll("").strip();
         return NAME.matcher(name).matches() ? name : "";
     }
 

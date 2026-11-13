@@ -294,4 +294,99 @@ class SpontaneityTest {
 
         assertEquals(1, diary.query(new double[0]).size(), "и запись по-прежнему находится");
     }
+
+    /**
+     * Случайность, у которой всегда «захотелось»: монетку в этих проверках
+     * ловим на входе, а не надеемся на конкретное зерно.
+     */
+    private static Random alwaysKeen() {
+        return new Random(7) {
+            @Override
+            public double nextDouble() {
+                return 0;
+            }
+        };
+    }
+
+    /** Ночной тик не сгорает: он дождётся пробуждения — но один на всю ночь. */
+    @Test
+    void aNightTickIsCarriedOverToTheMorning(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("что-то из прошлого", new double[] {1, 0, 0});
+        boolean[] sleeping = {true};
+        NotificationLoop loop = loop();
+
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, alwaysKeen())) {
+            spontaneity.asleepWhen(() -> sleeping[0]);
+            spontaneity.actNow();
+            spontaneity.actNow();
+            spontaneity.actNow();
+
+            assertEquals(0, loop.queued(), "во сне порыв не заводится");
+
+            sleeping[0] = false;
+            spontaneity.wokenUp();
+            assertEquals(1, loop.queued(), "пропущенный за ночь тик приходит утром");
+
+            spontaneity.wokenUp();
+            spontaneity.wokenUp();
+            assertEquals(1, loop.queued(), "три ночных тика — один порыв, а не три");
+        }
+    }
+
+    @Test
+    void wakingWithoutANightTickInventsNothing(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("что-то из прошлого", new double[] {1, 0, 0});
+        NotificationLoop loop = loop();
+
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, alwaysKeen())) {
+            spontaneity.wokenUp();
+
+            assertEquals(0, loop.queued(), "пробуждение без пропущенного тика — не повод писать");
+        }
+    }
+
+    /** Молчаливый порыв не повторяют, пока в разговоре не появилось ничего нового. */
+    @Test
+    void aSilentImpulseIsNotRetriedWhileNothingChanged(@TempDir Path dir) {
+        // 13 ноября: девять порывов подряд по ~25 тысяч токенов, и все девять — wait
+        Diary diary = new Diary(dir);
+        diary.save("что-то из прошлого", new double[] {1, 0, 0});
+        NotificationLoop loop = new NotificationLoop(scripted(toolCall("wait"), toolCall("wait")),
+                () -> "промпт", new Toolbox(), 40_000);
+
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, alwaysKeen())) {
+            loop.process(spontaneity.buildImpulse());
+
+            assertTrue(loop.initiativeStalled(), "порыв кончился молчанием, и ничего не случилось");
+
+            spontaneity.actNow();
+            assertEquals(0, loop.queued(), "тот же контекст даст то же молчание — новый порыв не нужен");
+
+            loop.process(new Notification("папик написал", new Toolbox()));
+            assertFalse(loop.initiativeStalled(), "пришло новое событие — признак холостого порыва снят");
+
+            spontaneity.actNow();
+            assertEquals(1, loop.queued(), "после нового события порыв допускается");
+        }
+    }
+
+    /** Прошлое молчание не должно звучать как совершённое действие. */
+    @Test
+    void silenceIsNotAnnouncedAsIfItWereAnAction(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("что-то из прошлого", new double[] {1, 0, 0});
+        NotificationLoop loop = new NotificationLoop(scripted(toolCall("wait")), () -> "промпт",
+                new Toolbox(), 40_000);
+        loop.process(new Notification("тебе написали", new Toolbox()));
+
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 0, alwaysKeen())) {
+            String prompt = spontaneity.buildPrompt();
+
+            assertTrue(prompt.contains("<last_conversation>"), prompt);
+            assertFalse(prompt.contains("stayed silent"),
+                    "формулировка «промолчала» провоцирует молчать дальше: " + prompt);
+        }
+    }
 }

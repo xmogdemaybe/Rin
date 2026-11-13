@@ -46,6 +46,30 @@ class TextualToolCallsTest {
         assertTrue(parsed.text().contains("Пора спать"), "человеческий текст остаётся: " + parsed.text());
     }
 
+    /** Форма шлюза из журнала 13 ноября 08:14:24: вызов с default_api и json= в одинарных кавычках. */
+    private static final String FROM_LOG_GATEWAY = """
+            - thought: хочу написать папику доброе утро.
+            <call:default_api:send_telegram_message json='{"text":"доброе утро, соня ~"}'/>
+            <call:default_api:send_telegram_message json='{"text":"как спалось? :3"}'/>""";
+
+    @Test
+    void readsTheGatewayStyleCall() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG_GATEWAY);
+
+        assertEquals(2, parsed.calls().size(), "оба намерения доезжают до цикла: " + parsed.calls());
+        assertEquals("send_telegram_message", parsed.calls().getFirst().name());
+        assertEquals("{\"text\":\"доброе утро, соня ~\"}", parsed.calls().getFirst().arguments());
+    }
+
+    @Test
+    void theGatewayStyleCallLeavesNoServiceNoise() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG_GATEWAY);
+
+        assertFalse(parsed.text().contains("default_api"), "тег вырезан целиком: " + parsed.text());
+        assertFalse(parsed.text().contains("/>"), "закрытие тега не уезжает в сообщение: " + parsed.text());
+        assertTrue(parsed.text().contains("хочу написать папику доброе утро"), parsed.text());
+    }
+
     @Test
     void aTagWithoutAnyOtherTextLeavesNothingToSay() {
         TextualToolCalls.Parsed parsed = TextualToolCalls.parse(

@@ -458,7 +458,14 @@ public final class RaineApp implements AutoCloseable {
         // «в сети» держится только пока она занята перепиской: остальное время
         // и весь сон её видно офлайн, как любого человека
         loop.onIdle(() -> actions.setOnline(false));
-        rest.onStateChange(resting -> actions.setOnline(false));
+        // просыпаясь, она добирает то, что не пришло во сне: тик, пропущенный
+        // за ночь, не должен превращаться в десяток или в молчание до утра
+        rest.onStateChange(resting -> {
+            actions.setOnline(false);
+            if (!resting) {
+                spontaneity.wokenUp();
+            }
+        });
 
         brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
         Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
