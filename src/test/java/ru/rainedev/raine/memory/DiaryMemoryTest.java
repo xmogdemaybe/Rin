@@ -302,11 +302,11 @@ class DiaryMemoryTest {
     /** Служебные поля записи — не суть: в журнал должен ехать смысл. */
     @Test
     void theDigestSkipsBookkeepingLines() {
-        assertEquals("xmogde вернулся из больницы",
+        assertEquals("друг вернулся из больницы",
                 DiaryMemory.digest("""
                         - timestamps: 2026-11-13 08:14 UTC
                         - importance score: 0.8
-                        - source event: xmogde вернулся из больницы"""));
+                        - source event: друг вернулся из больницы"""));
         assertEquals("мы ездили на Байкал", DiaryMemory.digest("мы ездили на Байкал"));
         assertEquals("", DiaryMemory.digest(""));
     }
@@ -321,9 +321,9 @@ class DiaryMemoryTest {
         diary.save("""
                 - timestamps: 2026-11-13 08:14 UTC
                 - importance score: 0.8
-                - source event: xmogde вернулся из больницы, и мы говорили про это.
+                - source event: друг вернулся из больницы, и мы говорили про это.
                 - key messages:
-                  - xmogde: "выписали наконец"
+                  - друг: "выписали наконец"
                 """, new double[] {1, 0, 0});
         DiaryMemory memory = memory(diary);
         Logger logger = (Logger) LoggerFactory.getLogger(DiaryMemory.class);
@@ -335,7 +335,7 @@ class DiaryMemoryTest {
         logger.addAppender(logs);
 
         try {
-            memory.recall(context("как там xmogde после больницы?"), Audience.STRANGER);
+            memory.recall(context("как там друг после больницы?"), Audience.STRANGER);
 
             List<String> lines = logs.list.stream()
                     .map(ILoggingEvent::getFormattedMessage)
