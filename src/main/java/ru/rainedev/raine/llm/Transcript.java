@@ -32,6 +32,11 @@ public final class Transcript {
         directory = where;
     }
 
+    /** Куда дампы ложатся сейчас: уборке нужен настоящий путь, а не догадка. */
+    public static Path directory() {
+        return directory;
+    }
+
     public static void enabled(boolean value) {
         enabled = value;
     }

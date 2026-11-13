@@ -5,6 +5,9 @@ import it.tdlight.client.SimpleTelegramClient;
 import it.tdlight.client.SimpleTelegramClientBuilder;
 import it.tdlight.jni.TdApi;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.config.Config;
@@ -33,6 +36,7 @@ import ru.rainedev.raine.phone.MessageEdits;
 import ru.rainedev.raine.phone.MessageFormatter;
 import ru.rainedev.raine.phone.Notifications;
 import ru.rainedev.raine.prompt.Prompts;
+import ru.rainedev.raine.storage.Retention;
 import ru.rainedev.raine.telegram.Lockdown;
 import ru.rainedev.raine.telegram.Stories;
 import ru.rainedev.raine.telegram.StoryAudience;
@@ -110,6 +114,9 @@ public final class RaineApp implements AutoCloseable {
 
     /** Скользящее окно уведомлений: пока в чат пишут, она к нему не идёт. */
     private NoticeWindow notices = new NoticeWindow();
+
+    /** Просроченное временное убирается по ходу дня: процесс живёт неделями без перезапуска. */
+    private ScheduledExecutorService sweeper;
 
     public RaineApp(SimpleTelegramClientBuilder builder,
                     SimpleAuthenticationSupplier<?> authentication,
@@ -458,6 +465,11 @@ public final class RaineApp implements AutoCloseable {
         Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(writer, prompts.system("")));
         // недельное лежит для глаз, но папка не должна расти вечно
         pending.pruneFailures(java.time.Duration.ofDays(7));
+        // то же про дампы ответов, описания картинок и расшифровки: они нужны для
+        // разбора вчерашнего ответа, дальше — только место занимают
+        sweeper = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("rin-sweep").factory());
+        sweeper.scheduleAtFixedRate(this::sweepTempFiles, 0, 1, TimeUnit.DAYS);
         // отказ сам не переигрывается: эти файлы нужны для контекста разговора.
         // Чат, оставленный без ответа, при этом снова числится непрочитанным, и
         // его найдёт догон при запуске
@@ -466,6 +478,20 @@ public final class RaineApp implements AutoCloseable {
             log.warn("С прошлого сбоя без ответа осталось {} уведомл. — data/pending/failed-notifications", owed);
         }
         log.info("Запущена от имени {} (id {})", config.character().name(), telegram.myId());
+    }
+
+    /**
+     * Один проход по папкам со сроком. Исключение глушится намеренно:
+     * планировщик больше не зовёт задачу, которой однажды не повезло, и уборка
+     * пропала бы до самого перезапуска — молча, ровно тогда, когда она нужнее.
+     */
+    private void sweepTempFiles() {
+        try {
+            Retention.pruneAll(Retention.targets(settings == null ? config : settings.current()),
+                    Retention.AGE);
+        } catch (RuntimeException e) {
+            log.warn("Уборка временных файлов не удалась: {}", e.getMessage());
+        }
     }
 
     /**
@@ -1009,6 +1035,9 @@ public final class RaineApp implements AutoCloseable {
 
         if (settings != null) {
             settings.close();
+        }
+        if (sweeper != null) {
+            sweeper.shutdownNow();
         }
         if (spontaneity != null) {
             spontaneity.close();   // новых порывов не заводим
