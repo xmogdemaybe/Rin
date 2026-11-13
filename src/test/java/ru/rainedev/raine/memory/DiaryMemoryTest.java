@@ -4,11 +4,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
@@ -292,5 +297,57 @@ class DiaryMemoryTest {
         assertFalse(topic.contains("признался"), topic);
         assertFalse(topic.contains("[from:"), topic);
         assertTrue(topic.contains("помнишь Серёжу?"), topic);
+    }
+
+    /** Служебные поля записи — не суть: в журнал должен ехать смысл. */
+    @Test
+    void theDigestSkipsBookkeepingLines() {
+        assertEquals("xmogde вернулся из больницы",
+                DiaryMemory.digest("""
+                        - timestamps: 2026-11-13 08:14 UTC
+                        - importance score: 0.8
+                        - source event: xmogde вернулся из больницы"""));
+        assertEquals("мы ездили на Байкал", DiaryMemory.digest("мы ездили на Байкал"));
+        assertEquals("", DiaryMemory.digest(""));
+    }
+
+    /**
+     * Одна сводная строка на шаг вместо «Вспомнилось» по разу на каждую запись:
+     * в журнале это выглядело как четыре таймстемпа подряд, хотя вспомнилось другое.
+     */
+    @Test
+    void theRecallLogIsOneLineOfMeaning(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("""
+                - timestamps: 2026-11-13 08:14 UTC
+                - importance score: 0.8
+                - source event: xmogde вернулся из больницы, и мы говорили про это.
+                - key messages:
+                  - xmogde: "выписали наконец"
+                """, new double[] {1, 0, 0});
+        DiaryMemory memory = memory(diary);
+        Logger logger = (Logger) LoggerFactory.getLogger(DiaryMemory.class);
+        // в тестовом logback корень стоит на WARN, поэтому INFO надо поднять явно
+        Level before = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+
+        try {
+            memory.recall(context("как там xmogde после больницы?"), Audience.STRANGER);
+
+            List<String> lines = logs.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.contains("Вспомнилось"))
+                    .toList();
+            assertEquals(1, lines.size(), "одна сводная строка на шаг: " + lines);
+            assertTrue(lines.getFirst().contains("вернулся из больницы"), lines.toString());
+            assertFalse(lines.getFirst().contains("timestamps"),
+                    "служебные поля — не суть: " + lines);
+        } finally {
+            logger.detachAppender(logs);
+            logger.setLevel(before);
+        }
     }
 }

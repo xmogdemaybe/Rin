@@ -1,6 +1,8 @@
 package ru.rainedev.raine.memory;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
@@ -23,6 +25,22 @@ public final class DiaryMemory implements Memory {
 
     /** Сколько последних сообщений описывают «о чём сейчас речь». */
     private static final int CONTEXT_DEPTH = 3;
+
+    /**
+     * Служебные поля записи: они описывают форму воспоминания — когда оно
+     * случилось, сколько раз служило и насколько важно, — а не то, что было.
+     */
+    private static final List<String> BOOKKEEPING = List.of(
+            "timestamps", "importance score", "similarities", "retrieval cues", "relationships", "usage");
+
+    /** "- ключ: смысл" — ключ отбрасывается, в журнале остаётся то, что произошло. */
+    private static final Pattern KEY_PREFIX = Pattern.compile("^-\\s*[A-Za-z ]{1,30}:\\s*");
+
+    /** Сколько букв смысла помещается в одну строку журнала. */
+    private static final int DIGEST = 80;
+
+    /** Сколько записей перечисляются в сводной строке, дальше — только счётчик. */
+    private static final int SHOWN_IN_LOG = 3;
 
     /**
      * Сколько букв запроса переживает дорогу до модели эмбеддингов. Её предел —
@@ -95,6 +113,7 @@ public final class DiaryMemory implements Memory {
                 vectorMillis, matches.size(), System.currentTimeMillis() - searchedAt);
 
         StringBuilder recalled = new StringBuilder();
+        List<String> remembered = new ArrayList<>();
         for (Diary.Match match : matches) {
             if (match.relatedness() < Math.max(floor, threshold)) {
                 if (recalled.isEmpty()) {
@@ -127,10 +146,47 @@ public final class DiaryMemory implements Memory {
             }
             recalled.append(Markup.body(entry.body())).append("\n")
                     .append("</").append(TAG).append(">\n");
-            log.info("Вспомнилось (близость {}): {}", String.format("%.3f", match.relatedness()),
-                    entry.body().lines().findFirst().orElse("").strip());
+            remembered.add("%s (%.3f)".formatted(digest(entry.body()), match.relatedness()));
+        }
+        if (!remembered.isEmpty()) {
+            // одна сводная строка на шаг: по строке на запись выглядела как
+            // четыре таймстемпа подряд, хотя вспомнилось совсем другое
+            List<String> shown = remembered.subList(0, Math.min(SHOWN_IN_LOG, remembered.size()));
+            String tail = remembered.size() > shown.size()
+                    ? " | и ещё " + (remembered.size() - shown.size())
+                    : "";
+            log.info("Вспомнилось записей: {} — {}{}", remembered.size(), String.join(" | ", shown), tail);
         }
         return recalled.toString();
+    }
+
+    /**
+     * Смысл записи для журнала: первая строка, которая что-то рассказывает,
+     * а не служебное поле про форму воспоминания.
+     */
+    static String digest(String body) {
+        for (String line : body.lines().toList()) {
+            String text = line.strip();
+            if (text.isEmpty()) {
+                continue;
+            }
+            for (String key : BOOKKEEPING) {
+                if (text.startsWith("- " + key)) {
+                    text = "";
+                    break;
+                }
+            }
+            if (text.isEmpty()) {
+                continue;
+            }
+            String value = KEY_PREFIX.matcher(text).replaceFirst("").strip();
+            if (value.isEmpty()) {
+                // «- key messages:» без текста сама по себе ничего не значит
+                continue;
+            }
+            return value.length() <= DIGEST ? value : value.substring(0, DIGEST).strip() + "…";
+        }
+        return "";
     }
 
     /**
