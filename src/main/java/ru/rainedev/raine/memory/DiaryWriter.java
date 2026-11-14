@@ -9,6 +9,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
@@ -31,6 +32,14 @@ public final class DiaryWriter {
     private static final Pattern QUOTE = Pattern.compile("«([^»\\n]+)»|\"([^\"\\n]+)\"");
 
     private static final int MAX_ATTEMPTS = 3;
+
+    /** Блоками памяти размечен и ответ воспоминаний, и повод порыва. */
+    private static final String RECALL_OPEN = "<your_diary_page";
+    private static final String RECALL_CLOSE = "</your_diary_page>";
+
+    /** Пояснение к разметке, которое снимок чата ставит под своими сообщениями. */
+    private static final String NOTE_OPEN = "<instructions>";
+    private static final String NOTE_CLOSE = "</instructions>";
 
     private final Diary diary;
     private final LlmClient llm;
@@ -72,11 +81,25 @@ public final class DiaryWriter {
 
     private List<DiaryEntry> save(String systemPrompt, List<Message> context,
                                   List<TraitSignal> signals, Origin origin, boolean strict) {
-        if (context.isEmpty()) {
+        List<Message> conversation = conversationOnly(context);
+        if (conversation.isEmpty()) {
+            if (strict) {
+                throw new NotRetellable("от разговора остались одни служебные вставки");
+            }
             return List.of();
         }
 
-        String summary = askForSummary(systemPrompt, context);
+        String summary;
+        try {
+            summary = askForSummary(systemPrompt, conversation);
+        } catch (NotRetellable e) {
+            // обычный ход не тонет из-за вердикта фильтра: просто нечего сохранять,
+            // а вот отложенный разговор по этому же признаку уберётся из очереди
+            if (strict) {
+                throw e;
+            }
+            return List.of();
+        }
         if (summary.isBlank()) {
             log.warn("Пересказ разговора не получен — записи не сохранены");
             if (strict) throw new IllegalStateException("Пересказ не получен, исходный разговор нужно сохранить");
@@ -87,6 +110,55 @@ public final class DiaryWriter {
             throw new IllegalStateException("Пересказ слишком короткий, исходный разговор нужно сохранить");
         }
         return persist(summary, signals, origin);
+    }
+
+    /**
+     * Голый разговор: без того, что дописала в контекст сама система. Страница
+     * памяти, пояснения к снимку чата и напоминания цикла занимают половину
+     * дампа (в разговоре от 9 ноября 90 579 символов, из них 44 775 — обвязка),
+     * а модель в пересказе принимает их служебные фразы за события дня и
+     * охотно цитирует чужие указания.
+     * <p>
+     * Средней памяти срез не касается: ей нужна целая переписка, а не пересказ.
+     */
+    private static List<Message> conversationOnly(List<Message> context) {
+        List<Message> kept = new ArrayList<>();
+        for (Message message : context) {
+            if (message.role() == Message.Role.TOOL) {
+                // «Success», «message_id=...», выдачи #ask — протокол шага, а не
+                // слова разговора: сказанное видно в репликах и в снимках чата
+                continue;
+            }
+            String text = message.content() == null ? "" : message.content();
+            text = cutBlocks(text, RECALL_OPEN, RECALL_CLOSE);
+            text = cutBlocks(text, NOTE_OPEN, NOTE_CLOSE);
+            for (String insertion : NotificationLoop.serviceInsertions()) {
+                text = text.replace(insertion, "");
+            }
+            text = text.replaceAll("\n{3,}", "\n\n").strip();
+            if (text.isEmpty()) {
+                // реплика без текста — это вызов инструмента, а не высказывание
+                continue;
+            }
+            // tool_calls не переносятся: без ответов на них запрос невалиден
+            kept.add(new Message(message.role(), text, null, null, null));
+        }
+        return kept;
+    }
+
+    /** Вырезает блоки между разметкой; незакрытый блок уносит всё до конца текста. */
+    private static String cutBlocks(String text, String open, String close) {
+        StringBuilder kept = new StringBuilder();
+        int from = 0;
+        for (int start = text.indexOf(open); start >= 0; start = text.indexOf(open, from)) {
+            kept.append(text, from, start);
+            int end = text.indexOf(close, start);
+            if (end < 0) {
+                return kept.toString();
+            }
+            from = end + close.length();
+        }
+        return kept.append(text, from, text.length()).toString();
     }
 
     private String askForSummary(String systemPrompt, List<Message> context) {
@@ -101,7 +173,7 @@ public final class DiaryWriter {
                 // вердикт фильтр-политики, а не забывчивость: тот же разговор
                 // даст тот же отказ, и каждый повтор оплачивается заново
                 log.warn("Модель отказала контент-фильтром — пересказ не получится");
-                return "";
+                throw new NotRetellable("контент-фильтр забраковал этот пересказ");
             }
             if (content.isBlank()) {
                 // модель попыталась действовать инструментом, хотя их здесь нет
@@ -199,5 +271,19 @@ public final class DiaryWriter {
             }
         }
         return found;
+    }
+
+    /**
+     * Этот текст не пересказывается и не перескажется завтра: вердикт
+     * фильтр-политики по содержанию либо разговор, от которого после очистки
+     * не осталось ни одной реплики. Повтор даёт ровно то же и оплачивается
+     * заново всем контекстом, поэтому отложенный разговор по этому признаку
+     * убирают из очереди, а не оставляют ждать следующего запуска.
+     */
+    public static final class NotRetellable extends RuntimeException {
+
+        NotRetellable(String reason) {
+            super(reason);
+        }
     }
 }

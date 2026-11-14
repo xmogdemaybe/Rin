@@ -469,7 +469,7 @@ public final class RaineApp implements AutoCloseable {
 
         brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
         Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
-        Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(writer, prompts.system("")));
+        Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(pending, writer, prompts.system("")));
         // недельное лежит для глаз, но папка не должна расти вечно
         pending.pruneFailures(java.time.Duration.ofDays(7));
         // то же про дампы ответов, описания картинок и расшифровки: они нужны для
@@ -503,10 +503,19 @@ public final class RaineApp implements AutoCloseable {
 
     /**
      * Отложенное сетью досказывается при первой возможности — не мешая запуску
-     * и не задерживая ответ. Не получилось и сейчас — пусть лежит дальше:
-     * лучше пересказать завтра, чем выбросить сегодня.
+     * и не задерживая ответ. Сети нет и сейчас — пусть лежит дальше: лучше
+     * пересказать завтра, чем выбросить сегодня.
+     * <p>
+     * Отказ же фильтр-политики к «завтра» не относится: тот же текст даёт тот
+     * же вердикт. Такой разговор убирается в карантин, а очередь идёт дальше,
+     * иначе один невозвратимый файл стоит и памяти остальных, и полного
+     * контекста токенов при каждом запуске.
+     * <p>
+     * Виден для проверок: чем заканчивается каждый файл очереди, надо уметь
+     * увидеть без запуска Telegram.
      */
-    private void rememberPending(DiaryWriter writer, String systemPrompt) {
+    static void rememberPending(ru.rainedev.raine.memory.PendingConversations pending,
+                                DiaryWriter writer, String systemPrompt) {
         for (java.nio.file.Path file : pending.waiting()) {
             var restored = pending.read(file);
             if (restored.conversation().isEmpty()) {
@@ -520,6 +529,10 @@ public final class RaineApp implements AutoCloseable {
                         List.of(), restored.origin()).size();
                 pending.done(file);
                 log.info("Отложенный разговор {} пересказан, записей: {}", file.getFileName(), saved);
+            } catch (DiaryWriter.NotRetellable e) {
+                pending.quarantine(file);
+                log.warn("Отложенный разговор {} не пересказывается ({}) — убран из очереди",
+                        file.getFileName(), e.getMessage());
             } catch (RuntimeException e) {
                 log.warn("Отложенный разговор {} пока не пересказать: {}", file.getFileName(), e.getMessage());
                 return;   // связи по-прежнему нет, остальные ждут своей очереди

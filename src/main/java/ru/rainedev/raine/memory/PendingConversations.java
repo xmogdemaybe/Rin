@@ -76,7 +76,7 @@ public final class PendingConversations {
         }
     }
 
-    /** @return отложенное, самое давнее первым */
+    /** @return отложенное, самое давнее первым; вложенные папки в очередь не входят */
     public List<Path> waiting() {
         if (!Files.isDirectory(dir)) {
             return List.of();
@@ -170,6 +170,25 @@ public final class PendingConversations {
             Files.deleteIfExists(file);
         } catch (IOException e) {
             log.warn("Отложенный разговор {} не удалился: {}", file.getFileName(), e.getMessage());
+        }
+    }
+
+    /**
+     * Разговор, который не перескажется никогда, убирается с дороги, а не
+     * выбрасывается: файл остаётся на диске человекочитаемым, но из очереди
+     * выходит. Держать его там — значит платить за один и тот же отказ при
+     * каждом запуске и не давать пересказаться остальным.
+     */
+    public void quarantine(Path file) {
+        Path aside = dir.resolve("quarantine").resolve(file.getFileName());
+        try {
+            Files.createDirectories(aside.getParent());
+            Files.move(file, aside);
+            log.warn("Непересказываемый разговор убран в карантин: {}", aside);
+        } catch (IOException e) {
+            // остаться в очереди хуже, чем не переехать: разговор перескажут
+            // ещё раз, и это единственный способ его не потерять
+            log.warn("Отложенный разговор {} не убран в карантин: {}", file.getFileName(), e.getMessage());
         }
     }
 }

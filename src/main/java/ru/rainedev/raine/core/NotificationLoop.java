@@ -90,6 +90,15 @@ public final class NotificationLoop {
 
             Repeat this step now and actually call the tool. If you truly need nothing, call #wait.""";
 
+    /**
+     * Что цикл дописывает в разговор сам и чего человек не говорил. Пересказ в
+     * дневник вычищает вставки по этому же списку: иначе напоминание «вызови
+     * #ask» уезжает в память как событие дня.
+     */
+    public static List<String> serviceInsertions() {
+        return List.of(ASK_REMINDER, ASK_MISSED, BE_TOOL_CENTRIC);
+    }
+
     private final LinkedBlockingDeque<Notification> queue = new LinkedBlockingDeque<>();
     private final List<Message> context = new ArrayList<>();
 
