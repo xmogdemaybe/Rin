@@ -1,5 +1,6 @@
 package ru.rainedev.raine.memory;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -13,6 +14,7 @@ import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.llm.ToolCall;
 
 /**
  * Переносит разговор в долгую память: просит модель пересказать его записями
@@ -40,6 +42,20 @@ public final class DiaryWriter {
     /** Пояснение к разметке, которое снимок чата ставит под своими сообщениями. */
     private static final String NOTE_OPEN = "<instructions>";
     private static final String NOTE_CLOSE = "</instructions>";
+
+    /** Снимок открытого чата: пока сообщение не стало уведомлением, оно видно только здесь. */
+    private static final String SCREEN_HEAD = "You switched to the chat";
+
+    /** Её слова уходят в аргументах вызова, а не в тексте ответа. */
+    private static final String SEND_TOOL = "send_telegram_message";
+    private static final String REACT_TOOL = "react_with_emoji";
+
+    /** Служебный формат ответа (<outputFormatting>): про намерения, а не про разговор. */
+    private static final Pattern MENTAL_NOTE = Pattern.compile(
+            "^[ \\t]*-[ \\t]*(?:thought|emotion|to remember|intention)[ \\t]*:.*$", Pattern.MULTILINE);
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper ARGUMENTS =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     private final Diary diary;
     private final LlmClient llm;
@@ -116,35 +132,110 @@ public final class DiaryWriter {
      * Голый разговор: без того, что дописала в контекст сама система. Страница
      * памяти, пояснения к снимку чата и напоминания цикла занимают половину
      * дампа (в разговоре от 9 ноября 90 579 символов, из них 44 775 — обвязка),
-     * и в пересказе её служебные фразы стоят наравне с человеческими: промпт
-     * велит избегать повторов прежних страниц, а без страницы перед глазами
-     * модель пересказывает и их.
+     * и в пересказе её служебные фразы стоят наравне с человеческими.
+     * <p>
+     * Обратно собирается то, чего в тексте сообщений нет: реплики и реакции
+     * Raine из аргументов её вызовов и снимок открытого чата, где до уведомления
+     * видно всё, что сказал человек. Без этого в дневник уходил конспект её
+     * намерений вместо разговора.
      * <p>
      * Средней памяти срез не касается: ей нужна целая переписка, а не пересказ.
      */
     private static List<Message> conversationOnly(List<Message> context) {
         List<Message> kept = new ArrayList<>();
         for (Message message : context) {
-            if (message.role() == Message.Role.TOOL) {
-                // «Success», «message_id=...», выдачи #ask — протокол шага, а не
-                // слова разговора: сказанное видно в репликах и в снимках чата
+            if (message.role() == Message.Role.TOOL && !isChatScreen(message.content())) {
+                // «Success», «message_id=…», выдачи #ask — протокол шага, а не
+                // слова разговора. Снимок чата — исключение: реплики человека
+                // живут только в нём, пока не стали уведомлением
                 continue;
             }
-            String text = message.content() == null ? "" : message.content();
-            text = cutBlocks(text, RECALL_OPEN, RECALL_CLOSE);
+            String text = cutBlocks(message.content() == null ? "" : message.content(),
+                    RECALL_OPEN, RECALL_CLOSE);
             text = cutBlocks(text, NOTE_OPEN, NOTE_CLOSE);
             for (String insertion : NotificationLoop.serviceInsertions()) {
                 text = text.replace(insertion, "");
             }
+            if (message.role() == Message.Role.ASSISTANT) {
+                // её собственные заметки о намерениях — не то, что было сказано
+                text = withoutMentalNotes(text);
+                text = join(text, herWords(message));
+            }
             text = text.replaceAll("\n{3,}", "\n\n").strip();
             if (text.isEmpty()) {
-                // реплика без текста — это вызов инструмента, а не высказывание
+                // реплика, от которой остались одни теги или вызов без текста
                 continue;
             }
             // tool_calls не переносятся: без ответов на них запрос невалиден
             kept.add(new Message(message.role(), text, null, null, null));
         }
         return kept;
+    }
+
+    private static boolean isChatScreen(String content) {
+        return content != null && content.stripLeading().startsWith(SCREEN_HEAD);
+    }
+
+    private static String withoutMentalNotes(String text) {
+        return MENTAL_NOTE.matcher(text).replaceAll("");
+    }
+
+    /** Два куска одного высказывания: что она написала и что сказала вызовом. */
+    private static String join(String said, String done) {
+        if (said.isBlank()) {
+            return done;
+        }
+        return done.isBlank() ? said : said.strip() + "\n" + done;
+    }
+
+    /**
+     * Реплики и реакции самой Raine: в тексте её ответа их обычно нет, они
+     * лежат в аргументах {@code send_telegram_message} и {@code react_with_emoji}.
+     * Без них пересказчик видит только «- thought: …» и конспектирует намерения
+     * вместо разговора.
+     */
+    private static String herWords(Message message) {
+        StringBuilder said = new StringBuilder();
+        for (ToolCall call : message.toolCallsOrEmpty()) {
+            boolean sends = SEND_TOOL.equals(call.name());
+            if (!sends && !REACT_TOOL.equals(call.name())) {
+                continue;
+            }
+            JsonNode arguments = argumentsOf(call);
+            if (!sends) {
+                String emoji = arguments.path("emoji").asText("");
+                if (!emoji.isBlank()) {
+                    said.append("Rin reacted with ").append(emoji).append('\n');
+                }
+                continue;
+            }
+            String text = arguments.path("text").asText("");
+            String attachment = arguments.path("photo_filename").asText(
+                    arguments.path("audio_filename").asText(""));
+            if (text.isBlank() && attachment.isBlank()) {
+                continue;
+            }
+            said.append("Rin: ");
+            if (!text.isBlank()) {
+                said.append('«').append(text).append('»');
+            }
+            if (!attachment.isBlank()) {
+                said.append(text.isBlank() ? "" : " ").append("(вложение: ").append(attachment).append(')');
+            }
+            said.append('\n');
+        }
+        return said.toString();
+    }
+
+    private static JsonNode argumentsOf(ToolCall call) {
+        try {
+            return ARGUMENTS.readTree(call.arguments());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // модель порой присылает оборванный json: терять из-за этого весь
+            // день памяти нельзя, этот вызов просто останется без реплики
+            log.debug("Аргументы вызова {} не читаются: {}", call.name(), e.getMessage());
+            return ARGUMENTS.createObjectNode();
+        }
     }
 
     /** Вырезает блоки между разметкой; незакрытый блок уносит всё до конца текста. */
