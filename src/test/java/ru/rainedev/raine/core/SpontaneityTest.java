@@ -77,7 +77,7 @@ class SpontaneityTest {
                 .buildContextual((arguments, addTool) -> "CHAT OPENED");
 
         try (Spontaneity spontaneity =
-                     new Spontaneity(loop(), diary, new Toolbox(open), 777, new Random(1))) {
+                     new Spontaneity(loop(), diary, () -> new Toolbox(open), 777, new Random(1))) {
             Notification impulse = spontaneity.buildImpulse();
 
             assertEquals(777, impulse.chatId());
@@ -102,7 +102,7 @@ class SpontaneityTest {
         loop.process(new Notification("тебе написали", new Toolbox(send)));
 
         try (Spontaneity spontaneity =
-                     new Spontaneity(loop, diary, new Toolbox(), 0, new Random(1))) {
+                     new Spontaneity(loop, diary, Toolbox::new, 0, new Random(1))) {
             String prompt = spontaneity.buildPrompt();
 
             assertTrue(prompt.contains("<last_conversation>"), prompt);
@@ -118,7 +118,7 @@ class SpontaneityTest {
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
 
         try (Spontaneity spontaneity =
-                     new Spontaneity(loop(), diary, new Toolbox(), 0, new Random(1))) {
+                     new Spontaneity(loop(), diary, Toolbox::new, 0, new Random(1))) {
             String prompt = spontaneity.buildPrompt();
 
             assertTrue(prompt.contains("wanted to write first"),
@@ -139,7 +139,7 @@ class SpontaneityTest {
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
         NotificationLoop loop = loop();
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 0, new Random(1))) {
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 0, new Random(1))) {
             spontaneity.asleepWhen(() -> true);
             spontaneity.actNow();
 
@@ -153,7 +153,7 @@ class SpontaneityTest {
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
         NotificationLoop loop = loop();
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 0, new Random(1))) {
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 0, new Random(1))) {
             int impulses = 0;
             for (int attempt = 0; attempt < 40; attempt++) {
                 spontaneity.actNow();
@@ -179,7 +179,7 @@ class SpontaneityTest {
         diary.save("обсудили в общей группе", new double[] {1, 0, 0}, 0, List.of(),
                 new Origin(5, Source.GROUP));
 
-        try (Spontaneity spontaneity = new Spontaneity(loop(), diary, new Toolbox(), 0, new Random(1))) {
+        try (Spontaneity spontaneity = new Spontaneity(loop(), diary, Toolbox::new, 0, new Random(1))) {
             for (int attempt = 0; attempt < 30; attempt++) {
                 String prompt = spontaneity.buildPrompt();
                 assertTrue(prompt.contains("общая новость"), "поводом служит общая запись: " + prompt);
@@ -197,7 +197,7 @@ class SpontaneityTest {
         Diary diary = new Diary(dir);
         NotificationLoop loop = loop();
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, new Random(1))) {
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 777, new Random(1))) {
             for (int attempt = 0; attempt < 40; attempt++) {
                 spontaneity.actNow();
             }
@@ -215,7 +215,7 @@ class SpontaneityTest {
         diary.save("владелец поверил только мне", new double[] {1, 0, 0}, 0, List.of(),
                 new Origin(1, Source.OWNER_DM));
 
-        try (Spontaneity spontaneity = new Spontaneity(loop(), diary, new Toolbox(), 777, new Random(1))) {
+        try (Spontaneity spontaneity = new Spontaneity(loop(), diary, Toolbox::new, 777, new Random(1))) {
             String prompt = spontaneity.buildPrompt();
 
             assertFalse(prompt.contains("your_diary_page"), "пустого блока в промпте не бывает: " + prompt);
@@ -233,7 +233,7 @@ class SpontaneityTest {
         NotificationLoop loop = loop();
 
         try (Spontaneity spontaneity =
-                     new Spontaneity(loop, diary, new Toolbox(open), 777, new Random(1))) {
+                     new Spontaneity(loop, diary, () -> new Toolbox(open), 777, new Random(1))) {
             for (int attempt = 0; attempt < 40 && loop.queued() == 0; attempt++) {
                 spontaneity.actNow();
             }
@@ -260,7 +260,7 @@ class SpontaneityTest {
         logs.start();
         logger.addAppender(logs);
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 0, new Random(1))) {
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 0, new Random(1))) {
             for (int attempt = 0; attempt < 20; attempt++) {
                 spontaneity.actNow();
             }
@@ -287,7 +287,7 @@ class SpontaneityTest {
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
         NotificationLoop loop = loop();
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 0, new Random(1))) {
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 0, new Random(1))) {
             int impulses = 0;
             for (int attempt = 0; attempt < 40 && impulses == 0; attempt++) {
                 spontaneity.actNow();
@@ -313,42 +313,45 @@ class SpontaneityTest {
         };
     }
 
-    /** Ночной тик не сгорает: он дождётся пробуждения — но один на всю ночь. */
+    /** Каждый порыв открывает личку заново: набор инструментов не наследуется. */
     @Test
-    void aNightTickIsCarriedOverToTheMorning(@TempDir Path dir) {
+    void everyImpulseStartsWithAFreshChatToolset(@TempDir Path dir) {
         Diary diary = new Diary(dir);
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
-        boolean[] sleeping = {true};
         NotificationLoop loop = loop();
+        Tool open = Tool.simple("open", "открывает чат", arguments -> "вот снимок");
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, alwaysKeen())) {
-            spontaneity.asleepWhen(() -> sleeping[0]);
-            spontaneity.actNow();
-            spontaneity.actNow();
-            spontaneity.actNow();
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, () -> new Toolbox(open), 777, alwaysKeen())) {
+            Notification first = spontaneity.buildImpulse();
+            // цикл дописывает в набор инструменты открытого чата; перейди они во
+            // второй порыв — и автооткрытие больше не срабатывает никогда, а без
+            // него порыв приходит вслепую
+            first.tools().add(Tool.simple("send_telegram_message", "отправляет", arguments -> "ok"));
+            first.tools().add(Tool.simple("react_with_emoji", "реагирует", arguments -> "ok"));
 
-            assertEquals(0, loop.queued(), "во сне порыв не заводится");
+            Notification second = spontaneity.buildImpulse();
 
-            sleeping[0] = false;
-            spontaneity.wokenUp();
-            assertEquals(1, loop.queued(), "пропущенный за ночь тик приходит утром");
-
-            spontaneity.wokenUp();
-            spontaneity.wokenUp();
-            assertEquals(1, loop.queued(), "три ночных тика — один порыв, а не три");
+            assertEquals(1, second.tools().all().size(),
+                    "второй порыв начинается с одного open: " + second.tools().names());
         }
     }
 
+    /** Порыв не стреляет поверх живого разговора. */
     @Test
-    void wakingWithoutANightTickInventsNothing(@TempDir Path dir) {
+    void aFreshAnswerQuietsTheImpulseTick(@TempDir Path dir) {
         Diary diary = new Diary(dir);
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
-        NotificationLoop loop = loop();
+        Tool send = Tool.named("send_telegram_message").describedAs("отправляет").mutating()
+                .build(arguments -> "ok");
+        NotificationLoop loop = new NotificationLoop(
+                scripted(toolCall("send_telegram_message"), toolCall("wait")), () -> "промпт",
+                new Toolbox(send), 40_000);
+        loop.process(new Notification("тебе написали"));
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, alwaysKeen())) {
-            spontaneity.wokenUp();
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 777, alwaysKeen())) {
+            spontaneity.actNow();
 
-            assertEquals(0, loop.queued(), "пробуждение без пропущенного тика — не повод писать");
+            assertEquals(0, loop.queued(), "она ответила минуту назад — порыв не нужен");
         }
     }
 
@@ -362,7 +365,7 @@ class SpontaneityTest {
         NotificationLoop loop = new NotificationLoop(scripted(toolCall("wait")), () -> "промпт",
                 new Toolbox(), 40_000);
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 777, alwaysKeen())) {
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 777, alwaysKeen())) {
             loop.process(spontaneity.buildImpulse());
 
             spontaneity.actNow();
@@ -378,11 +381,14 @@ class SpontaneityTest {
     void silenceIsNotAnnouncedAsIfItWereAnAction(@TempDir Path dir) {
         Diary diary = new Diary(dir);
         diary.save("что-то из прошлого", new double[] {1, 0, 0});
-        NotificationLoop loop = new NotificationLoop(scripted(toolCall("wait")), () -> "промпт",
-                new Toolbox(), 40_000);
+        Tool send = Tool.named("send_telegram_message").describedAs("отправляет").mutating()
+                .build(arguments -> "ok");
+        NotificationLoop loop = new NotificationLoop(
+                scripted(toolCall("send_telegram_message"), toolCall("wait")), () -> "промпт",
+                new Toolbox(send), 40_000);
         loop.process(new Notification("тебе написали", new Toolbox()));
 
-        try (Spontaneity spontaneity = new Spontaneity(loop, diary, new Toolbox(), 0, alwaysKeen())) {
+        try (Spontaneity spontaneity = new Spontaneity(loop, diary, Toolbox::new, 0, alwaysKeen())) {
             String prompt = spontaneity.buildPrompt();
 
             assertTrue(prompt.contains("<last_conversation>"), prompt);

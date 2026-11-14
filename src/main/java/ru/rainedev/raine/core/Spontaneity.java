@@ -28,8 +28,9 @@ public final class Spontaneity implements AutoCloseable {
     /**
      * Между порывами — от получаса до трёх четвертей часа, каждый раз заново.
      * Ровный интервал читался бы как расписание: «опять ровно в 27 минут».
+     * Тот же срок цикл считает тишиной, достаточной для порыва.
      */
-    private static final int MIN_MINUTES = 27;
+    static final int MIN_MINUTES = 27;
     private static final int MAX_MINUTES = 47;
 
     /** Срабатывает примерно в половине случаев. */
@@ -59,18 +60,18 @@ public final class Spontaneity implements AutoCloseable {
 
     private final NotificationLoop loop;
     private final Diary diary;
-    private final Toolbox ownerChat;
+
+    /**
+     * Личка владельца. Фабрика, а не готовый набор: цикл открывает чат сам и
+     * дописывает в набор его инструменты, а один общий {@code Toolbox} на все
+     * порывы после первого становился настолько широким, что автооткрытие
+     * больше не срабатывало — порыв приходил вслепую, без свежего снимка чата.
+     */
+    private final java.util.function.Supplier<Toolbox> ownerChat;
     private final long personId;
     private final RandomGenerator random;
 
     private Instant lastSkipReport = Instant.EPOCH;
-
-    /**
-     * Тик, который пришёлся на сон. Флаг один на всю ночь: будильник за это
-     * время успеет прозвенеть с десяток раз, а порыв с утра должен быть один.
-     */
-    private final java.util.concurrent.atomic.AtomicBoolean deferred =
-            new java.util.concurrent.atomic.AtomicBoolean();
 
     private java.util.function.BooleanSupplier asleep = () -> false;
 
@@ -83,11 +84,15 @@ public final class Spontaneity implements AutoCloseable {
             new java.util.concurrent.atomic.AtomicBoolean();
 
     /**
-     * @param ownerChat набор с инструментом открытия лички владельца: он же
-     *                  открывается на шаге 0, поэтому писать можно без разведки
+     * @param ownerChat фабрика набора с инструментом открытия лички владельца:
+     *                  чат открывается на шаге 0, поэтому писать можно без
+     *                  разведки. Каждый порыв получает свежий набор — открытый
+     *                  первым чатом набор расширился бы инструментами переписки,
+     *                  и автооткрытие больше ни разу бы не сработало
      * @param personId  владелец порыва; ноль — писать некому, останется размышление
      */
-    public Spontaneity(NotificationLoop loop, Diary diary, Toolbox ownerChat, long personId,
+    public Spontaneity(NotificationLoop loop, Diary diary,
+                       java.util.function.Supplier<Toolbox> ownerChat, long personId,
                        RandomGenerator random) {
         this.loop = loop;
         this.diary = diary;
@@ -136,25 +141,22 @@ public final class Spontaneity implements AutoCloseable {
     }
 
     /**
-     * Пробуждение: то, что не пришло во сне, приходит сейчас — и ровно один раз,
-     * сколько бы тиков ни было пропущено за ночь. Решение принимается заново, со
-     * своей монеткой и своим поводом: ночной тик не гарантирует, что утром будет
-     * о чём сказать.
+     * Очередная попытка захотеть написать. Пробуждение её не будит: близким
+     * утром пишет {@code Goodnights}, а второй повод в ту же секунду — это
+     * верное молчание. Тик, пришедшийся на сон, просто проходит мимо.
      */
-    public void wokenUp() {
-        if (!deferred.compareAndSet(true, false)) {
-            return;
-        }
-        maybeAct();
-    }
-
     private void maybeAct() {
         try {
             // спящему человеку ничего не приходит в голову: ни разговоров,
             // ни записей в память, ни строчек в журнале
             if (asleep.getAsBoolean()) {
-                deferred.set(true);
-                reportSkip("отдыхает — порыв дождётся пробуждения");
+                reportSkip("отдыхает");
+                return;
+            }
+            if (loop.talkedRecently()) {
+                // она отвечала меньше получаса назад: порыв поверх живого разговора
+                // стоит полный контекст и заранее знает ответ
+                reportSkip("переписка ещё жива");
                 return;
             }
             if (random.nextDouble() >= CHANCE) {
@@ -186,10 +188,10 @@ public final class Spontaneity implements AutoCloseable {
      * не заглядывая в планировщик.
      */
     String buildPrompt() {
-        return buildPrompt(randomEntry());
+        return buildPrompt(randomEntry(), ownerChat.get());
     }
 
-    private String buildPrompt(java.util.Optional<DiaryEntry> reason) {
+    private String buildPrompt(java.util.Optional<DiaryEntry> reason, Toolbox chat) {
         StringBuilder prompt = new StringBuilder();
         // блока без воспоминания в промпте не бывает: пустая пара тегов — это
         // разметка вместо повода, и модель отвечает на неё подтверждением, что
@@ -203,7 +205,7 @@ public final class Spontaneity implements AutoCloseable {
         if (!status.isEmpty()) {
             prompt.append("<last_conversation>\n").append(status).append("\n</last_conversation>\n\n");
         }
-        String invitation = ownerChat.isEmpty()
+        String invitation = chat.isEmpty()
                 ? "  - maybe write to someone? You may need to open a chat first."
                 : "  - maybe write to someone? The chat is already open — you can send a message or react "
                         + "right away.";
@@ -219,7 +221,8 @@ public final class Spontaneity implements AutoCloseable {
     }
 
     private Notification buildImpulse(java.util.Optional<DiaryEntry> reason) {
-        return new Notification(buildPrompt(reason), ownerChat, true, personId, personId).onOwnInitiative();
+        Toolbox chat = ownerChat.get();
+        return new Notification(buildPrompt(reason, chat), chat, true, personId, personId).onOwnInitiative();
     }
 
     /**
@@ -261,12 +264,12 @@ public final class Spontaneity implements AutoCloseable {
 
     /**
      * Строжайшая метка записи, которую адресату порыва ещё можно вспомнить.
-     * Личка владельца открыта заранее — значит порыв идёт ему, и строже
+     * Личка владельца открывается заранее — значит порыв идёт ему, и строже
      * владелецской тайны ничего не бывает. Иначе разговор она выбирает сама,
      * и личное — даже владелецское — уехало бы случайному человеку.
      */
     private Source ceiling() {
-        return ownerChat.isEmpty() ? Source.GENERAL : Source.OWNER_DM;
+        return ownerChat.get().isEmpty() ? Source.GENERAL : Source.OWNER_DM;
     }
 
     /**

@@ -65,7 +65,14 @@ public final class NotificationLoop {
     /** Как долго после последнего хода разговор считается ещё живым. */
     private static final java.time.Duration TALK_GRACE = java.time.Duration.ofMinutes(10);
 
-    /** Конец последнего живого хода. Читает и планировщик порывов. */
+    /** Сколько должно пройти после настоящего ответа, чтобы порыв был уместен. */
+    private static final java.time.Duration IMPULSE_QUIET =
+            java.time.Duration.ofMinutes(Spontaneity.MIN_MINUTES);
+
+    /** Конец последнего хода — живого или молчаливого: по нему решается, можно ли спать. */
+    private volatile Instant lastActivity = Instant.EPOCH;
+
+    /** Чем закончился последний ход, в котором она что-то сделала. */
     private volatile java.time.Instant lastTalk = Instant.EPOCH;
 
     /** Чем закончился последний ход: отправка, реакция или молчание. */
@@ -144,6 +151,10 @@ public final class NotificationLoop {
         int emptySteps;
         /** Последнее действие, видимое человеку: send_telegram_message, react_with_emoji. */
         String lastAction = "";
+        /** Чем был контекст до хода порыва: холостый ход не должен оставлять следа. */
+        List<Message> contextBefore;
+        Origin originBefore;
+        Runnable undoOutside;
         Turn(Notification notification) { this.notification = notification; }
     }
 
@@ -166,6 +177,9 @@ public final class NotificationLoop {
 
     /** Что сделать, когда контекст выброшен: вместе с ним забываются снимки чатов. */
     private Runnable onContextCleared = () -> {};
+
+    /** Откат того, что живёт вне контекста, если порыв кончился молчанием. */
+    private java.util.function.Supplier<Runnable> outsideContext = () -> () -> {};
 
     private Memory memory = Memory.NONE;
 
@@ -305,6 +319,22 @@ public final class NotificationLoop {
         this.retryPause = pause;
     }
 
+    /** Для проверок: отмотать часы последнего разговора — ждать по-настоящему нельзя. */
+    void windBackLastTalk(Duration by) {
+        if (!lastTalk.equals(Instant.EPOCH)) {
+            lastTalk = Instant.now().minus(by);
+        }
+    }
+
+    /**
+     * Что ещё откатывать, когда порыв кончился молчанием: память помнит, что
+     * уже выдавала, а экран чата — что уже показывал. Оба знания переживают
+     * откат контекста, если про них забыть.
+     */
+    public void idleImpulseSnapshot(java.util.function.Supplier<Runnable> capture) {
+        this.outsideContext = capture;
+    }
+
     public void onNotificationDone(java.util.function.Consumer<Notification> action) {
         this.onNotificationDone.add(action);
     }
@@ -340,7 +370,17 @@ public final class NotificationLoop {
      */
     public boolean talkAlive() {
         return !queue.isEmpty() || active != null || !stranded.isEmpty()
-                || Duration.between(lastTalk, Instant.now()).compareTo(TALK_GRACE) < 0;
+                || Duration.between(lastActivity, Instant.now()).compareTo(TALK_GRACE) < 0;
+    }
+
+    /**
+     * Недавно она отвечала по-настоящему? Порыву сейчас не место: он придёт
+     * либо поверх живого разговора, либо через минуту после того, как она сама
+     * всё сказала.
+     */
+    boolean talkedRecently() {
+        return !lastTalk.equals(Instant.EPOCH)
+                && Duration.between(lastTalk, Instant.now()).compareTo(IMPULSE_QUIET) < 0;
     }
 
     public List<Message> context() {
@@ -444,8 +484,6 @@ public final class NotificationLoop {
                 releaseStranded();
                 notifyDone(notification);
                 onIdle.run();
-                // ход кончился — разговор только что был живым, ночь подождёт
-                lastTalk = Instant.now();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 stopped.countDown();
@@ -486,7 +524,24 @@ public final class NotificationLoop {
     /** Обработка одного уведомления целиком — до wait/pause. */
     public void process(Notification notification) {
         boolean resuming = active != null && active.notification == notification;
-        if (!resuming) active = new Turn(notification);
+        if (!resuming && notification.initiative() && talkedRecently()) {
+            // утреннее приветствие уже написало владельцу две строки назад, а
+            // порыв стоит в очереди за ним: выпускать его к модели — значит
+            // платить за отказ заново всем контекстом
+            log.info("Порыв пропущен: с последнего ответа {} мин",
+                    Duration.between(lastTalk, Instant.now()).toMinutes());
+            return;
+        }
+        if (!resuming) {
+            active = new Turn(notification);
+            if (notification.initiative()) {
+                // молчание после порыва не должно оставить в истории ни его
+                // промпта, ни потраченных на него воспоминаний
+                active.contextBefore = List.copyOf(context);
+                active.originBefore = contextOrigin.get();
+                active.undoOutside = outsideContext.get();
+            }
+        }
         Turn turn = active;
         long startedAt = turn.startedAt;
         long spentTokens = turn.tokens;
@@ -643,7 +698,7 @@ public final class NotificationLoop {
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
                 }
-                // ход кончился — разговор только что был живым, ночь подождёт
+                // действие сделано — дальше ход решает endTurn
                 endTurn(turn);
                 active = null;
                 return;
@@ -661,10 +716,37 @@ public final class NotificationLoop {
         active = null;
     }
 
-    /** Ход закончился: запоминаем время и последнее видимое действие. */
+    /** Ход закончился: запоминаем активность, видимое действие и откат холостого порыва. */
     private void endTurn(Turn turn) {
-        lastTalkAction = turn.lastAction;
-        lastTalk = Instant.now();
+        lastActivity = Instant.now();
+        if (!turn.lastAction.isEmpty()) {
+            // молчание разговором не было: эти часы читает планировщик порывов, и
+            // холостой порыв, обнулив их, сам же себя и запрещал на полчаса вперёд
+            lastTalkAction = turn.lastAction;
+            lastTalk = Instant.now();
+        }
+        if (turn.contextBefore != null && turn.lastAction.isEmpty()) {
+            rollbackIdleImpulse(turn);
+        }
+    }
+
+    /**
+     * Холостой порыв убирается целиком: его промпт, его шаги и то, что он успел
+     * истратить вне контекста — выданные воспоминания и показанные снимки чата.
+     */
+    private void rollbackIdleImpulse(Turn turn) {
+        List<Message> was = turn.contextBefore;
+        if (context.size() < was.size() || !context.subList(0, was.size()).equals(was)) {
+            // контекст за это время пересобрали (например, вынесли в дневник):
+            // возвращать прежний — значит воскресить уже сохранённый разговор
+            log.info("Холостой порыв не откатывается: история уже другой длины");
+            return;
+        }
+        context.clear();
+        context.addAll(was);
+        contextOrigin.set(turn.originBefore);
+        turn.undoOutside.run();
+        log.info("Холостой порыв убран из истории, шагов {}", turn.step);
     }
 
     /**

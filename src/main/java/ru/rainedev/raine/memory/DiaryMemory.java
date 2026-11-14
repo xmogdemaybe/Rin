@@ -245,4 +245,17 @@ public final class DiaryMemory implements Memory {
     public void forget() {
         injected.clear();
     }
+
+    /**
+     * Снимок выданного. Холостой порыв, который цикл уберёт из истории, не
+     * должен ещё и сжигать записи: они вспомнились зря и обязаны вернуться.
+     */
+    public java.util.Set<Long> markInjected() {
+        return java.util.Set.copyOf(injected);
+    }
+
+    public void restoreInjected(java.util.Set<Long> snapshot) {
+        injected.clear();
+        injected.addAll(snapshot);
+    }
 }

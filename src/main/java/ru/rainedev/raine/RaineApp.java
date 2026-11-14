@@ -445,27 +445,28 @@ public final class RaineApp implements AutoCloseable {
         log.info("Счёт доверия: {}", config.trustLedgerEnabled() ? "ведётся" : "не ведётся");
 
         // порыв адресован владельцу, поэтому его личка открывается на шаге 0:
-        // отправка и реакция доступны сразу, как и молчание
-        Toolbox ownerChat = newToolbox();
-        if (config.ownerId() > 0) {
-            ownerChat.add(tools.open(config.ownerId()));
-        }
-        spontaneity = new Spontaneity(loop, diary, ownerChat, config.ownerId(), random);
+        // отправка и реакция доступны сразу, как и молчание. Набор собирается
+        // заново на каждый порыв — цикл раскрывает его инструментами чата, и
+        // один общий набор на весь день закрыл бы автооткрытие после первого раза
+        spontaneity = new Spontaneity(loop, diary, this::ownerChatTools, config.ownerId(), random);
         spontaneity.asleepWhen(rest::isResting);
         tools.actingOnImpulse(spontaneity::isActing);
         spontaneity.start();
+        // холостой порыв не должен ни тратить воспоминания, ни помечать снимки
+        // чатов как показанные
+        loop.idleImpulseSnapshot(() -> {
+            var injected = diaryMemory.markInjected();
+            var shown = screen.markShown();
+            return () -> {
+                diaryMemory.restoreInjected(injected);
+                screen.restoreShown(shown);
+            };
+        });
 
         // «в сети» держится только пока она занята перепиской: остальное время
         // и весь сон её видно офлайн, как любого человека
         loop.onIdle(() -> actions.setOnline(false));
-        // просыпаясь, она добирает то, что не пришло во сне: тик, пропущенный
-        // за ночь, не должен превращаться в десяток или в молчание до утра
-        rest.onStateChange(resting -> {
-            actions.setOnline(false);
-            if (!resting) {
-                spontaneity.wokenUp();
-            }
-        });
+        rest.onStateChange(resting -> actions.setOnline(false));
 
         brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
         Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
@@ -573,6 +574,19 @@ public final class RaineApp implements AutoCloseable {
      */
     private Toolbox newToolbox() {
         return new Toolbox().actionsAllowed(!config.readOnly());
+    }
+
+    /**
+     * Набор порыва: один только инструмент открытия лички владельца. Открытие
+     * цикл выполняет сам и приносит с собой снимок чата и инструменты переписки
+     * — поэтому на каждый порыв он должен быть новый.
+     */
+    private Toolbox ownerChatTools() {
+        Toolbox chat = newToolbox();
+        if (config.ownerId() > 0) {
+            chat.add(tools.open(config.ownerId()));
+        }
+        return chat;
     }
 
     /**

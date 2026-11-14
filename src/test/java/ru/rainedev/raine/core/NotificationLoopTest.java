@@ -798,4 +798,102 @@ class NotificationLoopTest {
 
         assertTrue(loop.talkAlive(), "ход кончился только что — разговор живой");
     }
+
+    @Test
+    void silentTurnLeavesTheConversationClockWhereItWas() {
+        // ход без видимого действия — это её решение промолчать, а не разговор:
+        // холостые порывы каждые полчаса сдвигали «последний разговор был только
+        // что», и следующий приходил поверх тишины, которую она сама устроила.
+        // Занятость дня при этом считается: только что она была здесь
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals("", loop.lastTalkStatus(), "молчание не было последним разговором");
+        assertTrue(loop.talkAlive(), "но время она заняла");
+    }
+
+    @Test
+    void impulseIsSkippedWhileTheConversationIsStillFresh() {
+        List<String> acted = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+        loop.process(new Notification("тебе написали"));
+        int calls = llm.calls;
+
+        loop.process(new Notification("порыв написать первой").onOwnInitiative());
+
+        assertEquals(2, calls, "обычный ход: ответ и завершение");
+        assertEquals(calls, llm.calls, "порыв поверх только что отвеченного сообщения модели не показывается");
+    }
+
+    @Test
+    void impulseIsAllowedOnceTheConversationHasGoneQuiet() {
+        List<String> acted = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+        loop.process(new Notification("тебе написали"));
+        loop.windBackLastTalk(java.time.Duration.ofMinutes(31));
+
+        loop.process(new Notification("порыв написать первой").onOwnInitiative());
+
+        assertEquals(3, llm.calls, "полчаса тишины — порыв законен");
+    }
+
+    @Test
+    void idleImpulseLeavesNoTraceInTheContext() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.chatOrigin(id -> new Origin(id, Source.OWNER_DM));
+        loop.process(new Notification("тебе написали").from(777));
+        loop.windBackLastTalk(java.time.Duration.ofMinutes(31));
+        List<Message> before = loop.context();
+        Origin beforeOrigin = loop.contextOrigin();
+        assertTrue(before.size() > 1, "разговор в контексте есть: " + before);
+
+        loop.process(new Notification("порыв, который ни к чему не привёл").onOwnInitiative().from(1));
+
+        assertEquals(before, loop.context(), "холостой порыв не оставляет следа в истории");
+        assertEquals(beforeOrigin, loop.contextOrigin(), "и в метке разговора");
+    }
+
+    @Test
+    void idleImpulseRollsBackWhatLivesOutsideTheContext() {
+        boolean[] undone = {false};
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.idleImpulseSnapshot(() -> () -> undone[0] = true);
+
+        loop.process(new Notification("порыв в никуда").onOwnInitiative());
+
+        assertTrue(undone[0], "воспоминания и показанные снимки потрачены зря — их тоже надо вернуть");
+    }
+
+    @Test
+    void impulseThatActuallyWroteKeepsItsTrace() {
+        List<String> acted = new ArrayList<>();
+        boolean[] undone = {false};
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+        loop.idleImpulseSnapshot(() -> () -> undone[0] = true);
+        List<Message> before = loop.context();
+
+        loop.process(new Notification("порыв, из которого вышла реплика").onOwnInitiative());
+
+        assertFalse(undone[0], "состояние состоявшегося разговора откатывать нельзя");
+        assertTrue(loop.context().size() > before.size(), "сказанное остаётся в истории");
+        assertTrue(loop.lastTalkStatus().contains("send_telegram_message"), loop.lastTalkStatus());
+    }
 }

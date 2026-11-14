@@ -54,6 +54,21 @@ public final class ChatScreen {
     }
 
     /**
+     * Снимок показанного — чтобы холостой порыв, открытый чат которого уйдёт из
+     * истории, не оставил после себя «это она уже читала».
+     */
+    public Map<Long, Map<Long, Integer>> markShown() {
+        Map<Long, Map<Long, Integer>> copy = new java.util.HashMap<>();
+        shown.forEach((chat, seen) -> copy.put(chat, Map.copyOf(seen)));
+        return copy;
+    }
+
+    public void restoreShown(Map<Long, Map<Long, Integer>> snapshot) {
+        shown.clear();
+        snapshot.forEach((chat, seen) -> shown.put(chat, new ConcurrentHashMap<>(seen)));
+    }
+
+    /**
      * @param text текст для модели
      * @param kind тип чата — по нему вызывающий решает, какие инструменты выдать
      */
