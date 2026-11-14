@@ -817,6 +817,36 @@ class NotificationLoopTest {
     }
 
     @Test
+    void herOwnGoodbyeDoesNotPutOffSleep() {
+        // прощание на ночь — её же ход, никто его не ждёт: он не должен отмерять
+        // поблажку, из-за которой она ложится на десять минут позже слова «споки»
+        List<String> acted = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+
+        loop.process(new Notification("пора сказать спокойной ночи").asGreeting());
+
+        assertFalse(loop.talkAlive(), "собственное прощание сон не откладывает");
+        assertEquals(1, acted.size(), "прощание всё-таки отправлено");
+    }
+
+    @Test
+    void anAnswerToHimStillKeepsHerUp() {
+        // а вот ответ на его слова — живой разговор: уходить спать посреди него нельзя
+        List<String> acted = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+
+        loop.process(new Notification("он ответил на её прощание"));
+
+        assertTrue(loop.talkAlive(), "ответ на чужое сообщение — разговор");
+    }
+
+    @Test
     void silentTurnLeavesTheConversationClockWhereItWas() {
         // ход без видимого действия — это её решение промолчать, а не разговор:
         // холостые порывы каждые полчаса сдвигали «последний разговор был только

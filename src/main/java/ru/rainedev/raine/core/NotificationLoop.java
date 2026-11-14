@@ -72,6 +72,9 @@ public final class NotificationLoop {
     /** Когда закончился последний ход, в котором она что-то сделала. */
     private volatile java.time.Instant lastTalk = Instant.EPOCH;
 
+    /** Когда она отвечала тому, кто написал ей: без её собственных слов. */
+    private volatile Instant lastAnswer = Instant.EPOCH;
+
     /** Чем закончился последний ход, в котором она что-то сделала. */
     private volatile String lastTalkAction = "";
 
@@ -362,19 +365,31 @@ public final class NotificationLoop {
 
     /**
      * Живой разговор, спать нельзя: в очереди непрочитанное, есть то, что не
-     * дождалось ответа, или она недавно по-настоящему отвечала. Отсчитывает Rest
-     * перед уходом в ночь.
+     * дождалось ответа, или она недавно отвечала тому, кто написал. Отсчитывает
+     * Rest перед уходом в ночь.
      * <p>
      * Ход без видимого действия разговором не был: молчаливый {@code wait} на
-     * пост из канала или холостой порыв держали бы её на ногах каждые
-     * полчаса — вплоть до предела терпения.
+     * пост из канала держал бы её на ногах каждые полчаса — вплоть до предела
+     * терпения. Её собственные слова — порыв написать первой, прощание на ночь,
+     * приветствие с утра — тоже: их никто не ждёт, а прощание, отмерившее ей
+     * ещё десять минут бодрствования, само и будил её до полночи.
      */
     public boolean talkAlive() {
-        return !queue.isEmpty() || active != null || !stranded.isEmpty() || talkedAgo(TALK_GRACE);
+        return !queue.isEmpty() || active != null || !stranded.isEmpty() || answeredAgo(TALK_GRACE);
     }
 
     /**
-     * Недавно она отвечала по-настоящему?
+     * Недавно она отвечала тому, кто написал ей?
+     *
+     * @param limit чем старше ответ, тем он не считается
+     */
+    private boolean answeredAgo(Duration limit) {
+        Instant at = lastAnswer;
+        return !at.equals(Instant.EPOCH) && Duration.between(at, Instant.now()).compareTo(limit) < 0;
+    }
+
+    /**
+     * Недавно она отвечала по-настоящему — своим или чужим сообщением?
      *
      * @param limit чем старше ответ, тем он не считается
      */
@@ -733,6 +748,10 @@ public final class NotificationLoop {
             // запрещал на полчаса вперёд, а перед сном не давал уснуть
             lastTalkAction = turn.lastAction;
             lastTalk = Instant.now();
+            if (!turn.notification.unprompted()) {
+                // её собственное слово — не обмен: сон по нему не откладывается
+                lastAnswer = lastTalk;
+            }
         }
         if (turn.contextBefore != null && turn.lastAction.isEmpty()) {
             rollbackIdleImpulse(turn);

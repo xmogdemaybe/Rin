@@ -647,7 +647,7 @@ public final class RaineApp implements AutoCloseable {
             Toolbox available = newToolbox();
             available.add(tools.open(receiver.id()));
             loop.submit(new Notification(prompt.apply(receiver), available, true)
-                    .about(receiver.id()).from(receiver.id()));
+                    .about(receiver.id()).from(receiver.id()).asGreeting());
         }
     }
 

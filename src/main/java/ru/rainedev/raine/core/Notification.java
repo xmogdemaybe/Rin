@@ -15,12 +15,14 @@ package ru.rainedev.raine.core;
  *                 событие не из переписки и отмечать негде
  * @param initiative порыв, а не ответ: чат уже открыт, отправка заканчивает ход,
  *                 и напоминать про #ask не нужно — она сама решила заговорить
+ * @param greeted её собственное слово первой — прощание на ночь или приветствие
+ *                 с утра. Его никто не ждал, и отвечать на него некому
  */
 public record Notification(String text, Toolbox tools, boolean ownText, long personId, long chatId,
-                           boolean initiative) {
+                           boolean initiative, boolean greeted) {
 
     public Notification(String text, Toolbox tools, boolean ownText, long personId, long chatId) {
-        this(text, tools, ownText, personId, chatId, false);
+        this(text, tools, ownText, personId, chatId, false, false);
     }
 
     public Notification(String text, Toolbox tools, boolean ownText) {
@@ -37,12 +39,17 @@ public record Notification(String text, Toolbox tools, boolean ownText, long per
 
     /** То же событие, но теперь известно, кто его принёс. */
     public Notification about(long personId) {
-        return new Notification(text, tools, ownText, personId, chatId, initiative);
+        return new Notification(text, tools, ownText, personId, chatId, initiative, greeted);
     }
 
     /** Тот же повод, но заговорить с ним решила она сама. */
     public Notification onOwnInitiative() {
-        return new Notification(text, tools, ownText, personId, chatId, true);
+        return new Notification(text, tools, ownText, personId, chatId, true, greeted);
+    }
+
+    /** Тот же повод, только это её ночное прощание или утреннее приветствие. */
+    public Notification asGreeting() {
+        return new Notification(text, tools, ownText, personId, chatId, initiative, true);
     }
 
     /**
@@ -51,6 +58,11 @@ public record Notification(String text, Toolbox tools, boolean ownText, long per
      * вернуть в непрочитанные.
      */
     public Notification from(long chatId) {
-        return new Notification(text, tools, ownText, personId, chatId, initiative);
+        return new Notification(text, tools, ownText, personId, chatId, initiative, greeted);
+    }
+
+    /** Она заговорила сама, а не ответила тому, кто написал? */
+    public boolean unprompted() {
+        return initiative || greeted;
     }
 }
