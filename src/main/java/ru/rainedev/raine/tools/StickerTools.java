@@ -2,6 +2,7 @@ package ru.rainedev.raine.tools;
 
 import it.tdlight.jni.TdApi;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.Tool;
@@ -23,6 +24,9 @@ public final class StickerTools {
 
     /** Сколько из них влезает в снимок чата: дальше список становится шумом. */
     static final int FAVOURITES = 18;
+
+    /** Чем Vision оформляет описание стикера — в полке открытого чата это лишнее. */
+    private static final Pattern WRAPPER = Pattern.compile("</?sticker( description)?>");
 
     private final Telegram telegram;
     private final TelegramActions actions;
@@ -94,10 +98,9 @@ public final class StickerTools {
         for (TdApi.Sticker sticker : shown) {
             out.append("  - sticker_id=\"").append(sticker.id)
                     .append("\" emoji=\"").append(Markup.attribute(sticker.emoji)).append('"');
-            String looks = describe.apply(sticker);
-            if (looks != null && !looks.isBlank()) {
-                // снимок читается как разметка: чужой текст остаётся одной строкой
-                out.append(": ").append(Markup.body(looks).lines().findFirst().orElse("").strip());
+            String looks = oneLine(describe.apply(sticker));
+            if (!looks.isBlank()) {
+                out.append(": ").append(looks);
             }
             out.append('\n');
         }
@@ -106,6 +109,25 @@ public final class StickerTools {
                     .formatted(stickers.size() - shown.size()));
         }
         return out.append("</favourite_stickers>\n").toString();
+    }
+
+    /**
+     * Одна строка того, что известно о стикере. Зрение отдаёт описание, обёрнутым
+     * в свой блок, — в полке открытого чата нужны сами слова, а не обёртка.
+     * Чужой текст остаётся текстом: снимок для модели — разметка, и границы
+     * блоков ей портить не нужно.
+     */
+    static String oneLine(String described) {
+        if (described == null) {
+            return "";
+        }
+        return described.lines()
+                .map(String::strip)
+                .filter(line -> !line.isEmpty() && !WRAPPER.matcher(line).matches())
+                .findFirst()
+                .map(Markup::body)
+                .map(String::strip)
+                .orElse("");
     }
 
     /** Избранные первыми: пак добирает то, чего не хватает, не повторяя их. */

@@ -125,6 +125,26 @@ class VisionTest {
     }
 
     @Test
+    void aStickerFromTheCacheIsNotLookedAtAgain(@TempDir Path dir) throws IOException {
+        // рестарт: описание уже лежит на диске, и второй запуск не должен платить
+        // зрением за уже разгляденный стикер — иначе прогрев избранного при каждом
+        // запуске стоил бы восемнадцати просмотров
+        Path sticker = imageFile(dir, "стикер.webp");
+        ScriptedLlm before = new ScriptedLlm().willSee("кот машет лапой");
+
+        String seen = visionWith(before, dir.resolve("cache"))
+                .describe(sticker, Vision.Kind.STICKER, List.of());
+        ScriptedLlm afterRestart = new ScriptedLlm();
+        String again = visionWith(afterRestart, dir.resolve("cache"))
+                .describe(sticker, Vision.Kind.STICKER, List.of());
+
+        assertEquals(seen, again, "после рестарта то же описание");
+        assertEquals(1, before.seen.get(), "первый взгляд всё же платный: " + before.seen.get());
+        assertEquals(0, afterRestart.seen.get(),
+                "с диска берётся готовое описание, а не новый взгляд: " + afterRestart.seen.get());
+    }
+
+    @Test
     void oneFailedLookDoesNotEndTheVideo(@TempDir Path dir) throws IOException {
         // сбой обращения — не отказ модели: одна сетевая ошибка не должна
         // выбрасывать целый кадр из ленты времени ролика

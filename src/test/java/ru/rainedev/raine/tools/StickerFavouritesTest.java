@@ -22,9 +22,14 @@ class StickerFavouritesTest {
         return sticker;
     }
 
-    /** Зрение разглядело только первый — остальные показываются по эмодзи. */
+    /**
+     * Так описание приходит из зрения на самом деле: Vision отдаёт его, обёрнутым
+     * в свой блок, и полка обязана показать слова, а не обёртку.
+     */
     private static final Function<TdApi.Sticker, String> LOOKS =
-            sticker -> sticker.id == 1 ? "cat waves a paw\nsecond line of the description" : "";
+            sticker -> sticker.id == 1
+                    ? "<sticker description>\ncat waves a paw\nsecond line of the description\n</sticker>\n"
+                    : "";
 
     @Test
     void theBlockIsSomethingToSendRightAway() {
@@ -37,7 +42,19 @@ class StickerFavouritesTest {
         assertTrue(block.contains("sticker_id=\"2\""), block);
         assertTrue(block.contains("cat waves a paw"), block);
         assertFalse(block.contains("second line"), "в снимке каждая строка должна быть одной строкой: " + block);
+        assertFalse(block.contains("sticker description"),
+                "обёртка зрения — не описание: в полке её быть не должно: " + block);
         assertTrue(block.contains("sticker_send"), block);
+    }
+
+    @Test
+    void anEmojiFallbackStillNamesTheSticker() {
+        // без зрения и без кэра описания нет: остаётся заглушка по эмодзи, и она
+        // должна дойти до полки, а не отфильтроваться как тег
+        String block = StickerTools.favouritesBlock(List.of(sticker(1, "🙂")), 18,
+                sticker -> "[стикер 🙂]");
+
+        assertTrue(block.contains("[стикер 🙂]"), block);
     }
 
     @Test
