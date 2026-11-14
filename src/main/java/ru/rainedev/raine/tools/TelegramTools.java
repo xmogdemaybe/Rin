@@ -445,14 +445,17 @@ public final class TelegramTools {
             }
             addTool.accept(forward(chatId));
             addTool.accept(blockChat(chatId));
+            // своё избранное показывается сразу: иначе на один стикер она
+            // тратит ещё два обращения к модели — список и отправку
+            String screen = rendered.text() + (behaviour.stickers() ? stickers.favourites() : "");
             if (stranger) {
                 // здесь ещё ничего не сказано: без опоры на разговор легко
                 // написать что-то невпопад или не тому
-                return rendered.text() + "\n\nThis chat is empty! Only proceed if you looked up a @username "
+                return screen + "\n\nThis chat is empty! Only proceed if you looked up a @username "
                         + "and it led you here. Write only what you have to say yourself. If you then go back "
                         + "to the original chat, remember you have already sent a message here.";
             }
-            return rendered.text();
+            return screen;
         });
     }
 

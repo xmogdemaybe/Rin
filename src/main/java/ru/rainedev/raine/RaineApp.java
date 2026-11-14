@@ -471,6 +471,11 @@ public final class RaineApp implements AutoCloseable {
         brain = Thread.ofVirtual().name("rin-brain").start(loop::run);
         Thread.ofVirtual().name("rin-catchup").start(this::catchUpOnUnread);
         Thread.ofVirtual().name("rin-pending").start(() -> rememberPending(pending, writer, prompts.system("")));
+        // избранное прогревается в фоне: без этого первый стикер в разговоре
+        // стоит ей трёх обращений к модели, а после рестарта — отказа реестра
+        if (config.behaviour().stickers()) {
+            Thread.ofVirtual().name("rin-stickers").start(this::warmUpStickers);
+        }
         // недельное лежит для глаз, но папка не должна расти вечно
         pending.pruneFailures(java.time.Duration.ofDays(7));
         // то же про дампы ответов, описания картинок и расшифровки: они нужны для
@@ -499,6 +504,20 @@ public final class RaineApp implements AutoCloseable {
                     Retention.AGE);
         } catch (RuntimeException e) {
             log.warn("Уборка временных файлов не удалась: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Реестр своих стикеров и их описания — один раз на запуск и в фоне.
+     * Прямой запрос здесь платить зрением заранее: без прогревки первый стикер
+     * в разговоре стоит трёх обращений к модели, а после рестарта — ещё и
+     * отказа «ты такого не видела».
+     */
+    private void warmUpStickers() {
+        try {
+            log.info("Избранных стикеров прогрето: {}", tools.stickers().warmUp());
+        } catch (RuntimeException e) {
+            log.warn("Стикеры не прогреты: {} — разговор разберётся без них", e.getMessage());
         }
     }
 

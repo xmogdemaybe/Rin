@@ -43,6 +43,10 @@ public final class DiaryWriter {
     private static final String NOTE_OPEN = "<instructions>";
     private static final String NOTE_CLOSE = "</instructions>";
 
+    /** Полка своих стикеров: вклеивается в снимок чата, к разговору отношения не имеет. */
+    private static final String SHELF_OPEN = "<favourite_stickers>";
+    private static final String SHELF_CLOSE = "</favourite_stickers>";
+
     /** Снимок открытого чата: пока сообщение не стало уведомлением, оно видно только здесь. */
     private static final String SCREEN_HEAD = "You switched to the chat";
 
@@ -153,6 +157,7 @@ public final class DiaryWriter {
             String text = cutBlocks(message.content() == null ? "" : message.content(),
                     RECALL_OPEN, RECALL_CLOSE);
             text = cutBlocks(text, NOTE_OPEN, NOTE_CLOSE);
+            text = cutBlocks(text, SHELF_OPEN, SHELF_CLOSE);
             for (String insertion : NotificationLoop.serviceInsertions()) {
                 text = text.replace(insertion, "");
             }

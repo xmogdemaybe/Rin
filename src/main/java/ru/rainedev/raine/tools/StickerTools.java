@@ -21,9 +21,15 @@ public final class StickerTools {
     /** Столько стикеров помещается в избранном и недавних. */
     private static final int LIMIT = 40;
 
+    /** Сколько из них влезает в снимок чата: дальше список становится шумом. */
+    static final int FAVOURITES = 18;
+
     private final Telegram telegram;
     private final TelegramActions actions;
     private TelegramMedia media;
+
+    /** Готовый блок избранного для снимка чата; пуст, пока не прогрето. */
+    private volatile String favourites = "";
 
     /** Отправлять стикер можно ровно туда же, куда и обычное сообщение. */
     private java.util.function.LongPredicate allowed = chatId -> true;
@@ -39,6 +45,78 @@ public final class StickerTools {
 
     public void media(TelegramMedia media) {
         this.media = media;
+    }
+
+    /** Что встанет в снимок открытого чата; пусто, пока реестр не прогрет. */
+    public String favourites() {
+        return favourites;
+    }
+
+    /**
+     * Прогрев перед разговорами: реестр стикеров и их описания.
+     * <p>
+     * Без него отправка стикера стоит трёх обращений к модели — посмотреть
+     * список, открыть пак, отправить, — а каждое тянет за собой весь контекст
+     * разговора. Плюс реестр живёт в памяти процесса: после рестарта первый же
+     * «отправь тот, что в прошлом месяце» упирался в «You have not seen that
+     * sticker». Делается в фоне и один раз на запуск.
+     *
+     * @return сколько стикеров встанет в снимок чата
+     */
+    public int warmUp() {
+        List<TdApi.Sticker> saved = telegram.savedStickers(LIMIT);
+        // избранное у аккаунта бывает пустым, а паки стоят: добрать из первого
+        // установленного дешевле, чем угадывать по одному эмодзи
+        List<TdApi.Sticker> known = saved.size() >= FAVOURITES ? saved
+                : telegram.stickerSets().stream().findFirst()
+                        .flatMap(set -> telegram.stickerSet(set.name))
+                        .map(set -> mergeFresh(saved, List.of(set.stickers)))
+                        .orElse(saved);
+        List<TdApi.Sticker> shown = known.stream().limit(FAVOURITES).toList();
+        favourites = favouritesBlock(shown, FAVOURITES,
+                sticker -> media == null ? "" : media.describeSticker(sticker));
+        return shown.size();
+    }
+
+    /**
+     * Компактный список своего стикера: номер, эмодзи и одна строка того, что
+     * о нём известно. Описание берётся из уже разгляденного — платить зрением
+     * за каждый открытый чат незачем.
+     */
+    static String favouritesBlock(List<TdApi.Sticker> stickers, int cap,
+                                  java.util.function.Function<TdApi.Sticker, String> describe) {
+        List<TdApi.Sticker> shown = stickers.stream().limit(cap).toList();
+        if (shown.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder("\n\n<favourite_stickers>\n")
+                .append("Your own stickers. Send one with #sticker_send(sticker_id) — no need to look them up.\n");
+        for (TdApi.Sticker sticker : shown) {
+            out.append("  - sticker_id=\"").append(sticker.id)
+                    .append("\" emoji=\"").append(Markup.attribute(sticker.emoji)).append('"');
+            String looks = describe.apply(sticker);
+            if (looks != null && !looks.isBlank()) {
+                // снимок читается как разметка: чужой текст остаётся одной строкой
+                out.append(": ").append(Markup.body(looks).lines().findFirst().orElse("").strip());
+            }
+            out.append('\n');
+        }
+        if (stickers.size() > shown.size()) {
+            out.append("  %d more are yours too — #sticker_list shows them all.\n"
+                    .formatted(stickers.size() - shown.size()));
+        }
+        return out.append("</favourite_stickers>\n").toString();
+    }
+
+    /** Избранные первыми: пак добирает то, чего не хватает, не повторяя их. */
+    static List<TdApi.Sticker> mergeFresh(List<TdApi.Sticker> favourites, List<TdApi.Sticker> pack) {
+        List<TdApi.Sticker> merged = new java.util.ArrayList<>(favourites);
+        for (TdApi.Sticker sticker : pack) {
+            if (merged.stream().noneMatch(its -> its.id == sticker.id)) {
+                merged.add(sticker);
+            }
+        }
+        return merged;
     }
 
     /**

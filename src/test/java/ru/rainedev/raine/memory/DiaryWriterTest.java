@@ -426,6 +426,28 @@ class DiaryWriterTest {
     }
 
     @Test
+    void herStickerShelfIsNotPartOfTheConversation(@TempDir Path dir) {
+        // полка избранного вклеивается в снимок чата, чтобы отправить стикер
+        // одним шагом; в дневник она не просится
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("Запись про спокойный вечер.");
+        List<Message> context = List.of(Message.user("""
+                друг: «скинь что-нибудь»
+
+                <favourite_stickers>
+                Your own stickers. Send one with #sticker_send(sticker_id).
+                  - sticker_id="1" emoji="🙂": cat waves a paw
+                </favourite_stickers>
+                """));
+
+        new DiaryWriter(new Diary(dir), llm, "запиши дневник", 0.97).save("промпт", context);
+
+        String sent = llm.lastHistory.toString();
+        assertFalse(sent.contains("favourite_stickers"), "разметка полки вырезается: " + sent);
+        assertFalse(sent.contains("cat waves a paw"), "список своих стикеров — не тема разговора");
+        assertTrue(sent.contains("скинь что-нибудь"), "слова человека остаются");
+    }
+
+    @Test
     void brokenToolArgumentsDoNotSinkTheWholeRetelling(@TempDir Path dir) {
         // модель шлёт аргументы как придётся; вырванный кусок json не должен
         // стоить потерянного дня памяти
