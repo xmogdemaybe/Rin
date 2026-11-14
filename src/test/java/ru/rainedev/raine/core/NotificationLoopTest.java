@@ -789,14 +789,31 @@ class NotificationLoopTest {
     }
 
     @Test
-    void justFinishedTurnStillCountsAsLivelyTalk() {
+    void justFinishedTalkStillCountsAsLively() {
+        // спать не пускает именно настоящая переписка: ответила полчаса назад —
+        // человек ещё здесь и может ответить
+        List<String> acted = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+
+        loop.process(new Notification("тебе написали"));
+
+        assertTrue(loop.talkAlive(), "отвеченное сообщение — живой разговор");
+    }
+
+    @Test
+    void aSilentTurnDoesNotHoldHerUp() {
+        // фоновый шум сон не откладывает: прочитала пост в канале и промолчала —
+        // это не разговор, а перед сном такое молчание случается каждые полчаса
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(finishing());
         NotificationLoop loop = loopWith(llm, new Toolbox());
 
-        loop.process(new Notification("тебе написали"));
+        loop.process(new Notification("пост из канала"));
 
-        assertTrue(loop.talkAlive(), "ход кончился только что — разговор живой");
+        assertFalse(loop.talkAlive(), "молчаливый ход не живой разговор — ложиться можно");
     }
 
     @Test
@@ -804,7 +821,6 @@ class NotificationLoopTest {
         // ход без видимого действия — это её решение промолчать, а не разговор:
         // холостые порывы каждые полчаса сдвигали «последний разговор был только
         // что», и следующий приходил поверх тишины, которую она сама устроила.
-        // Занятость дня при этом считается: только что она была здесь
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(finishing());
         NotificationLoop loop = loopWith(llm, new Toolbox());
@@ -812,7 +828,7 @@ class NotificationLoopTest {
         loop.process(new Notification("тебе написали"));
 
         assertEquals("", loop.lastTalkStatus(), "молчание не было последним разговором");
-        assertTrue(loop.talkAlive(), "но время она заняла");
+        assertFalse(loop.talkAlive(), "и сон оно не откладывает");
     }
 
     @Test

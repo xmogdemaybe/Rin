@@ -62,17 +62,14 @@ public final class NotificationLoop {
     /** Как часто в тишине переспрашивать себя, не пора ли отдохнуть. */
     private java.time.Duration idleCheck = java.time.Duration.ofMinutes(1);
 
-    /** Как долго после последнего хода разговор считается ещё живым. */
+    /** Как долго после настоящего ответа разговор считается ещё живым. */
     private static final java.time.Duration TALK_GRACE = java.time.Duration.ofMinutes(10);
 
     /** Сколько должно пройти после настоящего ответа, чтобы порыв был уместен. */
     private static final java.time.Duration IMPULSE_QUIET =
             java.time.Duration.ofMinutes(Spontaneity.MIN_MINUTES);
 
-    /** Конец последнего хода — живого или молчаливого: по нему решается, можно ли спать. */
-    private volatile Instant lastActivity = Instant.EPOCH;
-
-    /** Чем закончился последний ход, в котором она что-то сделала. */
+    /** Когда закончился последний ход, в котором она что-то сделала. */
     private volatile java.time.Instant lastTalk = Instant.EPOCH;
 
     /** Чем закончился последний ход, в котором она что-то сделала. */
@@ -365,12 +362,25 @@ public final class NotificationLoop {
 
     /**
      * Живой разговор, спать нельзя: в очереди непрочитанное, есть то, что не
-     * дождалось ответа, или последний ход кончился только что. Отсчитывает Rest
+     * дождалось ответа, или она недавно по-настоящему отвечала. Отсчитывает Rest
      * перед уходом в ночь.
+     * <p>
+     * Ход без видимого действия разговором не был: молчаливый {@code wait} на
+     * пост из канала или холостой порыв держали бы её на ногах каждые
+     * полчаса — вплоть до предела терпения.
      */
     public boolean talkAlive() {
-        return !queue.isEmpty() || active != null || !stranded.isEmpty()
-                || Duration.between(lastActivity, Instant.now()).compareTo(TALK_GRACE) < 0;
+        return !queue.isEmpty() || active != null || !stranded.isEmpty() || talkedAgo(TALK_GRACE);
+    }
+
+    /**
+     * Недавно она отвечала по-настоящему?
+     *
+     * @param limit чем старше ответ, тем он не считается
+     */
+    private boolean talkedAgo(Duration limit) {
+        Instant at = lastTalk;
+        return !at.equals(Instant.EPOCH) && Duration.between(at, Instant.now()).compareTo(limit) < 0;
     }
 
     /**
@@ -379,8 +389,7 @@ public final class NotificationLoop {
      * всё сказала.
      */
     boolean talkedRecently() {
-        return !lastTalk.equals(Instant.EPOCH)
-                && Duration.between(lastTalk, Instant.now()).compareTo(IMPULSE_QUIET) < 0;
+        return talkedAgo(IMPULSE_QUIET);
     }
 
     public List<Message> context() {
@@ -716,12 +725,12 @@ public final class NotificationLoop {
         active = null;
     }
 
-    /** Ход закончился: запоминаем активность, видимое действие и откат холостого порыва. */
+    /** Ход закончился: запоминаем видимое действие и откатываем холостой порыв. */
     private void endTurn(Turn turn) {
-        lastActivity = Instant.now();
         if (!turn.lastAction.isEmpty()) {
-            // молчание разговором не было: эти часы читает планировщик порывов, и
-            // холостой порыв, обнулив их, сам же себя и запрещал на полчаса вперёд
+            // молчание разговором не было: эти часы читают планировщик порывов и
+            // решение лечь спать, — холостой порыв, обнулив их, сам же себя и
+            // запрещал на полчаса вперёд, а перед сном не давал уснуть
             lastTalkAction = turn.lastAction;
             lastTalk = Instant.now();
         }
