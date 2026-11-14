@@ -75,7 +75,7 @@ public final class NotificationLoop {
     /** Чем закончился последний ход, в котором она что-то сделала. */
     private volatile java.time.Instant lastTalk = Instant.EPOCH;
 
-    /** Чем закончился последний ход: отправка, реакция или молчание. */
+    /** Чем закончился последний ход, в котором она что-то сделала. */
     private volatile String lastTalkAction = "";
 
     private static final String ASK_REMINDER = """
@@ -739,7 +739,7 @@ public final class NotificationLoop {
         if (context.size() < was.size() || !context.subList(0, was.size()).equals(was)) {
             // контекст за это время пересобрали (например, вынесли в дневник):
             // возвращать прежний — значит воскресить уже сохранённый разговор
-            log.info("Холостой порыв не откатывается: история уже другой длины");
+            log.info("Холостой порыв не откатывается: история уже другая");
             return;
         }
         context.clear();
