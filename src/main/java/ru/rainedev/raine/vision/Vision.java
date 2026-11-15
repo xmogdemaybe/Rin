@@ -281,9 +281,23 @@ public final class Vision {
      *                   догадка не должна уходить в разговор как увиденное
      */
     public String describe(Path file, Kind kind, List<Message> context, boolean allowCache, boolean preview) {
+        String body = words(file, kind, context, allowCache);
+        return body.isEmpty() ? "" : wrap(kind, body, preview);
+    }
+
+    /**
+     * Что видно на вложении — текстом, без обёртки. Нужен компактным спискам:
+     * размеченный блок им мешает, а расщеплять чужую разметку обратно регуляркой
+     * значит завести вторую копию знания о формате.
+     */
+    public String words(Path file, Kind kind, List<Message> context) {
+        return words(file, kind, context, true);
+    }
+
+    private String words(Path file, Kind kind, List<Message> context, boolean allowCache) {
         String cached = allowCache ? fromCache(file) : null;
         if (cached != null) {
-            return wrap(kind, cached, preview);
+            return Markup.body(cached).strip();
         }
         // MediaAhead разбирает вложение заранее, а MessageFormatter тут же
         // просит его снова: без памяти о неудаче второй запрос оплачивается
@@ -328,7 +342,7 @@ public final class Vision {
                         toCache(file, description.strip());
                     }
                     log.info("Разглядела {}: {}", kind.tag, description.strip().lines().findFirst().orElse(""));
-                    return wrap(kind, description.strip(), preview);
+                    return Markup.body(description.strip()).strip();
                 }
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустое описание, попытка {} из {}", attempt, MAX_ATTEMPTS);

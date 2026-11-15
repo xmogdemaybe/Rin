@@ -2,7 +2,6 @@ package ru.rainedev.raine.tools;
 
 import it.tdlight.jni.TdApi;
 import java.util.List;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.Tool;
@@ -24,9 +23,6 @@ public final class StickerTools {
 
     /** Сколько из них влезает в снимок чата: дальше список становится шумом. */
     static final int FAVOURITES = 18;
-
-    /** Чем Vision оформляет описание стикера — в полке открытого чата это лишнее. */
-    private static final Pattern WRAPPER = Pattern.compile("</?sticker( description)?>");
 
     private final Telegram telegram;
     private final TelegramActions actions;
@@ -78,7 +74,7 @@ public final class StickerTools {
                         .orElse(saved);
         List<TdApi.Sticker> shown = known.stream().limit(FAVOURITES).toList();
         favourites = favouritesBlock(shown, FAVOURITES,
-                sticker -> media == null ? "" : media.describeSticker(sticker));
+                sticker -> media == null ? "" : media.stickerWords(sticker));
         return shown.size();
     }
 
@@ -98,7 +94,7 @@ public final class StickerTools {
         for (TdApi.Sticker sticker : shown) {
             out.append("  - sticker_id=\"").append(sticker.id)
                     .append("\" emoji=\"").append(Markup.attribute(sticker.emoji)).append('"');
-            String looks = oneLine(describe.apply(sticker));
+            String looks = caption(describe.apply(sticker));
             if (!looks.isBlank()) {
                 out.append(": ").append(looks);
             }
@@ -111,22 +107,51 @@ public final class StickerTools {
         return out.append("</favourite_stickers>\n").toString();
     }
 
+    /** Сколько символов выделено на описание стикера в полке: дальше шум. */
+    private static final int CAPTION_LIMIT = 160;
+
     /**
-     * Одна строка того, что известно о стикере. Зрение отдаёт описание, обёрнутым
-     * в свой блок, — в полке открытого чата нужны сами слова, а не обёртка.
-     * Чужой текст остаётся текстом: снимок для модели — разметка, и границы
-     * блоков ей портить не нужно.
+     * О чём стикер — одной строкой. Поля задаёт собственный промпт зрения
+     * ({@code sticker_to_text.md}): сначала что на картинке и зачем это шлют, а
+     * если разбор не вышелся — первая строка как есть. Чужие скобки остаются
+     * текстом: полка встаёт внутрь снимка чата.
      */
-    static String oneLine(String described) {
-        if (described == null) {
+    static String caption(String described) {
+        if (described == null || described.isBlank()) {
             return "";
         }
+        String scene = field(described, "VisibleContent");
+        String purpose = field(described, "CommunicativeMeaning");
+        if (purpose.isEmpty()) {
+            purpose = field(described, "Emotion");
+        }
+        String line = scene.isEmpty() ? purpose : (purpose.isEmpty() ? scene : scene + " — " + purpose);
+        if (line.isBlank()) {
+            line = firstLine(described);
+        }
+        line = Markup.body(line).strip();
+        return line.length() <= CAPTION_LIMIT ? line : line.substring(0, CAPTION_LIMIT).strip() + "…";
+    }
+
+    /** Значение поля вида «- VisibleContent: …». */
+    private static String field(String described, String name) {
+        String wanted = name.toLowerCase() + ":";
+        for (String raw : described.lines().toList()) {
+            String line = raw.strip().replaceFirst("^[-*] ", "").toLowerCase();
+            if (line.startsWith(wanted)) {
+                return raw.strip().replaceFirst("^[-*] ", "").substring(wanted.length()).strip();
+            }
+        }
+        return "";
+    }
+
+    /** Первая содержательная строка — на случай, когда полей разбор не дал. */
+    private static String firstLine(String described) {
         return described.lines()
                 .map(String::strip)
-                .filter(line -> !line.isEmpty() && !WRAPPER.matcher(line).matches())
+                .filter(line -> !line.isEmpty())
                 .findFirst()
-                .map(Markup::body)
-                .map(String::strip)
+                .map(line -> line.replaceFirst("^[-*] ", ""))
                 .orElse("");
     }
 

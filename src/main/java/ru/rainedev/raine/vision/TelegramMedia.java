@@ -877,6 +877,26 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
+     * Стикер словами, без обёртки разметки: для компактной полки избранного.
+     * Тот же кэш и та же цена просмотра; расщеплять обратно чужую разметку
+     * регуляркой значило бы завести вторую копию знания о формате.
+     */
+    public String stickerWords(TdApi.Sticker sticker) {
+        if (!sees() || sticker == null) {
+            return "";
+        }
+        String seen = lookWords(stillOf(sticker));
+        return seen.isBlank() ? stickerFallback(sticker) : seen;
+    }
+
+    /** Тот же взгляд, что и {@link #look}, но без обёртки: список сам решает, как ему выглядеть. */
+    private String lookWords(Optional<Integer> fileId) {
+        return fileId.flatMap(telegram::download)
+                .map(file -> vision.words(file, Vision.Kind.STICKER, asking(context.get(), null)))
+                .orElse("");
+    }
+
+    /**
      * Стикер смотрят с оглядкой на формат. Lottie {@code .tgs} и видео
      * {@code .webm} для зрения не картинки: модель встречает их отказом 400,
      * а запрос уже оплачен. Растровый кадр у них лежит в миниатюре — её и

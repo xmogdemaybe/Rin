@@ -145,6 +145,18 @@ class VisionTest {
     }
 
     @Test
+    void wordsGiveTheDescriptionWithoutTheWrapper(@TempDir Path dir) throws IOException {
+        // компактный список стикеров не размечает блоки: ему нужны слова, а не
+        // тег, который потом приходится расщеплять регуляркой
+        ScriptedLlm llm = new ScriptedLlm().willSee("кот машет лапой");
+
+        String plain = visionWith(llm, dir.resolve("cache"))
+                .words(imageFile(dir, "стикер.webp"), Vision.Kind.STICKER, List.of());
+
+        assertEquals("кот машет лапой", plain, "без обёртки и без лишнего");
+    }
+
+    @Test
     void oneFailedLookDoesNotEndTheVideo(@TempDir Path dir) throws IOException {
         // сбой обращения — не отказ модели: одна сетевая ошибка не должна
         // выбрасывать целый кадр из ленты времени ролика
