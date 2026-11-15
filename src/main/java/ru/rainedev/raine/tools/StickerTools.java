@@ -111,29 +111,39 @@ public final class StickerTools {
     }
 
     /** Сколько символов выделено на описание стикера в полке: дальше шум. */
-    private static final int CAPTION_LIMIT = 160;
+    private static final int CAPTION_LIMIT = 220;
 
     /**
      * О чём стикер — одной строкой. Поля задаёт собственный промпт зрения
-     * ({@code sticker_to_text.md}): сначала что на картинке и зачем это шлют, а
-     * если разбор не вышелся — первая строка как есть. Чужие скобки остаются
-     * текстом: полка встаёт внутрь снимка чата.
+     * ({@code sticker_to_text.md}): первым идёт смысл, потом сюжет — смысл
+     * короче, и при обрезке терять надо подробности, а не назначение жеста.
+     * Чужие скобки остаются текстом: полка встаёт внутрь снимка чата.
      */
     static String caption(String described) {
         if (described == null || described.isBlank()) {
             return "";
         }
-        String scene = field(described, "VisibleContent");
         String purpose = field(described, "CommunicativeMeaning");
         if (purpose.isEmpty()) {
             purpose = field(described, "Emotion");
         }
-        String line = scene.isEmpty() ? purpose : (purpose.isEmpty() ? scene : scene + " — " + purpose);
+        String scene = field(described, "VisibleContent");
+        String line = purpose.isEmpty() ? scene : (scene.isEmpty() ? purpose : purpose + " — " + scene);
         if (line.isBlank()) {
             line = firstLine(described);
         }
         line = Markup.body(line).strip();
-        return line.length() <= CAPTION_LIMIT ? line : line.substring(0, CAPTION_LIMIT).strip() + "…";
+        return wholeWords(line);
+    }
+
+    /** Обрезка по границе слова: полуслово в полке читается как обрыв мысли. */
+    private static String wholeWords(String line) {
+        if (line.length() <= CAPTION_LIMIT) {
+            return line;
+        }
+        String cut = line.substring(0, CAPTION_LIMIT);
+        int space = cut.lastIndexOf(' ');
+        return (space > 0 ? cut.substring(0, space) : cut).strip() + "…";
     }
 
     /** Значение поля вида «- VisibleContent: …». */

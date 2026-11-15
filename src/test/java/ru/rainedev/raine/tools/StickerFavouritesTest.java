@@ -22,6 +22,13 @@ class StickerFavouritesTest {
         return sticker;
     }
 
+    /** Строка именно стикера: в заголовке полки тоже встречается sticker_id. */
+    private static String shelfLine(String block) {
+        return block.lines()
+                .filter(line -> line.strip().startsWith("- sticker_id="))
+                .findFirst().orElse("");
+    }
+
     /**
      * Так описание стикера выглядит на самом деле: зрение отвечает полем за
      * полем по формату своего промпта, и в полке нужны смысл и сюжет, а не
@@ -80,8 +87,45 @@ class StickerFavouritesTest {
         String block = StickerTools.favouritesBlock(List.of(sticker(1, "🙂")), 18,
                 sticker -> "- VisibleContent: " + longScene + "\n");
 
-        assertTrue(block.lines().filter(line -> line.contains("sticker_id")).findFirst().orElse("")
-                .length() < 220, "полка не разрастается абзацами");
+        assertTrue(shelfLine(block).length() < 280,
+                "полка не разрастается абзацами: 220 на описание плюс номер и эмодзи");
+    }
+
+    @Test
+    void theMeaningGoesFirstSoItIsNeverThePartThatGetsCut() {
+        String longScene = "девочка-кошка поднимает лапку и виляет хвостом ".repeat(8);
+        String block = StickerTools.favouritesBlock(List.of(sticker(1, "🙂")), 18,
+                sticker -> "- VisibleContent: " + longScene
+                        + "\n- CommunicativeMeaning: Приветствие по-кошачьи\n");
+
+        String line = shelfLine(block);
+        int meaning = line.indexOf("Приветствие по-кошачьи");
+        assertTrue(meaning > 0, "смысл должен поместиться целиком: " + line);
+        assertTrue(meaning < line.indexOf("девочка-кошка"), "смысл идёт первым, сюжет — следом: " + line);
+    }
+
+    @Test
+    void aMeaningOfTwoHundredCharactersSurvivesWhole() {
+        String purpose = "милое приветствие ".repeat(11).strip();
+        String block = StickerTools.favouritesBlock(List.of(sticker(1, "🙂")), 18,
+                sticker -> "- CommunicativeMeaning: " + purpose + "\n");
+
+        assertTrue(block.contains(purpose), "смысл в 200 символов не должен обрезаться: " + block);
+    }
+
+    @Test
+    void aCutLineEndsOnAWholeWord() {
+        String scene = "абрикос банан вишня груша дыня ежевика жимолость ".repeat(8);
+        String block = StickerTools.favouritesBlock(List.of(sticker(1, "🙂")), 18,
+                sticker -> "- VisibleContent: " + scene + "\n");
+
+        String line = shelfLine(block);
+        String caption = line.substring(line.indexOf(": ") + 2);
+        assertTrue(caption.endsWith("…"), "длинное описание обрезано: " + caption);
+        String words = caption.substring(0, caption.length() - 1).strip();
+        for (String word : words.split(" ")) {
+            assertTrue(scene.contains(word + " "), "обрубленное слово в полке: " + word);
+        }
     }
 
     @Test
