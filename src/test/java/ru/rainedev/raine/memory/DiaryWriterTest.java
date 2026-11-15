@@ -283,6 +283,17 @@ class DiaryWriterTest {
         assertEquals(1, saved.size(), "сбой вектора не повод тонуть в исключении");
     }
 
+    /**
+     * Служебная приписка цикла по узнаваемой фразе. Брать её по номеру в
+     * списке нельзя: порядок меняется, а тест этого не заметит.
+     */
+    private static String harnessNote(String marker) {
+        return NotificationLoop.serviceInsertions().stream()
+                .filter(note -> note.contains(marker))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("приписки «" + marker + "» нет в списке"));
+    }
+
     /** Рабочий контекст вокруг человеческих слов: память, снимок чата, напоминания цикла. */
     private static List<Message> harness() {
         return List.of(
@@ -297,7 +308,7 @@ class DiaryWriterTest {
 
                         друг: «поехали в октябре»
 
-                        """ + NotificationLoop.serviceInsertions().getFirst()),
+                        """ + harnessNote("plain text does nothing")),
                 new Message(Message.Role.ASSISTANT, "- thought: он зовёт в поездку.",
                         List.of(new ToolCall("1", "function", new ToolCall.Function("ask", "{}"))), null, null),
                 Message.toolResult("1", "Записи в дневнике о друге: прошлый отпуск"),
@@ -308,7 +319,7 @@ class DiaryWriterTest {
     @Test
     void theRetellerSeesTheConversationAndNotTheHarness(@TempDir Path dir) {
         // пересказывали весь рабочий транскрипт: половина контекста — служебные
-        // вставки, а их фразы про #ask и про подмену личности модель читала как
+        // вставки, а их фразы про подмену личности модель читала как
         // событие дня. Отказ фильтр-политики приходит тоже на эту мешанину
         ScriptedLlm llm = new ScriptedLlm().willAnswer("Вечером друг позвал в поездку в октябре.");
 
@@ -332,7 +343,7 @@ class DiaryWriterTest {
         ScriptedLlm llm = new ScriptedLlm();
         List<Message> harnessOnly = List.of(Message.user(
                 "<your_diary_page just_for_reasoning>\n- source event: ничего не произошло\n</your_diary_page>\n\n"
-                        + NotificationLoop.serviceInsertions().get(2)));
+                        + harnessNote("Earlier successful actions")));
 
         assertTrue(new DiaryWriter(new Diary(dir), llm, "запиши дневник", 0.97)
                 .save("промпт", harnessOnly).isEmpty());

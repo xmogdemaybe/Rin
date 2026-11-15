@@ -78,14 +78,6 @@ public final class NotificationLoop {
     /** Чем закончился последний ход, в котором она что-то сделала. */
     private volatile String lastTalkAction = "";
 
-    private static final String ASK_REMINDER = """
-            [system] Have you called #ask yet this turn? If the message involves personal topics, past events, \
-            questions, or people you know — call #ask BEFORE send_telegram_message.""";
-
-    private static final String ASK_MISSED = """
-            [system] Note: you sent a message without consulting #ask this turn. Next time, call #ask before \
-            send_telegram_message to enrich your response with memories and context.""";
-
     /**
      * Про синтаксис здесь не пишется: модель повторяет то, что видит, и запрет,
      * показанный примером, работает как подсказка.
@@ -97,11 +89,6 @@ public final class NotificationLoop {
 
             Repeat this step now and actually call the tool. If you truly need nothing, call #wait.""";
 
-    /**
-     * Что цикл дописывает в разговор сам и чего человек не говорил. Пересказ в
-     * дневник вычищает вставки по этому же списку: иначе напоминание «вызови
-     * #ask» уезжает в память как событие дня.
-     */
     /**
      * Подсказка на каждом шаге: чем можно закончить ход. Память сюда не
      * предлагается — вспоминание решает код, а не напоминание.
@@ -119,7 +106,7 @@ public final class NotificationLoop {
      * слова разговора.
      */
     public static List<String> serviceInsertions() {
-        return List.of(ASK_REMINDER, ASK_MISSED, BE_TOOL_CENTRIC, NEXT_ACTION_PREFIX, PARTIAL_NOTE_PREFIX);
+        return List.of(BE_TOOL_CENTRIC, NEXT_ACTION_PREFIX, PARTIAL_NOTE_PREFIX);
     }
 
     private final LinkedBlockingDeque<Notification> queue = new LinkedBlockingDeque<>();
@@ -159,7 +146,6 @@ public final class NotificationLoop {
         long tokens;
         int step;
         boolean recall = true;
-        boolean asked;
         boolean prepared;
         /** До первого текстового промаха шаги свободные, дальше до конца хода — только вызовы. */
         boolean forceToolCall;
@@ -611,7 +597,6 @@ public final class NotificationLoop {
             }
         }
         boolean recallMemories = turn.recall;
-        boolean askedThisTurn = turn.asked;
         for (int step = turn.step; step < MAX_STEPS_PER_NOTIFICATION; step++) {
             turn.step = step;
             if (!turn.prepared && recallMemories) {
@@ -620,11 +605,6 @@ public final class NotificationLoop {
             // набор пересобирается каждый шаг: инструменты появляются по ходу дела.
             // открытие чата добавляет отправку — со снимком, снятым заранее, её бы не было
             Toolbox tools = withFinishingTools(notification.tools());
-            if (!turn.prepared && !askedThisTurn && !notification.initiative()
-                    && tools.names().contains("ask")) {
-                // напоминание встаёт прямо перед выбором действия, чтобы модель его заметила
-                appendToLast(ASK_REMINDER);
-            }
             turn.prepared = true;
             String toolChoice = turn.forceToolCall ? LlmClient.TOOL_CHOICE_REQUIRED : LlmClient.TOOL_CHOICE_AUTO;
             // дописка про человека стоит рядом с промптом, а не в контексте: в
@@ -726,12 +706,7 @@ public final class NotificationLoop {
             // репликами, они сбивают мысль, и вместо связного ответа выходит поток
             // случайных фактов
             recallMemories = calls.stream().noneMatch(call -> "send_telegram_message".equals(call.name()));
-            askedThisTurn |= calls.stream().anyMatch(call -> "ask".equals(call.name()));
-            turn.asked = askedThisTurn;
             turn.recall = recallMemories;
-            if (!notification.initiative() && !askedThisTurn && !recallMemories) {
-                appendToLast(ASK_MISSED);
-            }
 
             if (calls.stream().anyMatch(call -> finishes(notification, tools, call))) {
                 reportCost(startedAt, spentTokens, step + 1);

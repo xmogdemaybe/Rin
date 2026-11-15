@@ -276,22 +276,6 @@ class NotificationLoopTest {
     }
 
     @Test
-    void anImpulseIsNotNaggedAboutAsk() {
-        // самостоятельный порыв не обязан консультироваться с памятью
-        List<String> acted = new ArrayList<>();
-        Toolbox always = new Toolbox(Tool.named("ask").describedAs("память").build(arguments -> "memory"));
-        Toolbox available = new Toolbox(opening(mutating("send_telegram_message", acted)));
-        ScriptedLlm llm = new ScriptedLlm();
-        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
-
-        loopWith(llm, always).process(new Notification("порыв", available, true, 777, 777).onOwnInitiative());
-
-        String seen = seenText(llm);
-        assertFalse(seen.contains("Have you called #ask yet"), seen);
-        assertFalse(seen.contains("without consulting #ask"), seen);
-    }
-
-    @Test
     void lastTalkStatusNamesWhenAndWhat() {
         List<String> acted = new ArrayList<>();
         ScriptedLlm llm = new ScriptedLlm();
@@ -507,37 +491,6 @@ class NotificationLoopTest {
 
         assertTrue(loop.context().getFirst().content().contains("тебе написали"),
                 "есть выбор — решает модель");
-    }
-
-    @Test
-    void remindsToConsultMemoryBeforeAnswering() {
-        Toolbox tools = new Toolbox(Tool.simple("ask", "Спрашивает память", arguments -> "ничего"));
-
-        ScriptedLlm llm = new ScriptedLlm();
-        llm.willRespond(finishing());
-
-        NotificationLoop loop = loopWith(llm, tools);
-        loop.process(new Notification("тебе написали"));
-
-        assertTrue(loop.context().getFirst().content().contains("Have you called #ask"),
-                loop.context().getFirst().content());
-    }
-
-    @Test
-    void doesNotNagWhenMemoryWasAlreadyConsulted() {
-        Toolbox tools = new Toolbox(Tool.simple("ask", "Спрашивает память", arguments -> "вспомнила"));
-
-        ScriptedLlm llm = new ScriptedLlm();
-        llm.willRespond(withToolCalls(List.of(call("ask")), 10));
-        llm.willRespond(finishing());
-
-        NotificationLoop loop = loopWith(llm, tools);
-        loop.process(new Notification("тебе написали"));
-
-        long reminders = loop.context().stream()
-                .filter(m -> m.content() != null && m.content().contains("Have you called #ask"))
-                .count();
-        assertEquals(1, reminders, "напоминание уместно один раз, до обращения к памяти");
     }
 
     @Test

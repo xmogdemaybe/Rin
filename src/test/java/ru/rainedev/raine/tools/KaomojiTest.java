@@ -159,8 +159,8 @@ class KaomojiTest {
         }
         assertEquals(List.of("снова :3"), tools.piecesToSend(CHAT, "снова :3"));
 
-        assertEquals(List.of("это - не лицо"), tools.piecesToSend(CHAT, "это — не лицо"),
-                "срезка живёт там же, где замена тире: одна реплика — один проход");
+        assertEquals(List.of("это — не лицо"), tools.piecesToSend(CHAT, "это — не лицо"),
+                "счётчик лиц не переписывает знаки препинания: тире остаётся");
     }
 
     @Test
