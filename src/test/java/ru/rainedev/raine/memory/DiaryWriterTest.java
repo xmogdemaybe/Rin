@@ -397,6 +397,10 @@ class DiaryWriterTest {
         assertFalse(sent.contains("- thought:"), "служебные заметки в пересказ не уезжают");
         assertFalse(sent.contains("- intention:"), "намерение — не то, что она сказала");
         assertFalse(sent.contains("message_id=477102080"), "эхо инструмента — не реплика");
+        assertFalse(sent.contains("«поехали, я только за»"),
+                "ёлочек в её строках не должно быть: они едут обратно к ней же в <your_diary_page>");
+        assertTrue(sent.contains("\"поехали, я только за\""),
+                "реплика стоит в прямых кавычках, как в остальных записях дневника");
     }
 
     @Test

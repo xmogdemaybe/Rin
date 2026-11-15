@@ -222,7 +222,9 @@ public final class DiaryWriter {
             }
             said.append("Rin: ");
             if (!text.isBlank()) {
-                said.append('«').append(text).append('»');
+                // прямые кавычки, а не «ёлочки»: страница дневника возвращается к
+                // ней же в контекст, и ёлочки из пересказа лезут в её сообщения
+                said.append('"').append(text).append('"');
             }
             if (!attachment.isBlank()) {
                 said.append(text.isBlank() ? "" : " ").append("(вложение: ").append(attachment).append(')');
