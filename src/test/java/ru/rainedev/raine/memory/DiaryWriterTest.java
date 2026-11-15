@@ -441,6 +441,29 @@ class DiaryWriterTest {
     }
 
     @Test
+    void theChatScreenDoesNotReachTheRetellerAsAToolResult(@TempDir Path dir) {
+        // снимок чата — слова человека, а не протокол шага. С ролью tool и без
+        // tool_call_id (вызовы вырезаны) запрос пересказа невалиден: шлюз
+        // отвечает 400, и разговор не пересказывается вовсе
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("Запись про разговор с Мишей.");
+        List<Message> context = List.of(
+                Message.user("порыв: написать первой"),
+                new Message(Message.Role.ASSISTANT, null, List.of(call("open", "{}")), null, null),
+                Message.toolResult("c-open", """
+                        You switched to the chat "Misha" in Telegram. You see last messages:
+                        <message message_id="12" sender="Misha">привет, ты как?</message>
+                        """));
+
+        new DiaryWriter(new Diary(dir), llm, "запиши дневник", 0.97).save("промпт", context);
+
+        assertTrue(llm.lastHistory.stream().noneMatch(message -> message.role() == Message.Role.TOOL),
+                "в запросе пересказа не должно остаться сироты с ролью tool: " + llm.lastHistory);
+        assertTrue(llm.lastHistory.stream().anyMatch(message -> message.role() == Message.Role.USER
+                        && message.content().contains("привет, ты как?")),
+                "снимок должен дойти как слова человека");
+    }
+
+    @Test
     void herStickerShelfIsNotPartOfTheConversation(@TempDir Path dir) {
         // полка избранного вклеивается в снимок чата, чтобы отправить стикер
         // одним шагом; в дневник она не просится

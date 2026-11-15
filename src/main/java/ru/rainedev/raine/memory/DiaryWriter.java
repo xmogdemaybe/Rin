@@ -174,8 +174,11 @@ public final class DiaryWriter {
                 // реплика, от которой остались одни теги или вызов без текста
                 continue;
             }
-            // tool_calls не переносятся: без ответов на них запрос невалиден
-            kept.add(new Message(message.role(), text, null, null, null));
+            // tool_calls не переносятся: без ответов на них запрос невалиден.
+            // Снимок чата уходит словами человека, а не ответом инструмента:
+            // роль tool без своего вызова шлюз отвергает целиком, ответом 400
+            Message.Role role = message.role() == Message.Role.TOOL ? Message.Role.USER : message.role();
+            kept.add(new Message(role, text, null, null, null));
         }
         return kept;
     }
