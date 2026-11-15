@@ -10,6 +10,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.Fatal;
+import ru.rainedev.raine.phone.ChatKind;
+import ru.rainedev.raine.phone.TelegramObject;
+import ru.rainedev.raine.phone.TmeLink;
 
 /**
  * Фасад над TDLib. Вызовы блокирующие: цикл живёт на виртуальном потоке,
@@ -231,7 +234,10 @@ public final class Telegram {
     }
 
     public Found searchChats(String query, int limit) {
-        String bare = query.startsWith("@") ? query.substring(1) : query;
+        // ссылка и @username — одно и то же имя объекта: точный поиск работает
+        // по имени, а не по адресу, и без этого моста ссылка не находила ничего
+        Optional<String> handle = TmeLink.username(query);
+        String bare = handle.orElseGet(() -> query.startsWith("@") ? query.substring(1) : query);
         List<TdApi.Chat> mine = new ArrayList<>();
         List<TdApi.Chat> elsewhere = new ArrayList<>();
 
@@ -254,7 +260,7 @@ public final class Telegram {
             }
         });
 
-        if (query.startsWith("@")) {
+        if (handle.isPresent() || query.startsWith("@")) {
             attempt("публичный чат", () -> {
                 TdApi.SearchPublicChat request = new TdApi.SearchPublicChat();
                 request.username = bare;
@@ -903,6 +909,42 @@ public final class Telegram {
             return Optional.ofNullable(ask(new TdApi.GetMessageLinkInfo(url)));
         } catch (RuntimeException e) {
             // битый адрес или закрытый чат — обычный ответ; замороженный аккаунт — нет
+            Fatal.check(e);
+            return Optional.empty();
+        }
+    }
+
+    /** Сколько последних постов канала показывать за ссылкой на сам канал. */
+    private static final int OBJECT_POSTS = 3;
+
+    /**
+     * Объект за именем: канал, человек или группа. Ссылка «t.me/имя» не говорит,
+     * кто там, поэтому спрашиваем Telegram и отдаём готовым — номер чата, тип,
+     * описание, а у канала последние посты. У человека заодно личный канал из
+     * профиля: именно он стоит в био, и раньше открыть его было нечем.
+     */
+    public Optional<TelegramObject> publicObject(String username) {
+        try {
+            TdApi.SearchPublicChat request = new TdApi.SearchPublicChat();
+            request.username = username;
+            TdApi.Chat chat = ask(request);
+            String bio = "";
+            long personalChatId = 0;
+            List<TdApi.Message> posts = List.of();
+            if (chat.type instanceof TdApi.ChatTypePrivate priv) {
+                TdApi.UserFullInfo info = ask(new TdApi.GetUserFullInfo(priv.userId));
+                bio = info.bio == null ? "" : info.bio.text;
+                personalChatId = info.personalChatId;
+            } else if (chat.type instanceof TdApi.ChatTypeSupergroup supergroup) {
+                String description = ask(new TdApi.GetSupergroupFullInfo(supergroup.supergroupId)).description;
+                bio = description == null ? "" : description;
+                if (supergroup.isChannel) {
+                    posts = history(chat.id, OBJECT_POSTS);
+                }
+            }
+            return Optional.of(new TelegramObject(chat, bio, personalChatId, posts));
+        } catch (RuntimeException e) {
+            // закрытый или несуществующий объект — обычный ответ, а не поломка
             Fatal.check(e);
             return Optional.empty();
         }

@@ -39,6 +39,11 @@ public final class MessageFormatter {
     public interface LinkLookup {
         Optional<TdApi.MessageLinkInfo> peek(String url);
 
+        /** Объект за ссылкой «t.me/имя»: канал, человек или группа. */
+        default Optional<TelegramObject> peekObject(String username) {
+            return Optional.empty();
+        }
+
         default void lookAhead(List<TdApi.Message> messages) {}
 
         LinkLookup NONE = url -> Optional.empty();
@@ -156,6 +161,7 @@ public final class MessageFormatter {
         body.append(content);
         appendEdits(body, attributes, message, content, turn);
         appendLinks(body, message, view, turn);
+        appendObjects(body, message, view, turn);
 
         // описание встаёт под вложением: сначала «прислал фото», потом что на нём
         // расшифровка голосового и описание картинки — тоже чужой текст,
@@ -221,6 +227,53 @@ public final class MessageFormatter {
             body.append('\n').append(new MessageFormatter(names, replies, MediaDescriber.NONE,
                     MessageEdits.NONE, LinkLookup.NONE).format(post, view, "link", extra));
         }
+    }
+
+    /**
+     * Ссылка на сам объект: канал, человек или группа. В отличие от поста, здесь
+     * нужны номер чата и тип — иначе модели нечем его открыть и не понять, можно
+     * ли туда писать. Описание и последние посты канала идут готовыми: один
+     * адрес не должен стоить трёх обращений к модели.
+     */
+    private void appendObjects(StringBuilder body, TdApi.Message message, ChatView view, boolean turn) {
+        if (!turn) {
+            return;
+        }
+        for (String username : TmeLink.objectsIn(message, TmeLink.PER_MESSAGE)) {
+            TelegramObject object = links.peekObject(username).orElse(null);
+            if (object == null || object.chat() == null) {
+                continue;
+            }
+            TdApi.Chat chat = object.chat();
+            StringBuilder extra = new StringBuilder(" username=\"").append(Markup.attribute(username)).append('"')
+                    .append(" chat_id=\"").append(chat.id).append('"')
+                    .append(" kind=\"").append(objectKind(chat)).append('"')
+                    .append(" title=\"").append(Markup.attribute(chat.title)).append('"');
+            if (object.personalChatId() != 0) {
+                extra.append(" personal_chat_id=\"").append(object.personalChatId()).append('"');
+            }
+            body.append("\n<telegram_object").append(extra).append('>');
+            if (object.bio() != null && !object.bio().isBlank()) {
+                body.append("\n<bio>").append(Markup.body(object.bio())).append("</bio>");
+            }
+            // посты объекта — тем же выбросным форматтером, что и одиночный пост:
+            // без зрения и без ссылок внутри ссылок
+            MessageFormatter inner = new MessageFormatter(names, replies, MediaDescriber.NONE,
+                    MessageEdits.NONE, LinkLookup.NONE);
+            for (TdApi.Message post : object.posts()) {
+                body.append('\n').append(inner.format(post, view, "object_post", ""));
+            }
+            body.append("\n</telegram_object>");
+        }
+    }
+
+    /** Тип объекта словами: с человеком можно заговорить, а в канал не напишешь. */
+    private static String objectKind(TdApi.Chat chat) {
+        return switch (ChatKind.of(chat)) {
+            case DM -> "person";
+            case CHANNEL -> "channel";
+            case GROUP -> "group";
+        };
     }
 
     /**

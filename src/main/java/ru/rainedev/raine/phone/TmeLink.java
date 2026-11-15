@@ -33,7 +33,71 @@ public final class TmeLink {
     private static final Pattern POST = Pattern.compile(
             "(?<![A-Za-z0-9._~-])(?:https?://)?(?:www\\.)?(?:t\\.me|telegram\\.me)/[A-Za-z0-9_/-]*/\\d+\\b");
 
+    /** Любой адрес Telegram: и пост, и сам объект, и служебная ссылка. */
+    private static final Pattern ADDRESS = Pattern.compile(
+            "(?<![A-Za-z0-9._~-])(?:https?://)?(?:www\\.)?(?:t\\.me|telegram\\.me)/[A-Za-z0-9_+/-]+");
+
+    /** Имя объекта: буква, дальше буквы/цифры/подчёркивания, 5–32 символа. */
+    private static final Pattern USERNAME = Pattern.compile("[A-Za-z][A-Za-z0-9_]{4,31}");
+
+    /**
+     * Первый сегмент пути, который именем объекта не является: приватные чаты,
+     * паки стикеров, прокси, приглашения. Резолвить их как username бессмысленно,
+     * а приглашение в чат — это ещё и действие, которого здесь быть не должно.
+     */
+    private static final java.util.Set<String> RESERVED = java.util.Set.of(
+            "c", "addstickers", "addemoji", "addtheme", "addlist", "proxy", "socks", "joinchat",
+            "share", "iv", "boost", "premium", "invoice", "login", "confirmphone", "setlanguage",
+            "contact", "giftcode", "m");
+
     private TmeLink() {}
+
+    /**
+     * Имя объекта из ссылки или @username: «https://t.me/durov», «t.me/durov/123»,
+     * «@durov» → durov. Просто имя без ссылки не трогается — поиск по названию
+     * живёт своей жизнью. Служебные адреса и приглашения именами не считаются.
+     */
+    public static java.util.Optional<String> username(String text) {
+        if (text == null || text.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        String candidate = text.strip();
+        if (candidate.startsWith("@")) {
+            candidate = candidate.substring(1);
+        } else {
+            Matcher address = ADDRESS.matcher(candidate);
+            if (!address.find()) {
+                return java.util.Optional.empty();
+            }
+            candidate = address.group()
+                    .replaceFirst("^(?:https?://)?(?:www\\.)?(?:t\\.me|telegram\\.me)/", "");
+        }
+        String name = candidate.split("/")[0];
+        if (RESERVED.contains(name.toLowerCase())) {
+            return java.util.Optional.empty();
+        }
+        return USERNAME.matcher(name).matches()
+                ? java.util.Optional.of(name) : java.util.Optional.empty();
+    }
+
+    /** Ссылки на сами объекты (без номера поста), не больше «limit» и без повторов. */
+    public static List<String> objects(String text, int limit) {
+        Set<String> found = new LinkedHashSet<>();
+        Matcher address = ADDRESS.matcher(text == null ? "" : text);
+        while (found.size() < limit && address.find()) {
+            String url = address.group();
+            if (POST.matcher(url).matches()) {
+                continue;   // конкретный пост раскрывает find(), объект здесь ни при чём
+            }
+            username(url).ifPresent(found::add);
+        }
+        return List.copyOf(found);
+    }
+
+    /** То же для того, что человек написал в сообщении: текст и подпись к вложению. */
+    public static List<String> objectsIn(TdApi.Message message, int limit) {
+        return objects(wordsOf(message.content), limit);
+    }
 
     /** Ссылки в порядке появления, не больше «limit» и без повторов. */
     public static List<String> find(String text, int limit) {

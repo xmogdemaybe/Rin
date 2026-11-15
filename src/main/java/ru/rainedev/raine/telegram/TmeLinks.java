@@ -23,19 +23,37 @@ public final class TmeLinks implements MessageFormatter.LinkLookup {
         Optional<TdApi.MessageLinkInfo> resolve(String url);
     }
 
+    /** Спросить Telegram, что стоит за именем объекта: канал, человек, группа. */
+    @FunctionalInterface
+    interface ObjectResolver {
+        Optional<ru.rainedev.raine.phone.TelegramObject> resolve(String username);
+    }
+
+    /** Объектов на экран не больше двух: каждый — это поиск чата, описание и история. */
+    static final int OBJECTS_PER_SCREEN = 2;
+
     private static final long HOUR = 60 * 60_000;
 
     private final ShortLivedCache<String, Optional<TdApi.MessageLinkInfo>> cache =
             new ShortLivedCache<>(HOUR);
 
+    private final ShortLivedCache<String, Optional<ru.rainedev.raine.phone.TelegramObject>> objects =
+            new ShortLivedCache<>(HOUR);
+
     private final Resolver resolver;
+    private final ObjectResolver objectResolver;
 
     TmeLinks(Resolver resolver) {
+        this(resolver, username -> Optional.empty());
+    }
+
+    TmeLinks(Resolver resolver, ObjectResolver objectResolver) {
         this.resolver = resolver;
+        this.objectResolver = objectResolver;
     }
 
     public TmeLinks(Telegram telegram) {
-        this(telegram::linkInfo);
+        this(telegram::linkInfo, telegram::publicObject);
     }
 
     /** Разметка только читает то, что уже раскрыли: сама она к Telegram не ходит. */
@@ -45,18 +63,37 @@ public final class TmeLinks implements MessageFormatter.LinkLookup {
     }
 
     @Override
+    public Optional<ru.rainedev.raine.phone.TelegramObject> peekObject(String username) {
+        return objects.cached(username).orElse(Optional.empty());
+    }
+
+    @Override
     public void lookAhead(List<TdApi.Message> messages) {
         int budget = TmeLink.PER_SCREEN;
+        int objectBudget = OBJECTS_PER_SCREEN;
         for (TdApi.Message message : messages) {
-            if (budget == 0) {
+            if (budget == 0 && objectBudget == 0) {
                 return;
             }
             for (String url : TmeLink.in(message, TmeLink.PER_MESSAGE)) {
+                if (budget == 0) {
+                    break;
+                }
                 if (cache.cached(url).isPresent()) {
                     continue;   // раскрытое раньше ничего не стоит и не тратит бюджет
                 }
                 budget--;
                 cache.get(url, resolver::resolve);
+            }
+            for (String username : TmeLink.objectsIn(message, TmeLink.PER_MESSAGE)) {
+                if (objectBudget == 0) {
+                    break;
+                }
+                if (objects.cached(username).isPresent()) {
+                    continue;
+                }
+                objectBudget--;
+                objects.get(username, objectResolver::resolve);
             }
         }
     }

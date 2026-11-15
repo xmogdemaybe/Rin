@@ -920,10 +920,10 @@ public final class TelegramTools {
     /** Поиск человека или чата — так завязывается разговор с тем, кому ещё не писала. */
     public Tool searchChats() {
         return Tool.named("search_chats")
-                .describedAs("Finds a person or chat by name or @username. Searches your contacts, your existing "
-                        + "chats and public channels at once. Use it before starting a conversation with someone "
-                        + "new — if the chat already exists, continue there instead.")
-                .requiredString("query", "Person's name, chat title or @username")
+                .describedAs("Finds a person or chat by name, @username or a t.me link. Searches your contacts, "
+                        + "your existing chats and public channels at once. Use it before starting a conversation "
+                        + "with someone new — if the chat already exists, continue there instead.")
+                .requiredString("query", "Person's name, chat title, @username or a t.me/<username> link")
                 .build(arguments -> {
                     String query = arguments.path("query").asText("").strip();
                     if (query.isEmpty()) {

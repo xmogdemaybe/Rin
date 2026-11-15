@@ -74,6 +74,64 @@ class TmeLinksTest {
         assertTrue(links.peek("t.me/a/1").isPresent());
     }
 
+    /** Объекты раскрываются своим бюджетом и запоминаются, как и посты. */
+    @Test
+    void objectsAreResolvedOnceAndRemembered() {
+        AtomicInteger objectAsked = new AtomicInteger();
+        TmeLinks both = new TmeLinks(url -> Optional.empty(), username -> {
+            objectAsked.incrementAndGet();
+            return Optional.of(object(username));
+        });
+
+        both.lookAhead(List.of(message(1L, "глянь t.me/blameyourselfandnotme")));
+        both.lookAhead(List.of(message(1L, "глянь t.me/blameyourselfandnotme")));
+
+        assertEquals(1, objectAsked.get(), "и положительный, и отрицательный ответ живут час");
+        assertTrue(both.peekObject("blameyourselfandnotme").isPresent());
+    }
+
+    @Test
+    void noMoreThanTwoObjectsPerScreen() {
+        AtomicInteger objectAsked = new AtomicInteger();
+        TmeLinks both = new TmeLinks(url -> Optional.empty(), username -> {
+            objectAsked.incrementAndGet();
+            return Optional.of(object(username));
+        });
+
+        both.lookAhead(List.of(message(1L, "t.me/aaa11"), message(2L, "t.me/bbb22"),
+                message(3L, "t.me/ccc33")));
+
+        assertEquals(TmeLinks.OBJECTS_PER_SCREEN, objectAsked.get(), "экран не превращается в ленту каналов");
+    }
+
+    @Test
+    void objectBudgetDoesNotEatThePostBudget() {
+        AtomicInteger objectAsked = new AtomicInteger();
+        TmeLinks both = new TmeLinks(url -> {
+            asked.incrementAndGet();
+            return Optional.empty();
+        }, username -> {
+            objectAsked.incrementAndGet();
+            return Optional.of(object(username));
+        });
+
+        both.lookAhead(List.of(message(1L, "t.me/aaa11 t.me/durov/1 t.me/bbb22 t.me/durov/2")));
+
+        assertEquals(2, objectAsked.get(), "объекты по своему бюджету");
+        assertEquals(2, asked.get(), "посты по своему");
+    }
+
+    private static ru.rainedev.raine.phone.TelegramObject object(String username) {
+        TdApi.Chat chat = new TdApi.Chat();
+        chat.id = -100L;
+        chat.title = username;
+        TdApi.ChatTypeSupergroup type = new TdApi.ChatTypeSupergroup();
+        type.supergroupId = 7L;
+        type.isChannel = true;
+        chat.type = type;
+        return new ru.rainedev.raine.phone.TelegramObject(chat, "", 0, List.of());
+    }
+
     private static TdApi.Message message(long id, String text) {
         TdApi.Message message = new TdApi.Message();
         message.id = id;
