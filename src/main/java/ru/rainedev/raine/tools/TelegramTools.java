@@ -698,7 +698,6 @@ public final class TelegramTools {
                     Long quoted = quotedCheck;
 
                     long lastSent = 0;
-                    String lastText = text;
 
                     // переносы строк внутри одной реплики — это отдельные сообщения
                     List<String> pieces = piecesToSend(chatId, text);
@@ -728,17 +727,16 @@ public final class TelegramTools {
                             fixTypo(chatId, sent, slip, piece);
                         }
                         lastSent = sent;
-                        // ей сообщается то, что она хотела сказать, а не то, что вышло
-                        // из-под руки: опечатку замечает и исправляет рука, не голова.
-                        // Пока в ответе стоял испорченный текст, она видела в нём ошибку
-                        // и правила сообщение сама — уже поверх дописанного «*слово»,
-                        // и выходило два исправления одного промаха
-                        lastText = piece;
+                        if (screen != null) {
+                            // отправленное считается показанным: без этого следующий
+                            // снимок чата напечатал бы её же слова третьим копированием
+                            screen.markSent(chatId, sent);
+                        }
                     }
                     // считаем вызовы, а не строки: реплика, разбитая на три части,
                     // остаётся одной репликой
                     inARow[0]++;
-                    return textSendResult(inARow[0], lastSent, lastText);
+                    return textSendResult(inARow[0], lastSent);
                     }
                 });
     }
@@ -1935,16 +1933,18 @@ public final class TelegramTools {
      * реплика уже в чате, а выкинутый из контекста совет цикл клал бы репликой
      * собеседника, и она отвечала на него вслух живому человеку.
      */
-    String textSendResult(int inARow, long messageId, String text) {
-        return sendResult(inARow, messageId, text) + livelinessNote();
+    String textSendResult(int inARow, long messageId) {
+        return sendResult(inARow, messageId) + livelinessNote();
     }
 
     /**
      * Ответ на отправку. Идентификатор нужен, чтобы она могла поправить своё же
-     * сообщение — без него исправить опечатку нечем.
+     * сообщение — без него исправить опечатку нечем. Само слово здесь не
+     * повторяется: оно только что стояло в её же вызове, а третья копия
+     * раздувает запрос и подсовывает фильтру то, что она уже сказала.
      */
-    private static String sendResult(int inARow, long messageId, String text) {
-        String result = "Message sent; message_id=%d, text=\"%s\".".formatted(messageId, text);
+    private static String sendResult(int inARow, long messageId) {
+        String result = "Message sent; message_id=%d.".formatted(messageId);
         if (inARow > 5) {
             // заговорить человека — обычная беда: сообщения идут одно за другим,
             // а ответить он не успевает
@@ -1952,8 +1952,9 @@ public final class TelegramTools {
                     + " messages in a row! Give your participant space to breathe!";
         }
         if (inARow < 3) {
-            // живая реплика редко бывает одна: «привет» — «как ты?»
-            return result + "\n\nYou may add a follow-up #send_telegram_message.";
+            // чем закончить ход — нейтральная строчка, а не приглашение писать
+            // ещё: второе сообщение «на всякий случай» как раз и вылезало хвостом
+            return result + "\n\nCall #wait if nothing else is needed.";
         }
         return result;
     }

@@ -15,6 +15,7 @@ import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
+import ru.rainedev.raine.phone.ChatScreen;
 
 /**
  * Переносит разговор в долгую память: просит модель пересказать его записями
@@ -46,9 +47,6 @@ public final class DiaryWriter {
     /** Полка своих стикеров: вклеивается в снимок чата, к разговору отношения не имеет. */
     private static final String SHELF_OPEN = "<favourite_stickers>";
     private static final String SHELF_CLOSE = "</favourite_stickers>";
-
-    /** Снимок открытого чата: пока сообщение не стало уведомлением, оно видно только здесь. */
-    private static final String SCREEN_HEAD = "You switched to the chat";
 
     /** Её слова уходят в аргументах вызова, а не в тексте ответа. */
     private static final String SEND_TOOL = "send_telegram_message";
@@ -178,7 +176,7 @@ public final class DiaryWriter {
     }
 
     private static boolean isChatScreen(String content) {
-        return content != null && content.stripLeading().startsWith(SCREEN_HEAD);
+        return ChatScreen.isScreen(content);
     }
 
     private static String withoutMentalNotes(String text) {

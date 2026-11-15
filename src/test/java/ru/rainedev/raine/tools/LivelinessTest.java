@@ -396,11 +396,49 @@ class LivelinessTest {
         tools.voice(new VoiceGenerator(new Config.Voice(true, "https://example.invalid", "ключ-не-секрет",
                         "model", "voice", "ru", 1.0, 24000, 48, dir), dir), dir, () -> "prompt");
 
-        String result = tools.textSendResult(3, 42L, "привет");
+        String result = tools.textSendResult(3, 42L);
 
         assertTrue(result.startsWith("Message sent"), result);
         assertTrue(result.contains("not a request from your participant"),
                 "совет помечен как реплика кода: " + result);
         assertFalse(result.contains("Попробуй вместо этого"), "откатного текста не осталось: " + result);
+    }
+
+    /**
+     * Результат отправки не пересказывает её же слова и не зовёт дописать
+     * второе сообщение: реплика и так стоит в контексте (её вызов), а
+     * приглашение «добавь ещё» прямо противоречит правилу «1–2 коротких
+     * сообщения — норма».
+     */
+    @Test
+    void theSendResultNeitherEchoesHerWordsNorPushesAnotherMessage() {
+        TelegramTools tools = new TelegramTools(null, new TelegramActions.ReadOnly(), null,
+                new Lockdown(Lockdown.Mode.OWNER_ONLY, 1L, true), null);
+        tools.behaviour(new Config.Behaviour(2000, false, true, false, false, 1.0, 4));
+
+        String result = tools.textSendResult(1, 42L);
+
+        assertFalse(result.contains("text="),
+                "текст реплики не повторяется — он только что стоял в её же вызове: " + result);
+        assertTrue(result.contains("message_id=42"), "id нужен, чтобы поправить опечатку: " + result);
+        assertFalse(result.contains("follow-up"), "второе сообщение не навязывается: " + result);
+        assertTrue(result.contains("Call #wait if nothing else is needed."), result);
+    }
+
+    /**
+     * Предел «заговорила человека» остаётся: он не про второе сообщение по
+     * умолчанию, а про остановку.
+     */
+    @Test
+    void theWallOfTextWarningStillArrives() {
+        TelegramTools tools = new TelegramTools(null, new TelegramActions.ReadOnly(), null,
+                new Lockdown(Lockdown.Mode.OWNER_ONLY, 1L, true), null);
+        tools.behaviour(new Config.Behaviour(2000, false, true, false, false, 1.0, 4));
+
+        String result = tools.textSendResult(7, 42L);
+
+        assertTrue(result.contains("you have sent 7 messages in a row"), result);
+        assertFalse(result.contains("text="), "и здесь без эха: " + result);
+        assertFalse(result.contains("Call #wait"), "при лимите не до «wait if nothing needed»: " + result);
     }
 }

@@ -54,6 +54,42 @@ class ChatScreenTest {
         assertTrue(second.text().contains("2 messages of this chat are not repeated"), second.text());
     }
 
+    /**
+     * Отправленное ею самое приходит в следующий снимок, если его там не
+     * отметить: слова уже стоят в её же вызове, а копия в истории — третий
+     * раз на один и тот же запрос.
+     */
+    @Test
+    void herOwnSentMessageIsNotPrintedAgain() {
+        TdApi.Chat dm = chat(1L, "John", new TdApi.ChatTypePrivate(JOHN));
+        screen.render(dm, List.of(message(600L, "привет")), view);
+        screen.markSent(1L, 601L);
+
+        ChatScreen.Screen second = screen.render(dm,
+                List.of(message(600L, "привет"), mine(601L, "я тут"), message(602L, "а ты?")), view);
+
+        assertFalse(second.text().contains("я тут"),
+                "своё отправленное не печатается заново: " + second.text());
+        assertTrue(second.text().contains("а ты?"), second.text());
+    }
+
+    /**
+     * Чат, где с прошлого снимка не было чужих слов, не требует тела: строка
+     * про повторённое уже говорит ей, что чат не пуст.
+     */
+    @Test
+    void aScreenWithOnlyHerOwnWordsSaysNothingNew() {
+        TdApi.Chat dm = chat(1L, "John", new TdApi.ChatTypePrivate(JOHN));
+        screen.render(dm, List.of(message(600L, "привет")), view);
+        screen.markSent(1L, 601L);
+
+        ChatScreen.Screen second = screen.render(dm,
+                List.of(message(600L, "привет"), mine(601L, "я тут")), view);
+
+        assertFalse(second.text().contains("я тут"), second.text());
+        assertTrue(second.text().contains("are not repeated"), second.text());
+    }
+
     /** Разговор ушёл в дневник — следующий снимок снова печатает историю целиком. */
     @Test
     void forgettingTheScreensBringsTheWholeHistoryBack() {
@@ -307,11 +343,20 @@ class ChatScreenTest {
     }
 
     private static TdApi.Message message(long id, String text) {
+        return text(id, text, JOHN);
+    }
+
+    /** Её собственное сообщение — тот же вид, но отправитель она сама. */
+    private static TdApi.Message mine(long id, String text) {
+        return text(id, text, MY_ID);
+    }
+
+    private static TdApi.Message text(long id, String text, long senderId) {
         TdApi.Message message = new TdApi.Message();
         message.id = id;
         message.chatId = 1L;
         message.date = 1_780_000_000;
-        message.senderId = new TdApi.MessageSenderUser(JOHN);
+        message.senderId = new TdApi.MessageSenderUser(senderId);
         message.content = new TdApi.MessageText(new TdApi.FormattedText(text, new TdApi.TextEntity[0]), null, null);
         return message;
     }

@@ -773,6 +773,38 @@ class NotificationLoopTest {
     }
 
     @Test
+    void serviceNotesAreKnownToTheReteller() {
+        // пересказ вырезает приписки цикла по списку: чего в списке нет —
+        // однажды уедет в дневник как слова разговора
+        List<String> notes = NotificationLoop.serviceInsertions();
+
+        assertTrue(notes.stream().anyMatch(note -> note.contains("What's your next action?")),
+                "подсказка про следующий шаг приписана к чужому тексту: " + notes);
+        assertTrue(notes.stream().anyMatch(note -> note.contains("Earlier successful actions")),
+                "записка о недосказанных действиях тоже: " + notes);
+    }
+
+    @Test
+    void theNextStepHintOnlyNamesActions() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("ask")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm,
+                new Toolbox(Tool.simple("ask", "Спрашивает память", arguments -> "вспомнила")));
+
+        loop.process(new Notification("тебе написали"));
+
+        String hint = loop.context().stream()
+                .map(Message::content)
+                .filter(java.util.Objects::nonNull)
+                .filter(text -> text.contains("What's your next action?"))
+                .findFirst().orElse("");
+        assertTrue(hint.contains("The following tools available"), "подсказка должна быть на месте: " + hint);
+        assertFalse(hint.contains("Use #ask"),
+                "вспоминание решает код, а не напоминание в каждом шаге: " + hint);
+    }
+
+    @Test
     void quietNightIsSleepable() {
         NotificationLoop loop = loopWith(new ScriptedLlm(), new Toolbox());
 

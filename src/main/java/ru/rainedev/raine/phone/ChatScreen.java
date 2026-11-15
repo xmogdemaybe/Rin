@@ -12,6 +12,18 @@ import ru.rainedev.raine.prompt.Prompts;
  */
 public final class ChatScreen {
 
+    /**
+     * С чего начинается снимок открытого чата. Общая метка: по ней пересказ
+     * дневника отличает историю переписки от прочих ответов инструментов, и
+     * держать её в двух местах нельзя.
+     */
+    public static final String SCREEN_HEAD = "You switched to the chat";
+
+    /** Этот текст — снимок чата, а не слова собеседника. */
+    public static boolean isScreen(String content) {
+        return content != null && content.stripLeading().startsWith(SCREEN_HEAD);
+    }
+
     private final MessageFormatter formatter;
     private final Prompts prompts;
 
@@ -84,13 +96,20 @@ public final class ChatScreen {
                 .filter(message -> !seen.containsKey(message.id) || message.editDate != seen.get(message.id))
                 .toList();
         if (fresh.isEmpty() && !messages.isEmpty()) {
-            // новых сообщений нет, но экран без тела она прочтёт как пустой чат
-            fresh = List.of(messages.get(messages.size() - 1));
+            // новых сообщений нет, но чужое без тела она прочла бы как пустой
+            // чат. Своего здесь не просит печатать ничего: оно только что стояло
+            // в её же вызове
+            List<TdApi.Message> theirs = messages.stream()
+                    .filter(message -> !isMine(message, view))
+                    .toList();
+            if (!theirs.isEmpty()) {
+                fresh = List.of(theirs.get(theirs.size() - 1));
+            }
         }
         int skipped = messages.size() - fresh.size();
 
         StringBuilder text = new StringBuilder(
-                "You switched to the chat \"%s\" in Telegram. You see last messages:\n"
+                (SCREEN_HEAD + " \"%s\" in Telegram. You see last messages:\n")
                         .formatted(Markup.attribute(chat.title)));
 
         if (messages.isEmpty()) {
@@ -127,6 +146,21 @@ public final class ChatScreen {
     }
 
     /**
+     * Отправленное ею самой вошло в снимок ещё до того, как Telegram показал
+     * его в истории: без этой отметки следующий снимок напечатал бы те же слова
+     * второй раз — третьим, если считать её собственный вызов.
+     */
+    public void markSent(long chatId, long messageId) {
+        shown.computeIfAbsent(chatId, id -> new ConcurrentHashMap<>()).put(messageId, 0);
+    }
+
+    /** Сообщение её же, а не собеседника. */
+    private static boolean isMine(TdApi.Message message, MessageFormatter.ChatView view) {
+        return message.senderId instanceof TdApi.MessageSenderUser sender
+                && sender.userId == view.myId();
+    }
+
+    /**
      * Когда подряд прилетело несколько сообщений, ответ «на всё сразу» часто
      * приходит невпопад: собеседник не понимает, на какую из его реплик
      * отвечаетают. Считаются только чужие сообщения ниже границы прочитанного —
@@ -134,8 +168,7 @@ public final class ChatScreen {
      */
     private String unreadHint(List<TdApi.Message> shown, MessageFormatter.ChatView view) {
         long unread = shown.stream()
-                .filter(message -> message.senderId instanceof TdApi.MessageSenderUser sender
-                        && sender.userId != view.myId())
+                .filter(message -> !isMine(message, view))
                 .filter(message -> message.id > view.lastReadInboxMessageId())
                 .count();
         if (unread < 2) {

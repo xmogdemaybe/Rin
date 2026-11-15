@@ -102,8 +102,24 @@ public final class NotificationLoop {
      * дневник вычищает вставки по этому же списку: иначе напоминание «вызови
      * #ask» уезжает в память как событие дня.
      */
+    /**
+     * Подсказка на каждом шаге: чем можно закончить ход. Память сюда не
+     * предлагается — вспоминание решает код, а не напоминание.
+     */
+    static final String NEXT_ACTION_PREFIX =
+            "What's your next action? Use a `tool` to act. The following tools available: ";
+
+    /** Записка после частичного сбоя: часть действий уже состоялась. */
+    static final String PARTIAL_NOTE_PREFIX =
+            "Earlier successful actions have already happened. Do not repeat them. ";
+
+    /**
+     * Всё, что цикл дописывает в чужой текст. Пересказ дневника вырезает это по
+     * списку: новая приписка, не попавшая сюда, однажды уедет в дневник как
+     * слова разговора.
+     */
     public static List<String> serviceInsertions() {
-        return List.of(ASK_REMINDER, ASK_MISSED, BE_TOOL_CENTRIC);
+        return List.of(ASK_REMINDER, ASK_MISSED, BE_TOOL_CENTRIC, NEXT_ACTION_PREFIX, PARTIAL_NOTE_PREFIX);
     }
 
     private final LinkedBlockingDeque<Notification> queue = new LinkedBlockingDeque<>();
@@ -674,7 +690,7 @@ public final class NotificationLoop {
                 // Earlier actions are real: retain the complete tool protocol and do not replay them.
                 context.add(response.firstMessage().orElseThrow());
                 context.addAll(e.results());
-                appendToLast("Earlier successful actions have already happened. Do not repeat them. " + e.getMessage());
+                appendToLast("\n" + PARTIAL_NOTE_PREFIX + e.getMessage());
                 turn.recall = false;
                 recallMemories = false;
                 if (response.totalTokens() >= contextTokenLimit) {
@@ -729,8 +745,7 @@ public final class NotificationLoop {
             }
 
             if (!tools.isEmpty()) {
-                appendToLast("\nWhat's your next action? Use a `tool` to act. Use #ask to consult with your "
-                        + "knowledge database. The following tools available: " + String.join(", ", tools.names()));
+                appendToLast("\n" + NEXT_ACTION_PREFIX + String.join(", ", tools.names()));
             }
         }
 
