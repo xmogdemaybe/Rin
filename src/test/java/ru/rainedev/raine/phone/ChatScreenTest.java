@@ -90,6 +90,24 @@ class ChatScreenTest {
         assertTrue(second.text().contains("are not repeated"), second.text());
     }
 
+    /**
+     * Снимок показанного — копия, а не вид на живую таблицу: иначе откат
+     * холостого порыва вернул бы ровно то, что там уже поменялось.
+     */
+    @Test
+    void theShownSnapshotIsACopyNotAView() {
+        TdApi.Chat dm = chat(1L, "John", new TdApi.ChatTypePrivate(JOHN));
+        screen.render(dm, List.of(message(600L, "привет")), view);
+        var snapshot = screen.markShown();
+
+        screen.render(dm, List.of(message(600L, "привет"), message(601L, "пока")), view);
+        screen.restoreShown(snapshot);
+
+        ChatScreen.Screen after = screen.render(dm,
+                List.of(message(600L, "привет"), message(601L, "пока")), view);
+        assertTrue(after.text().contains("пока"), "откат вернул состояние до снимка: " + after.text());
+    }
+
     /** Разговор ушёл в дневник — следующий снимок снова печатает историю целиком. */
     @Test
     void forgettingTheScreensBringsTheWholeHistoryBack() {

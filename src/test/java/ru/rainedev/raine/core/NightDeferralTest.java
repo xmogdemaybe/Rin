@@ -136,6 +136,39 @@ class NightDeferralTest {
 
     @Test
     @Timeout(10)
+    void farewellDoesNotRestartThePatienceWindow() throws Exception {
+        // предел терпения отсчитывается от первой отсрочки. Прежний сброс
+        // deferSince в ветке прощания дарил ещё полтора часа бодрствования
+        // ровно тогда, когда она уже сказала «споки»
+        Rest rest = rest();
+        boolean[] alive = {true};
+        AtomicInteger farewells = new AtomicInteger();
+        rest.leavingForNight(farewells::incrementAndGet);
+        rest.aliveTalk(() -> alive[0]);
+
+        rest.maybeRest();                                   // 23:30 — разговор жив
+        clock.advance(Duration.ofMinutes(30));
+        alive[0] = false;
+        rest.maybeRest();                                   // стихло — прощание
+        assertEquals(1, farewells.get(), "прощание прозвучало");
+
+        clock.advance(Duration.ofMinutes(1));
+        alive[0] = true;                                    // он ответил на прощание
+        rest.maybeRest();
+        assertFalse(rest.isResting(), "пока отвечает — не время");
+
+        clock.advance(Duration.ofMinutes(59));              // всего 90 минут с первой отсрочки
+        Thread falling = Thread.ofVirtual().start(rest::maybeRest);
+        awaitRest(rest);
+        assertTrue(rest.isResting(), "терпение считается с первой отсрочки, а не с прощания");
+
+        falling.interrupt();
+        falling.join(Duration.ofSeconds(5));
+        assertFalse(rest.isResting());
+    }
+
+    @Test
+    @Timeout(10)
     void wokenSheNeverSaysGoodnightTwice() throws Exception {
         // уснула, хозяин разбудил, поговорили, стихли — второе прощание не звучит
         Rest rest = rest();

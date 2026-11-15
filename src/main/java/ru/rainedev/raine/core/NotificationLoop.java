@@ -226,6 +226,9 @@ public final class NotificationLoop {
     /** Ход закончился — она отложила телефон. */
     private Runnable onIdle = () -> { };
 
+    /** Перед выходом потока цикла: куда перенести недосказанный разговор. */
+    private Runnable onLoopStopped = () -> { };
+
     /** Что сделать, когда ход закончен. Слушателей несколько: закрыть чаты, снять признак порыва. */
     private final List<java.util.function.Consumer<Notification>> onNotificationDone = new ArrayList<>();
 
@@ -309,6 +312,25 @@ public final class NotificationLoop {
             Thread.currentThread().interrupt();
             return false;
         }
+    }
+
+    /** Что делает поток цикла перед самым выходом: переносит разговор в память. */
+    public void onLoopStopped(Runnable action) {
+        this.onLoopStopped = action;
+    }
+
+    /**
+     * Поток цикла сворачивает работу. Разговор в память переносит он сам:
+     * история живёт здесь, и тот, кто ждёт останова из другого потока, не имеет
+     * права её читать или чистить, пока ход ещё идёт.
+     */
+    private void finish() {
+        try {
+            onLoopStopped.run();
+        } catch (RuntimeException e) {
+            log.warn("Разговор при остановке не доехал в дневник: {}", e.getMessage());
+        }
+        stopped.countDown();
     }
 
     /** Для проверок: как долго молчание считается тишиной. */
@@ -492,7 +514,7 @@ public final class NotificationLoop {
                 }
                 if (stopping) {
                     log.info("Заканчиваю: новых уведомлений больше не беру");
-                    stopped.countDown();
+                    finish();
                     return;
                 }
                 if (notification == null) {
@@ -550,7 +572,7 @@ public final class NotificationLoop {
     /** Обработка одного уведомления целиком — до wait/pause. */
     public void process(Notification notification) {
         boolean resuming = active != null && active.notification == notification;
-        if (!resuming && notification.initiative() && talkedRecently()) {
+        if (!resuming && notification.trigger() == Notification.Trigger.IMPULSE && talkedRecently()) {
             // утреннее приветствие уже написало владельцу две строки назад, а
             // порыв стоит в очереди за ним: выпускать его к модели — значит
             // платить за отказ заново всем контекстом
@@ -560,7 +582,7 @@ public final class NotificationLoop {
         }
         if (!resuming) {
             active = new Turn(notification);
-            if (notification.initiative()) {
+            if (notification.trigger() == Notification.Trigger.IMPULSE) {
                 // молчание после порыва не должно оставить в истории ни его
                 // промпта, ни потраченных на него воспоминаний
                 active.contextBefore = List.copyOf(context);
@@ -754,17 +776,20 @@ public final class NotificationLoop {
      */
     private void rollbackIdleImpulse(Turn turn) {
         List<Message> was = turn.contextBefore;
-        if (context.size() < was.size() || !context.subList(0, was.size()).equals(was)) {
+        if (context.size() >= was.size() && context.subList(0, was.size()).equals(was)) {
+            context.clear();
+            context.addAll(was);
+            contextOrigin.set(turn.originBefore);
+            log.info("Холостой порыв убран из истории, шагов {}", turn.step);
+        } else {
             // контекст за это время пересобрали (например, вынесли в дневник):
             // возвращать прежний — значит воскресить уже сохранённый разговор
             log.info("Холостой порыв не откатывается: история уже другая");
-            return;
         }
-        context.clear();
-        context.addAll(was);
-        contextOrigin.set(turn.originBefore);
+        // отметки «это уже вспоминалось» и «это уже было в снимке чата» снимаются
+        // в любом случае: истраченное на несостоявшийся порыв не должно молчать
+        // до конца дня только потому, что контекст успели пересобрать
         turn.undoOutside.run();
-        log.info("Холостой порыв убран из истории, шагов {}", turn.step);
     }
 
     /**
@@ -796,7 +821,7 @@ public final class NotificationLoop {
         if (Toolbox.FINISHING.contains(call.name()) || Toolbox.TERMINAL.contains(call.name())) {
             return true;
         }
-        return notification.initiative() && tools.all().stream()
+        return notification.trigger() == Notification.Trigger.IMPULSE && tools.all().stream()
                 .anyMatch(tool -> tool.name().equals(call.name()) && tool.mutates());
     }
 

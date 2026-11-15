@@ -364,6 +364,9 @@ public final class RaineApp implements AutoCloseable {
             diary.reload();
         };
         loop.onContextOverflow(() -> rememberConversation.accept("Контекст переполнен"));
+        // и при остановке: историю мутирует поток цикла, и сохранять её должен
+        // он же, а не тот, кто торопит закрытие
+        loop.onLoopStopped(() -> rememberConversation.accept("Останавливаюсь"));
         // контекст выброшен — снимки чатов начинают печатать историю заново,
         // иначе новые уведомления приходят в пустой разговор без старых сообщений
         loop.onContextCleared(screen::forgetShown);
@@ -666,7 +669,7 @@ public final class RaineApp implements AutoCloseable {
                 + "tonight's growth pass wrote nothing: the draft had %d lines. Open the chat with your "
                 + "person (id %d) and say plainly, in one short message, that the file is full and needs "
                 + "trimming by hand. Then call #wait.").formatted(
-                        CharacterGrowth.MAX_LINES, lines, ownerId), available, true).from(ownerId));
+                        CharacterGrowth.MAX_LINES, lines, ownerId), available, true).from(ownerId).fromCode());
     }
 
     /**
@@ -685,7 +688,7 @@ public final class RaineApp implements AutoCloseable {
                 + "prompt. Open the chat with your person (id %d) and say plainly, in one short message, that the "
                 + "file is too long and needs trimming by hand. Then call #wait.").formatted(
                         config.workingMemoryFile(), WorkingMemory.MAX_LENGTH, chars, ownerId),
-                        available, true).from(ownerId));
+                    available, true).from(ownerId).fromCode());
     }
 
     /**
@@ -703,7 +706,7 @@ public final class RaineApp implements AutoCloseable {
                 + "prompt, so the people above them are invisible to you right now. Open the chat with your "
                 + "person (id %d) and say plainly, in one short message, that the file is too long and needs "
                 + "trimming by hand. Then call #wait.").formatted(
-                        lines, TrustLedger.MAX_LINES, ownerId), available, true).from(ownerId));
+                        lines, TrustLedger.MAX_LINES, ownerId), available, true).from(ownerId).fromCode());
     }
 
     private static String goodnightPrompt(Goodnights.Receiver receiver) {
@@ -1101,9 +1104,10 @@ public final class RaineApp implements AutoCloseable {
         if (loop != null) {
             loop.stop();
             if (!loop.awaitStopped(SHUTDOWN_GRACE)) {
-                log.warn("Ход не успел закончиться за {} — сохраняю как есть", SHUTDOWN_GRACE);
+                // поток цикла ещё доделывает ход: лезть в его историю из этого
+                // потока нельзя, и разговор подождёт столько, сколько ему нужно
+                log.warn("Ход не успел закончиться за {} — память перенесёт сам цикл", SHUTDOWN_GRACE);
             }
-            rememberConversation.accept("Останавливаюсь");
         }
         // прощаемся с Telegram, только если он ещё слушает: он закрывается сам
         // и своим чередом, а вызов в закрывающийся клиент повисает надолго

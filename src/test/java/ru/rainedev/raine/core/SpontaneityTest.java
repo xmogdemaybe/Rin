@@ -82,7 +82,7 @@ class SpontaneityTest {
 
             assertEquals(777, impulse.chatId());
             assertEquals(777, impulse.personId());
-            assertTrue(impulse.initiative(), "цикл должен знать, что это порыв");
+            assertEquals(Notification.Trigger.IMPULSE, impulse.trigger(), "цикл должен знать, что это порыв");
             assertTrue(impulse.ownText(), "текст порыва не должен пропасть под историей чата");
             assertEquals(Set.of("open"), impulse.tools().names(),
                     "иначе чат не откроется сам и отправка останется за трёмя шагами");

@@ -13,16 +13,32 @@ package ru.rainedev.raine.core;
  * @param chatId   чат, из которого пришёл повод. Ответа не досталось — чат
  *                 снова повиснет непрочитанным, иначе его уже не найти. Ноль —
  *                 событие не из переписки и отмечать негде
- * @param initiative порыв, а не ответ: чат уже открыт, отправка заканчивает ход,
- *                 и напоминать про #ask не нужно — она сама решила заговорить
- * @param greeted её собственное слово первой — прощание на ночь или приветствие
- *                 с утра. Его никто не ждал, и отвечать на него некому
+ * @param trigger  кто начал разговор: тот же ход значит для цикла разное —
+ *                 порыв заканчивается первым же действием, ответ человеку
+ *                 откладывает сон, а её собственные слова сном не торгуются
  */
 public record Notification(String text, Toolbox tools, boolean ownText, long personId, long chatId,
-                           boolean initiative, boolean greeted) {
+                           Trigger trigger) {
+
+    /** Откуда взялся ход. */
+    public enum Trigger {
+        /** Человек написал: обычный разговор, и он же единственный откладывает сон. */
+        INCOMING,
+        /** Она сама захотела заговорить: чат уже открыт, действие заканчивает ход. */
+        IMPULSE,
+        /** Её ночное прощание или утреннее приветствие: его никто не ждал. */
+        GREETING,
+        /** Повод от кода — кончились строки в файле, упёрся лимит. */
+        SYSTEM;
+
+        /** Это она заговорила сама, а не ответила тому, кто написал? */
+        public boolean unprompted() {
+            return this != INCOMING;
+        }
+    }
 
     public Notification(String text, Toolbox tools, boolean ownText, long personId, long chatId) {
-        this(text, tools, ownText, personId, chatId, false, false);
+        this(text, tools, ownText, personId, chatId, Trigger.INCOMING);
     }
 
     public Notification(String text, Toolbox tools, boolean ownText) {
@@ -39,17 +55,22 @@ public record Notification(String text, Toolbox tools, boolean ownText, long per
 
     /** То же событие, но теперь известно, кто его принёс. */
     public Notification about(long personId) {
-        return new Notification(text, tools, ownText, personId, chatId, initiative, greeted);
+        return new Notification(text, tools, ownText, personId, chatId, trigger);
     }
 
     /** Тот же повод, но заговорить с ним решила она сама. */
     public Notification onOwnInitiative() {
-        return new Notification(text, tools, ownText, personId, chatId, true, greeted);
+        return new Notification(text, tools, ownText, personId, chatId, Trigger.IMPULSE);
     }
 
     /** Тот же повод, только это её ночное прощание или утреннее приветствие. */
     public Notification asGreeting() {
-        return new Notification(text, tools, ownText, personId, chatId, initiative, true);
+        return new Notification(text, tools, ownText, personId, chatId, Trigger.GREETING);
+    }
+
+    /** Тот же повод, но пришёл он от кода, а не от человека. */
+    public Notification fromCode() {
+        return new Notification(text, tools, ownText, personId, chatId, Trigger.SYSTEM);
     }
 
     /**
@@ -58,11 +79,11 @@ public record Notification(String text, Toolbox tools, boolean ownText, long per
      * вернуть в непрочитанные.
      */
     public Notification from(long chatId) {
-        return new Notification(text, tools, ownText, personId, chatId, initiative, greeted);
+        return new Notification(text, tools, ownText, personId, chatId, trigger);
     }
 
-    /** Она заговорила сама, а не ответила тому, кто написал? */
+    /** Ход без входящего сообщения: она начала его сама или повода не было вовсе. */
     public boolean unprompted() {
-        return initiative || greeted;
+        return trigger.unprompted();
     }
 }

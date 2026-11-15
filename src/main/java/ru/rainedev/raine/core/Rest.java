@@ -185,7 +185,6 @@ public class Rest {
             // прощания идут порывами и встают в очередь ядра: спать уходим после
             // них — в следующем же заходе очередь опустеет, и тогда до одеяла
             farewellDone = true;
-            deferSince = null;
             try {
                 leavingForNight.run();
             } catch (RuntimeException e) {

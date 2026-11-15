@@ -42,6 +42,19 @@ class PendingConversationsTest {
     }
 
     @Test
+    void nothingIsParkedWhenOnlyServiceNotesRemain() {
+        // копить то, что нечего пересказывать, незачем: при следующем запуске
+        // такой файл заплатил бы моделью и уехал бы в карантин
+        PendingConversations pending = new PendingConversations(dir.resolve("pending"));
+
+        pending.keep(List.of(Message.user("<your_diary_page just_for_reasoning>\n"
+                + "- source event: ничего не произошло\n</your_diary_page>\n\n"
+                + ru.rainedev.raine.core.NotificationLoop.serviceInsertions().getFirst())), Origin.GENERAL);
+
+        assertTrue(pending.waiting().isEmpty(), "в разговоре остались одни служебные вставки");
+    }
+
+    @Test
     void theDumpKeepsWhereTheConversationCameFrom() throws Exception {
         // пересказ делает модель, а её может не быть в момент остановки: без
         // метки в дампе дозаписанный после обрыва разговор стал бы общим, и

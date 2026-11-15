@@ -41,6 +41,12 @@ public final class PendingConversations {
         if (conversation.isEmpty()) {
             return;
         }
+        if (!DiaryWriter.hasWords(conversation)) {
+            // копить то, что нечего пересказывать, незачем: при следующем запуске
+            // такой файл заплатил бы моделью и уехал бы в карантин
+            log.info("Разговор не отложен: в нём остались одни служебные вставки");
+            return;
+        }
         try {
             Files.createDirectories(dir);
             Path file = dir.resolve(System.currentTimeMillis() + "-" + java.util.UUID.randomUUID() + ".json");

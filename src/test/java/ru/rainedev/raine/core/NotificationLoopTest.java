@@ -758,6 +758,22 @@ class NotificationLoopTest {
     }
 
     @Test
+    void theLoopThreadItselfCarriesTheConversationToMemory() throws Exception {
+        // история принадлежит потоку цикла: тот, кто ждёт останова из другого
+        // потока, не имеет права её читать или чистить, пока ход ещё идёт
+        NotificationLoop loop = loopWith(new ScriptedLlm(), new Toolbox());
+        boolean[] saved = {false};
+        loop.onLoopStopped(() -> saved[0] = true);
+
+        Thread brain = Thread.ofVirtual().start(loop::run);
+        loop.stop();
+
+        assertTrue(loop.awaitStopped(java.time.Duration.ofSeconds(5)), "поток обязан завершиться");
+        assertTrue(saved[0], "разговор в память переносит сам цикл, до того как отпустить ожидающих");
+        brain.join(java.time.Duration.ofSeconds(3));
+    }
+
+    @Test
     void quietNightIsSleepable() {
         NotificationLoop loop = loopWith(new ScriptedLlm(), new Toolbox());
 
@@ -844,6 +860,23 @@ class NotificationLoopTest {
 
         assertEquals("", loop.lastTalkStatus(), "молчание не было последним разговором");
         assertFalse(loop.talkAlive(), "и сон оно не откладывает");
+    }
+
+    @Test
+    void theMarksOfAnIdleImpulseAreReleasedEvenIfHistoryWasRebuilt() {
+        // пересказ посреди хода обнуляет историю — и прежний код на этом
+        // останавливался, leaving отметки «это уже вспоминалось» и «это уже было
+        // в снимке» потраченными до конца дня
+        boolean[] undone = {false};
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("wait")), 50_000));
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.idleImpulseSnapshot(() -> () -> undone[0] = true);
+        loop.onContextOverflow(loop::clearContext);
+
+        loop.process(new Notification("порыв в никуда").onOwnInitiative());
+
+        assertTrue(undone[0], "отметки снимаются независимо от того, успели ли пересобрать историю");
     }
 
     @Test

@@ -143,6 +143,11 @@ public final class DiaryWriter {
      * <p>
      * Средней памяти срез не касается: ей нужна целая переписка, а не пересказ.
      */
+    /** Есть ли в разговоре слова, кроме того, что дописал в него цикл. */
+    static boolean hasWords(List<Message> context) {
+        return !conversationOnly(context).isEmpty();
+    }
+
     private static List<Message> conversationOnly(List<Message> context) {
         List<Message> kept = new ArrayList<>();
         for (Message message : context) {
