@@ -464,6 +464,55 @@ class DiaryWriterTest {
     }
 
     @Test
+    void aPromiseIsNotAFact(@TempDir Path dir) {
+        // живой случай 21:45: она написала «сейчас глянем» про канал владельца,
+        // поставила реакцию и ушла в wait — ни одной тулзы перехода или подписки
+        // не вызвала. Пересказчик записал в дневник «я подписалась и посмотрела»
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("Запись про вечер и канал.");
+        List<Message> context = List.of(
+                Message.user("глянь мой канал https://t.me/blameyourselfandnotme"),
+                new Message(Message.Role.ASSISTANT, null,
+                        List.of(call("send_telegram_message",
+                                "{\"text\":\"сейчас глянем, чё ты там прятал\"}")), null, null),
+                Message.toolResult("c-send_telegram_message", "Message sent; message_id=1."),
+                new Message(Message.Role.ASSISTANT, null, List.of(call("wait", "{}")), null, null));
+
+        new DiaryWriter(new Diary(dir), llm, "запиши дневник", 0.97).save("промпт", context);
+
+        String sent = llm.lastHistory.toString();
+        assertTrue(sent.contains("сейчас глянем"), "её слова должны дойти");
+        assertTrue(sent.contains("<actions_taken>"), "нужна явная сводка поступков: " + sent);
+        assertTrue(sent.contains("a promise, not something that happened"),
+                "без переходов и подписок пересказчик должен увидеть это прямо: " + sent);
+    }
+
+    @Test
+    void realActionsReachTheRetellerAsFacts(@TempDir Path dir) {
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("Запись про канал и стикер.");
+        List<Message> context = List.of(
+                Message.user("глянь канал и кинь стикер"),
+                new Message(Message.Role.ASSISTANT, null, List.of(
+                        call("open_chat_by_id", "{\"chat_id\":42}"),
+                        call("join_channel", "{\"chat_id\":42}"),
+                        call("sticker_send", "{\"sticker_id\":7}"),
+                        call("forward_message", "{\"message_id\":\"9\",\"to_chat_id\":5}")), null, null),
+                Message.toolResult("c-open_chat_by_id", "You switched to the chat \"канал\" in Telegram."),
+                Message.toolResult("c-join_channel", "Subscribed."),
+                Message.toolResult("c-sticker_send", "Sticker sent."),
+                Message.toolResult("c-forward_message", "Forwarded 1 messages."));
+
+        new DiaryWriter(new Diary(dir), llm, "запиши дневник", 0.97).save("промпт", context);
+
+        String sent = llm.lastHistory.toString();
+        assertTrue(sent.contains("opened chat 42"), "открытие чата — факт: " + sent);
+        assertTrue(sent.contains("subscribed to channel 42"), "подписка — факт: " + sent);
+        assertTrue(sent.contains("sent a sticker"), "стикер — факт: " + sent);
+        assertTrue(sent.contains("forwarded"), "пересылка — факт: " + sent);
+        assertTrue(llm.lastHistory.stream().noneMatch(message -> message.role() == Message.Role.TOOL),
+                "сводка не должна возвращать сироту с ролью tool");
+    }
+
+    @Test
     void herStickerShelfIsNotPartOfTheConversation(@TempDir Path dir) {
         // полка избранного вклеивается в снимок чата, чтобы отправить стикер
         // одним шагом; в дневник она не просится

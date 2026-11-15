@@ -52,6 +52,30 @@ public final class DiaryWriter {
     private static final String SEND_TOOL = "send_telegram_message";
     private static final String REACT_TOOL = "react_with_emoji";
 
+    /**
+     * Поступки, которые меняют мир вокруг разговора, а не только текст в нём.
+     * Пересказчику они нужны как факт: по одним её словам он записывал
+     * «подписалась и посмотрела», хотя вызова не было.
+     */
+    private static final java.util.Map<String, String> ACTIONS = java.util.Map.ofEntries(
+            java.util.Map.entry("open", "opened chat"),
+            java.util.Map.entry("open_chat_by_id", "opened chat"),
+            java.util.Map.entry("join_channel", "subscribed to channel"),
+            java.util.Map.entry("leave_channel", "left channel"),
+            java.util.Map.entry("sticker_send", "sent a sticker"),
+            java.util.Map.entry("sticker_save", "saved a sticker"),
+            java.util.Map.entry("forward_message", "forwarded messages"),
+            java.util.Map.entry("post_to_channel", "published a channel post"),
+            java.util.Map.entry("remove_message", "deleted messages"),
+            java.util.Map.entry("edit_message_text", "edited a message"),
+            java.util.Map.entry("remove_and_ban_chat", "removed and banned a chat"),
+            java.util.Map.entry("save_contact", "saved a contact"),
+            java.util.Map.entry("note_trust", "noted trust"));
+
+    /** Чем поступок опознаётся: первый найденный номер идёт в строку главным. */
+    private static final List<String> ACTION_IDS =
+            List.of("chat_id", "to_chat_id", "sticker_id", "message_id", "message_ids", "user_id");
+
     /** Служебный формат ответа (<outputFormatting>): про намерения, а не про разговор. */
     private static final Pattern MENTAL_NOTE = Pattern.compile(
             "^[ \\t]*-[ \\t]*(?:thought|emotion|to remember|intention)[ \\t]*:.*$", Pattern.MULTILINE);
@@ -150,6 +174,7 @@ public final class DiaryWriter {
 
     private static List<Message> conversationOnly(List<Message> context) {
         List<Message> kept = new ArrayList<>();
+        List<String> actions = new ArrayList<>();
         for (Message message : context) {
             if (message.role() == Message.Role.TOOL && !isChatScreen(message.content())) {
                 // «Success», «message_id=…», выдачи #ask — протокол шага, а не
@@ -167,7 +192,7 @@ public final class DiaryWriter {
             if (message.role() == Message.Role.ASSISTANT) {
                 // её собственные заметки о намерениях — не то, что было сказано
                 text = withoutMentalNotes(text);
-                text = join(text, herWords(message));
+                text = join(text, herWords(message) + herActions(message, actions));
             }
             text = text.replaceAll("\n{3,}", "\n\n").strip();
             if (text.isEmpty()) {
@@ -180,7 +205,79 @@ public final class DiaryWriter {
             Message.Role role = message.role() == Message.Role.TOOL ? Message.Role.USER : message.role();
             kept.add(new Message(role, text, null, null, null));
         }
+        if (!kept.isEmpty()) {
+            kept.add(actionsSummary(actions));
+        }
         return kept;
+    }
+
+    /**
+     * Сводка поступков отдельным блоком. Без неё пересказчик судит о действиях
+     * по её словам: «сейчас глянем» и «подпишусь» в переписке 15 ноября он
+     * записал в дневник как «я подписалась и посмотрела», хотя ни одной тулзы
+     * перехода или подписки вызвано не было.
+     */
+    private static Message actionsSummary(List<String> actions) {
+        StringBuilder out = new StringBuilder("<actions_taken>\n");
+        if (actions.isEmpty()) {
+            out.append("None. Rin did not open another chat, subscribe or unsubscribe, send a sticker ")
+                    .append("or forward anything in this conversation. What she said she would do is ")
+                    .append("a promise, not something that happened.");
+        } else {
+            for (String action : actions) {
+                out.append(action).append('\n');
+            }
+            out.append("Only these actions actually happened; anything else she said is a promise, not a fact.");
+        }
+        return Message.user(out.append("\n</actions_taken>").toString());
+    }
+
+    /**
+     * Не-текстовые поступки той же репликой, что и её слова: открытие чата,
+     * подписка, стикер, пересылка. Пересказчик видит их как факт рядом с тем,
+     * что она сказала, а не выводит из обещаний.
+     */
+    private static String herActions(Message message, List<String> ledger) {
+        StringBuilder done = new StringBuilder();
+        for (ToolCall call : message.toolCallsOrEmpty()) {
+            if (!ACTIONS.containsKey(call.name())) {
+                continue;
+            }
+            String line = actionLine(call.name(), argumentsOf(call));
+            done.append(line).append('\n');
+            ledger.add(line);
+        }
+        return done.toString();
+    }
+
+    private static String actionLine(String tool, JsonNode arguments) {
+        StringBuilder line = new StringBuilder("Rin ").append(ACTIONS.get(tool));
+        String first = null;
+        StringBuilder rest = new StringBuilder();
+        for (String key : ACTION_IDS) {
+            JsonNode value = arguments.get(key);
+            if (value == null || value.asText("").isBlank()) {
+                continue;
+            }
+            if (first == null) {
+                first = value.asText();
+            } else {
+                rest.append(rest.isEmpty() ? "" : ", ").append(key).append('=').append(value.asText());
+            }
+        }
+        if (first != null) {
+            line.append(' ').append(first);
+        }
+        if (!rest.isEmpty()) {
+            line.append(" (").append(rest).append(')');
+        }
+        if ("post_to_channel".equals(tool)) {
+            String text = arguments.path("text").asText("");
+            if (!text.isBlank()) {
+                line.append(": \"").append(text).append('"');
+            }
+        }
+        return line.append('.').toString();
     }
 
     private static boolean isChatScreen(String content) {
