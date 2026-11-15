@@ -1,6 +1,7 @@
 package ru.rainedev.raine.tools;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -93,5 +94,27 @@ class RecordTraitSignalTest {
         assertTrue(second.contains("once"),
                 "первая заметка до дневника ещё не дошла, но повтором уже считается");
         assertEquals(2, pocket.drain().size());
+    }
+
+    /**
+     * За четыре недели модель не позвала эту тулзу ни разу: описание отбивало
+     * охоту («only for moments that really touched you») и обещало, что от
+     * вызова ничего не изменится («Nothing changes right now»).
+     */
+    @Test
+    void theToolDoesNotTalkHerOutOfUsingIt() throws Exception {
+        TraitSignals pocket = new TraitSignals();
+        TelegramTools tools = new TelegramTools(null, null, null, null, null);
+        tools.traitSignals(pocket);
+
+        String description = tools.recordTraitSignal().description();
+        assertFalse(description.contains("Nothing changes right now"), description);
+        assertFalse(description.contains("only for moments that really touched you"), description);
+
+        String answer = tools.recordTraitSignal().call(MAPPER.readTree(
+                "{\"kind\":\"preference\",\"trait\":\"люблю грозу за окном\"}"));
+
+        assertFalse(answer.contains("Nothing changes right now"), answer);
+        assertTrue(answer.contains("Noted"), answer);
     }
 }

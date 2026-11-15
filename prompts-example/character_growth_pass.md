@@ -31,10 +31,14 @@ Rules:
 - One fact per line. Two lines may not share the same category and say the
   same thing in other words.
 - Only the listed <signals> entries may enter the file. Do not invent traits
-  from imagination, do not generalize from a mood that happened once. The
-  list already contains only what has earned its place: the same wording
-  repeated over time, or a single moment that hit deep enough to count
-  on its own.
+  from imagination. Each signal line is one raw note: the wording, kind,
+  valence (-1..1), intensity (0..1), subject, and "at" — the moment it was
+  noted. Notes are written freely, so two notes about the same trait usually
+  look different: group them by meaning yourself.
+- A trait earns a line when notes about it are spread at least 12 hours apart
+  (compare their "at" moments), or when a single note has intensity 0.9 or
+  more. A mood that happened once, a joke that landed once, an everyday remark
+  with no repeat — leave those out, however vivid they read.
 - Lines that are still true stay almost unchanged. Rewrite a line when the
   new notes sharpen or soften it. Keep its category and date; update the date
   only when the trait itself has clearly changed. Drop a line only when the

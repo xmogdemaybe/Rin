@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayDeque;
@@ -26,6 +27,7 @@ class CharacterGrowthTest {
     /** Отвечает по сценарию и считает запросы: за ночь их должен быть ровно один. */
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<String> answers = new ArrayDeque<>();
+        private boolean failNext;
         int chatCalls;
         String lastSystem;
         String lastRequest;
@@ -35,11 +37,20 @@ class CharacterGrowthTest {
             return this;
         }
 
+        ScriptedLlm willThrow() {
+            failNext = true;
+            return this;
+        }
+
         @Override
         public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
             chatCalls++;
             lastSystem = systemPrompt;
             lastRequest = history.getLast().content();
+            if (failNext) {
+                failNext = false;
+                throw new IllegalStateException("сеть оборвалась");
+            }
             Message message = new Message(Message.Role.ASSISTANT,
                     answers.isEmpty() ? "" : answers.removeFirst(), List.of(), null, null);
             return new ChatResponse("id", "test",
@@ -62,10 +73,42 @@ class CharacterGrowthTest {
     private final List<Long> overflowAlerts = new ArrayList<>();
 
     private CharacterGrowth growth(Path dir, Path prompts, String instructions) {
-        CharacterGrowth growth = new CharacterGrowth(new Diary(dir), llm, () -> instructions,
-                prompts.resolve("character_growth.md"), NIGHT);
+        return growth(dir, prompts, instructions, new TraitSignals(), NIGHT);
+    }
+
+    private CharacterGrowth growth(Path dir, Path prompts, String instructions, TraitSignals pocket, Clock clock) {
+        CharacterGrowth growth = new CharacterGrowth(new Diary(dir), pocket, llm, () -> instructions,
+                prompts.resolve("character_growth.md"), prompts.resolve("growth-state.json"), clock);
         growth.onOverflow(overflowAlerts::add);
         return growth;
+    }
+
+    /** Часы, которые можно перевести: ночь за ночью, не дожидаясь календаря. */
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        MutableClock(Instant start) {
+            this.now = start;
+        }
+
+        void advance(Duration by) {
+            now = now.plus(by);
+        }
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 
     private void note(Diary diary, String trait, double intensity, String at) {
@@ -97,7 +140,8 @@ class CharacterGrowthTest {
         assertEquals(1, llm.chatCalls);
         assertEquals("инструкции", llm.lastSystem, "шаблон идёт системным промптом");
         assertTrue(llm.lastRequest.contains("огрызаюсь на колкости"));
-        assertTrue(llm.lastRequest.contains("noted: 2"), "повтор должен быть виден числом");
+        assertTrue(llm.lastRequest.contains("2026-10-19T10:00:00Z"), "первая заметка должна дойти");
+        assertTrue(llm.lastRequest.contains("2026-10-20T03:00:00Z"), "повтор виден временем, а не счётчиком");
         assertTrue(Files.readString(prompts.resolve("character_growth.md"))
                 .contains("огрызаюсь на колкости"));
     }
@@ -127,7 +171,7 @@ class CharacterGrowthTest {
         assertTrue(growth(dir, prompts, "инструкции").pass(() -> false));
 
         long asked = llm.lastRequest.lines().filter(line -> line.startsWith("- ")).count();
-        assertEquals(CharacterGrowth.MAX_GROUPS, asked, "в вопрос ушло лишнее: " + asked);
+        assertEquals(CharacterGrowth.MAX_NOTES, asked, "в вопрос ушло лишнее: " + asked);
         assertTrue(llm.lastRequest.contains("черта 059"), "самая сильная остаётся");
         assertFalse(llm.lastRequest.contains("черта 000"), "слабейшая уступает место");
     }
@@ -168,13 +212,16 @@ class CharacterGrowthTest {
         Diary diary = new Diary(dir);
         note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
         note(diary, "огрызаюсь на колкости", 0.6, "2026-10-20T03:00:00Z");
-        CharacterGrowth growth = growth(dir, prompts, "инструкции");
+        TraitSignals pocket = new TraitSignals(null, NIGHT);
+        CharacterGrowth growth = growth(dir, prompts, "инструкции", pocket, NIGHT);
         llm.willAnswer(rambling());
         growth.pass(() -> false);
 
         llm.willAnswer("- огрызаюсь на колкости");
         assertTrue(growth.pass(() -> false), "нормальная ночь проходит");
 
+        // новая заметка — новый повод спросить: отработанное заново не оплачивается
+        pocket.add(new TraitSignal("joy", "закипаю от внезапной похвалы", 0.8, 0.95, "", "2026-10-20T18:00:00Z"));
         llm.willAnswer(rambling());
         growth.pass(() -> false);
         assertEquals(List.of(41L, 41L), overflowAlerts, "после удачной ночи отказ снова слышно");
@@ -228,5 +275,108 @@ class CharacterGrowthTest {
 
         assertEquals(1, llm.chatCalls);
         assertFalse(Files.exists(prompts.resolve("character_growth.md")));
+    }
+
+    @Test
+    void differentWordingOfOneTraitIsLeftToTheModel(@TempDir Path dir, @TempDir Path prompts) {
+        Diary diary = new Diary(dir);
+        note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
+        note(diary, "щусь, когда меня поддевают", 0.5, "2026-10-20T03:00:00Z");
+        llm.willAnswer("- personality | огрызаюсь на колкости | с 2026-10-19");
+
+        assertTrue(growth(dir, prompts, "инструкции").pass(() -> false),
+                "одна черта разными словами: сопоставляет модель, а не equals в Java");
+
+        assertEquals(1, llm.chatCalls);
+        assertTrue(llm.lastRequest.contains("щусь, когда меня поддевают"), "вторая заметка должна дойти");
+    }
+
+    @Test
+    void unchangedNotesDoNotBuyASecondNight(@TempDir Path dir, @TempDir Path prompts) {
+        Diary diary = new Diary(dir);
+        note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
+        note(diary, "огрызаюсь на колкости", 0.6, "2026-10-20T03:00:00Z");
+        CharacterGrowth growth = growth(dir, prompts, "инструкции");
+        llm.willAnswer("- огрызаюсь на колкости");
+        assertTrue(growth.pass(() -> false));
+
+        llm.willAnswer("- огрызаюсь на колкости");
+        assertFalse(growth.pass(() -> false), "состав заметок тот же — платить второй раз незачем");
+        assertEquals(1, llm.chatCalls);
+
+        llm.willAnswer("- огрызаюсь на колкости");
+        assertFalse(growth(dir, prompts, "инструкции").pass(() -> false),
+                "перезапуск не должен оплачивать ту же ночь заново");
+        assertEquals(1, llm.chatCalls);
+    }
+
+    @Test
+    void notesStillWaitingForTheDiaryReachTheNight(@TempDir Path dir, @TempDir Path prompts) {
+        TraitSignals pocket = new TraitSignals(null, NIGHT);
+        pocket.add(new TraitSignal("preference", "люблю грозу за окном", 0.4, 0.5, "", "2026-10-19T10:00:00Z"));
+        pocket.add(new TraitSignal("preference", "обожаю, когда гремит", 0.4, 0.5, "", "2026-10-20T03:00:00Z"));
+        llm.willAnswer("- preference | люблю грозу за окном | с 2026-10-19");
+
+        assertTrue(growth(dir, prompts, "инструкции", pocket, NIGHT).pass(() -> false),
+                "заметка ждёт пересказа, а ночь уже наступила");
+
+        assertEquals(1, llm.chatCalls);
+        assertTrue(llm.lastRequest.contains("обожаю, когда гремит"));
+        assertEquals(2, pocket.snapshot().size(), "ночной проход копилку не опустошает");
+    }
+
+    @Test
+    void aFreshNoteIsNotBurnedByTheNight(@TempDir Path dir, @TempDir Path prompts) {
+        Diary diary = new Diary(dir);
+        note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
+        note(diary, "огрызаюсь на колкости", 0.6, "2026-10-20T03:00:00Z");
+        note(diary, "люблю перебирать плейлисты ночью", 0.5, "2026-10-20T23:00:00Z"); // за три часа до сна
+        MutableClock clock = new MutableClock(Instant.parse("2026-10-21T02:00:00Z"));
+        llm.willAnswer("- personality | огрызаюсь на колкости | с 2026-10-19");
+        assertTrue(growth(dir, prompts, "инструкции", new TraitSignals(), clock).pass(() -> false));
+
+        assertFalse(growth(dir, prompts, "инструкции", new TraitSignals(), clock).pass(() -> false),
+                "созревшие ушли в файл — второй раз о них не спрашивают");
+        assertEquals(1, llm.chatCalls);
+
+        clock.advance(Duration.ofHours(12));
+        note(diary, "ночью опять сидела с музыкой", 0.5, "2026-10-21T13:00:00Z");
+        llm.willAnswer("- preference | люблю перебирать плейлисты ночью | с 2026-10-20");
+        assertTrue(growth(dir, prompts, "инструкции", new TraitSignals(), clock).pass(() -> false),
+                "свежая заметка дождалась пары на следующий день");
+
+        assertEquals(2, llm.chatCalls);
+        String signals = llm.lastRequest.substring(llm.lastRequest.indexOf("<signals>"));
+        assertTrue(signals.contains("люблю перебирать плейлисты ночью"), "несозревшая заметка дождалась пары");
+        assertTrue(signals.contains("ночью опять сидела с музыкой"), "пара собралась на следующий день");
+    }
+
+    @Test
+    void anEmptyVerdictDoesNotBuyASecondNight(@TempDir Path dir, @TempDir Path prompts) {
+        Diary diary = new Diary(dir);
+        note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
+        note(diary, "щусь, когда меня поддевают", 0.5, "2026-10-20T03:00:00Z");
+        CharacterGrowth growth = growth(dir, prompts, "инструкции");
+        llm.willAnswer("");
+        assertFalse(growth.pass(() -> false));
+
+        llm.willAnswer("- personality | огрызаюсь на колкости | с 2026-10-19");
+        assertFalse(growth.pass(() -> false),
+                "«ничего не нажилось» — это вердикт, а не забывчивость: второй раз за него не платят");
+        assertEquals(1, llm.chatCalls);
+    }
+
+    @Test
+    void aBrokenRequestIsAskedAgain(@TempDir Path dir, @TempDir Path prompts) {
+        Diary diary = new Diary(dir);
+        note(diary, "огрызаюсь на колкости", 0.4, "2026-10-19T10:00:00Z");
+        note(diary, "огрызаюсь на колкости", 0.6, "2026-10-20T03:00:00Z");
+        CharacterGrowth growth = growth(dir, prompts, "инструкции");
+        llm.willThrow();
+        assertFalse(growth.pass(() -> false));
+
+        llm.willAnswer("- огрызаюсь на колкости");
+        assertTrue(growth.pass(() -> false), "обрыв связи — не вердикт: заметки ждут следующей ночи");
+        assertEquals(2, llm.chatCalls);
     }
 }

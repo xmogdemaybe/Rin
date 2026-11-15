@@ -1648,15 +1648,15 @@ public final class TelegramTools {
      */
     public Tool recordTraitSignal() {
         return Tool.named("record_trait_signal")
-                .describedAs("Quietly note a meaningful self-observation — a moment that genuinely hurt or pleased "
-                        + "you, a preference you noticed in yourself, or a shift in how you feel about someone. "
-                        + "Use it sparingly: only for moments that really touched you, not for everyday small "
-                        + "talk. Nothing changes right now — the note is kept and may shape you over days.")
+                .describedAs("Note a lasting detail about yourself that showed up in conversation: a habit, a taste, "
+                        + "a way of answering or joking that lands well with the person. Call it when such a detail "
+                        + "actually shows itself, not for every ordinary message. The note is kept and weighed at "
+                        + "night together with your other notes.")
                 .requiredString("kind", "What kind of observation this is: \"hurt\", \"joy\", \"preference\", "
                         + "\"attitude\", \"fear\", \"pride\" — whatever fits.")
                 .requiredString("trait", "The trait or preference it reveals, in your own short wording — like "
-                        + "\"gets defensive when teased\". Note the same trait again in the exact same wording: "
-                        + "repeated in the same words, your observations add up.")
+                        + "\"gets defensive when teased\". Notes about the same trait add up even when you word "
+                        + "them differently.")
                 .optionalNumber("valence", "How pleasant it felt, from -1 (it stung) to 1 (it warmed you). Default 0.")
                 .optionalNumber("intensity", "How strongly it hit you, from 0 (barely noticed) to 1 (hit deep). "
                         + "Default 0.5.")
@@ -1681,10 +1681,9 @@ public final class TelegramTools {
                     log.info("Заметка о себе: {} ({}, {})", trait, kind,
                             subject.isEmpty() ? "про себя вообще" : "про " + subject);
                     if (before == 0) {
-                        return "Noted. Nothing changes right now — it may matter over time.";
+                        return "Noted. It will be weighed at night together with your other notes.";
                     }
-                    return ("Noted — you phrased this trait the same way %s before; keeping the wording "
-                            + "means the notes add up.")
+                    return ("Noted — you have noticed this trait %s before; the notes add up.")
                             .formatted(before == 1 ? "once" : before + " times");
                 });
     }

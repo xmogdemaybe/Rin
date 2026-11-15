@@ -284,7 +284,9 @@ public final class RaineApp implements AutoCloseable {
 
         // рост личности: заметки о себе принимает эта же связка. Тумблер снял —
         // инструмент из набора исчезает, вместо просьбы «не пользуйся»
-        ru.rainedev.raine.memory.TraitSignals traitSignals = new ru.rainedev.raine.memory.TraitSignals();
+        // копилка на диске: заметка ждёт пересказа, а перезапуск случается чаще
+        ru.rainedev.raine.memory.TraitSignals traitSignals = new ru.rainedev.raine.memory.TraitSignals(
+                config.diaryDir().resolveSibling("trait_signals.json"));
         tools.traitSignals(traitSignals);
         tools.traitDiary(diary);
         if (config.characterGrowthEnabled()) {
@@ -292,8 +294,9 @@ public final class RaineApp implements AutoCloseable {
         }
         // один экземпляр на всю жизнь: о переполнении файла владелец должен
         // услышать один раз, а не каждую ночь заново
-        growth = new CharacterGrowth(diary, llm, prompts.lazy("character_growth_pass.md"),
-                config.promptsDir().resolve("character_growth.md"));
+        growth = new CharacterGrowth(diary, traitSignals, llm, prompts.lazy("character_growth_pass.md"),
+                config.promptsDir().resolve("character_growth.md"),
+                config.diaryDir().resolveSibling("character_growth.json"));
         growth.onOverflow(this::tellOwnerAboutGrowth);
 
         // доверие к людям: единственная бухгалтерия в data/trust.md, по строке на
