@@ -76,7 +76,13 @@ public interface TelegramActions {
 
     void blockAndLeave(long chatId);
 
-    void sendSticker(long chatId, Telegram.StickerRef sticker, Long replyToMessageId);
+    /**
+     * @return идентификатор отправленного сообщения — по нему снимок чата
+     *         узнаёт своё же и не печатает стикер второй раз
+     * @throws RuntimeException в безопасном режиме — молчаливый ноль здесь хуже
+     *         отказа: по нему отмечают отправленным то, чего нет
+     */
+    long sendSticker(long chatId, Telegram.StickerRef sticker, Long replyToMessageId);
 
     void saveSticker(Telegram.StickerRef sticker);
 
@@ -281,7 +287,7 @@ public interface TelegramActions {
         }
 
         @Override
-        public void sendSticker(long chatId, Telegram.StickerRef sticker, Long replyToMessageId) {
+        public long sendSticker(long chatId, Telegram.StickerRef sticker, Long replyToMessageId) {
             TdApi.InputMessageSticker content = new TdApi.InputMessageSticker();
             // по удалённому идентификатору, а не по локальному: локальный привязан
             // к сессии и после перезапуска указывает в пустоту
@@ -300,7 +306,7 @@ public interface TelegramActions {
                 replyTo.messageId = replyToMessageId;
                 request.replyTo = replyTo;
             }
-            ask(request);
+            return ask(request).id;
         }
 
         @Override
@@ -521,7 +527,7 @@ public interface TelegramActions {
         }
 
         @Override
-        public void sendSticker(long chatId, Telegram.StickerRef sticker, Long replyToMessageId) {
+        public long sendSticker(long chatId, Telegram.StickerRef sticker, Long replyToMessageId) {
             throw refused("отправка стикера " + sticker.emoji());
         }
 

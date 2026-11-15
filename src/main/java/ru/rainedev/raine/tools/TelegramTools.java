@@ -211,7 +211,7 @@ public final class TelegramTools {
         this.lockdown = lockdown;
         this.antiRepeat = antiRepeat;
         this.rhythm = new TypingRhythm(random);
-        this.stickers = new StickerTools(telegram, actions);
+        this.stickers = new StickerTools(telegram, actions, screen);
         this.stickers.allowedTo(chatId -> allowed(telegram.chatCached(chatId)));
     }
 
@@ -1538,7 +1538,7 @@ public final class TelegramTools {
                     }
                     try {
                         rhythm.sleepBefore(comment.length(), () -> actions.typing(toChatId));
-                        if (actions.sendMessage(toChatId, comment.replace("—", "-"), null) == 0) {
+                        if (actions.sendMessage(toChatId, comment, null) == 0) {
                             return forwardingError(toChatId, wentThrough(forwarded) + "but the comment was not sent. "
                                             + "Do not forward again; say it as a plain message if you still want to.",
                                     "Telegram returned no message id.");

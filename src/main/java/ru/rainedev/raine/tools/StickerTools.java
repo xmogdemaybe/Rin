@@ -5,6 +5,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.Tool;
+import ru.rainedev.raine.phone.ChatScreen;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
@@ -26,6 +27,7 @@ public final class StickerTools {
 
     private final Telegram telegram;
     private final TelegramActions actions;
+    private final ChatScreen screen;
     private TelegramMedia media;
 
     /** Готовый блок избранного для снимка чата; пуст, пока не прогрето. */
@@ -34,9 +36,10 @@ public final class StickerTools {
     /** Отправлять стикер можно ровно туда же, куда и обычное сообщение. */
     private java.util.function.LongPredicate allowed = chatId -> true;
 
-    public StickerTools(Telegram telegram, TelegramActions actions) {
+    public StickerTools(Telegram telegram, TelegramActions actions, ChatScreen screen) {
         this.telegram = telegram;
         this.actions = actions;
+        this.screen = screen;
     }
 
     public void allowedTo(java.util.function.LongPredicate allowed) {
@@ -320,8 +323,14 @@ public final class StickerTools {
                             .filter(id -> telegram.message(chatId, id).isPresent())
                             .orElse(null);
                     actions.typing(chatId);
-                    actions.sendSticker(chatId, sticker.get(), replyTo);
+                    long temporary = actions.sendSticker(chatId, sticker.get(), replyTo);
+                    // номер, который придёт в истории, — настоящий: по временному
+                    // снимок чата не узнал бы своё же и напечатал стикер заново
+                    long sent = telegram.confirmedId(temporary);
                     log.info("Стикер {} отправлен в чат {}", stickerId, chatId);
+                    if (screen != null && sent != 0) {
+                        screen.markSent(chatId, sent);
+                    }
                     return "Sticker sent.";
                 });
     }

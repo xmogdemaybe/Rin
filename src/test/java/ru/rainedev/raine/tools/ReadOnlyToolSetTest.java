@@ -36,7 +36,7 @@ class ReadOnlyToolSetTest {
      */
     @Test
     void installingAStickerPackCountsAsAnAction() {
-        Tool pack = new StickerTools(null, null).pack();
+        Tool pack = new StickerTools(null, null, null).pack();
 
         assertTrue(pack.mutates(), "открытый пак ставится себе — значит, это действие");
 

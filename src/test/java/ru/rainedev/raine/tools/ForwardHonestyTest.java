@@ -269,12 +269,12 @@ class ForwardHonestyTest {
     }
 
     @Test
-    void aCommentThatWentThroughIsSentAfterTheForwardAndSpelledTheWayPeopleDo() {
+    void aCommentThatWentThroughIsSentAfterTheForwardAndKeepsHerPunctuation() {
         forwardedCount = 1;
 
         String result = forward(SOURCE).call(args("5", FRIEND_CHAT, "глянь — это ты"));
 
-        assertEquals(List.of("глянь - это ты"), sentTexts);
+        assertEquals(List.of("глянь — это ты"), sentTexts, "длинное тире — её текст, а не оплошность");
         assertTrue(result.contains("Message forwarded"), result);
         assertTrue(result.contains("went right after"), result);
         // комментарий — это отдельная реплика следом, а не часть пересылки
