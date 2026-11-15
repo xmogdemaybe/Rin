@@ -243,7 +243,10 @@ class KaomojiTest {
                 TelegramActions.class.getClassLoader(), new Class<?>[] {TelegramActions.class},
                 (proxy, method, args) -> {
                     switch (method.getName()) {
-                        case "sendPhoto" -> sent.captions.add((String) args[2]);
+                        case "sendPhoto" -> {
+                            sent.captions.add((String) args[2]);
+                            return 1L;
+                        }
                         case "sendMessage" -> {
                             sent.messages.add((String) args[1]);
                             return 1L;

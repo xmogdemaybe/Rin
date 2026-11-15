@@ -88,9 +88,19 @@ public interface TelegramActions {
 
     void saveContact(long userId, String firstName, String lastName);
 
-    void sendVoice(long chatId, java.nio.file.Path file, int seconds);
+    /**
+     * @return идентификатор отправленного сообщения — по нему снимок чата
+     *         узнаёт своё же и не печатает вложение второй раз
+     * @throws RuntimeException в безопасном режиме
+     */
+    long sendVoice(long chatId, java.nio.file.Path file, int seconds);
 
-    void sendPhoto(long chatId, java.nio.file.Path file, String caption);
+    /**
+     * @return идентификатор отправленного сообщения — по нему снимок чата
+     *         узнаёт своё же и не печатает снимок с подписью второй раз
+     * @throws RuntimeException в безопасном режиме
+     */
+    long sendPhoto(long chatId, java.nio.file.Path file, String caption);
 
     /**
      * Выкладывание истории. Видно всем, кого она выбрала, и висит сутки —
@@ -324,7 +334,7 @@ public interface TelegramActions {
         }
 
         @Override
-        public void sendPhoto(long chatId, java.nio.file.Path file, String caption) {
+        public long sendPhoto(long chatId, java.nio.file.Path file, String caption) {
             TdApi.InputPhoto photo = new TdApi.InputPhoto();
             photo.photo = new TdApi.InputFileLocal(file.toAbsolutePath().toString());
 
@@ -337,7 +347,7 @@ public interface TelegramActions {
             TdApi.SendMessage request = new TdApi.SendMessage();
             request.chatId = chatId;
             request.inputMessageContent = content;
-            ask(request);
+            return ask(request).id;
         }
 
         @Override
@@ -379,7 +389,7 @@ public interface TelegramActions {
         }
 
         @Override
-        public void sendVoice(long chatId, java.nio.file.Path file, int seconds) {
+        public long sendVoice(long chatId, java.nio.file.Path file, int seconds) {
             TdApi.InputMessageVoiceNote content = new TdApi.InputMessageVoiceNote();
             content.voiceNote = new TdApi.InputFileLocal(file.toAbsolutePath().toString());
             content.duration = seconds;
@@ -387,7 +397,7 @@ public interface TelegramActions {
             TdApi.SendMessage request = new TdApi.SendMessage();
             request.chatId = chatId;
             request.inputMessageContent = content;
-            throttled().send(request);
+            return ask(request).id;
         }
 
         @Override
@@ -542,12 +552,12 @@ public interface TelegramActions {
         }
 
         @Override
-        public void sendVoice(long chatId, java.nio.file.Path file, int seconds) {
+        public long sendVoice(long chatId, java.nio.file.Path file, int seconds) {
             throw refused("отправка голосового на " + seconds + " с");
         }
 
         @Override
-        public void sendPhoto(long chatId, java.nio.file.Path file, String caption) {
+        public long sendPhoto(long chatId, java.nio.file.Path file, String caption) {
             throw refused("отправка снимка " + file.getFileName());
         }
 

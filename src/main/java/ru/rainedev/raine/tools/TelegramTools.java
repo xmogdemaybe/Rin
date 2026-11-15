@@ -666,7 +666,8 @@ public final class TelegramTools {
                         // лица считаются и на ней
                         List<String> pieces = piecesToSend(chatId, text);
                         try (TypingIndicator uploading = TypingIndicator.uploadingPhoto(actions, chatId)) {
-                            actions.sendPhoto(chatId, photo, pieces.isEmpty() ? "" : pieces.getFirst());
+                            noteSent(chatId, actions.sendPhoto(chatId, photo,
+                                    pieces.isEmpty() ? "" : pieces.getFirst()));
                         }
                         log.info("Фото отправлено в чат {}: {}", chatId, photoName);
                         for (String rest : pieces.subList(Math.min(1, pieces.size()), pieces.size())) {
@@ -686,7 +687,7 @@ public final class TelegramTools {
                             return "There is no such voice message. Record one with record_audio first.";
                         }
                         try (TypingIndicator recording = TypingIndicator.recordingVoice(actions, chatId)) {
-                            actions.sendVoice(chatId, recorded, secondsOf(recorded));
+                            noteSent(chatId, actions.sendVoice(chatId, recorded, secondsOf(recorded)));
                         }
                         log.info("Голосовое отправлено в чат {}: {}", chatId, audioName);
                         return "Voice message sent.";
@@ -1538,11 +1539,13 @@ public final class TelegramTools {
                     }
                     try {
                         rhythm.sleepBefore(comment.length(), () -> actions.typing(toChatId));
-                        if (actions.sendMessage(toChatId, comment, null) == 0) {
+                        long commentId = actions.sendMessage(toChatId, comment, null);
+                        if (commentId == 0) {
                             return forwardingError(toChatId, wentThrough(forwarded) + "but the comment was not sent. "
                                             + "Do not forward again; say it as a plain message if you still want to.",
                                     "Telegram returned no message id.");
                         }
+                        noteSent(toChatId, commentId);
                         log.info("Комментарий к пересылке: {}", comment);
                     } catch (RuntimeException e) {
                         Fatal.check(e);
@@ -1934,6 +1937,22 @@ public final class TelegramTools {
      */
     String textSendResult(int inARow, long messageId) {
         return sendResult(inARow, messageId) + livelinessNote();
+    }
+
+    /**
+     * Отправленное считается показанным: без отметки следующий снимок чата
+     * напечатал бы её же вложение второй раз. Номер берётся из подтверждения
+     * Telegram — тот самый, что придёт потом в истории. Ждать подтверждения
+     * незачем, если отмечать некуда.
+     */
+    private void noteSent(long chatId, long temporary) {
+        if (screen == null || temporary == 0) {
+            return;
+        }
+        long sent = telegram.confirmedId(temporary);
+        if (sent != 0) {
+            screen.markSent(chatId, sent);
+        }
     }
 
     /**
