@@ -31,8 +31,12 @@ import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.config.Config;
 import ru.rainedev.raine.core.ErrorNote;
 import ru.rainedev.raine.core.Fatal;
+import ru.rainedev.raine.core.LowQualityException;
 import ru.rainedev.raine.core.Tool;
 import ru.rainedev.raine.core.Toolbox;
+import ru.rainedev.raine.llm.ChatResponse;
+import ru.rainedev.raine.llm.LlmClient;
+import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.phone.ChatKind;
 import ru.rainedev.raine.telegram.Lockdown;
@@ -66,7 +70,27 @@ class ChannelPostingTest {
                 return sendResult;
             });
     private String sentText;
-    private final TelegramTools tools = new TelegramTools(null, actions, null, lockdown, null);
+    /**
+     * Настоящая проверка повторов: каждый новый текст получает своё измерение,
+     * похожими оказываются только дословные повторы — ровно то, что здесь и
+     * проверяется, без сети и без эмбеддингов.
+     */
+    private final AntiRepeat repeat = new AntiRepeat(new LlmClient() {
+        private int dimension;
+
+        @Override
+        public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode availableTools) {
+            throw new AssertionError("проверка повторов не должна говорить с моделью");
+        }
+
+        @Override
+        public double[] embedding(String input) {
+            double[] vector = new double[64];
+            vector[dimension++ % vector.length] = 1;
+            return vector;
+        }
+    }, "ты уже это писала");
+    private final TelegramTools tools = new TelegramTools(null, actions, null, lockdown, repeat);
 
     private Tool post() {
         return tools.postToChannel(CHANNEL, () -> lookup.get(), id -> {
@@ -114,6 +138,28 @@ class ChannelPostingTest {
         if (flag.isEmpty()) {
             assertTrue(Files.readString(file).contains("channels_posting_enabled=false"));
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "-100123", "@rin_channel"})
+    void ownChannelIsReadAsWritten(String value, @TempDir Path dir) throws Exception {
+        Path file = dir.resolve("config.properties");
+        Files.writeString(file, """
+                api_id=1
+                api_hash=test
+                phone=+70000000000
+                owner_id=1
+                llm_base_url=http://example.invalid
+                llm_model=test
+                llm_api_key=test
+                """);
+        assertEquals("", Config.load(file).ownChannel(), "по умолчанию своего канала нет");
+        if (value.isEmpty()) {
+            assertTrue(Files.readString(file).contains("own_channel="), "ключ виден в файле настроек");
+            return;
+        }
+        Files.writeString(file, Files.readString(file) + "own_channel=" + value + "\n");
+        assertEquals(value, Config.load(file).ownChannel());
     }
 
     @Test
@@ -173,7 +219,7 @@ class ChannelPostingTest {
 
     @Test
     void readOnlyActionsRefuseEvenDirectHandlerCall() {
-        TelegramTools readOnly = new TelegramTools(null, new TelegramActions.ReadOnly(), null, lockdown, null);
+        TelegramTools readOnly = new TelegramTools(null, new TelegramActions.ReadOnly(), null, lockdown, repeat);
         readOnly.channelsPosting(true);
         readOnly.addWritingTools(ChatKind.CHANNEL, CHANNEL, tool -> { });
         Tool post = readOnly.postToChannel(CHANNEL, lookup, id -> {
@@ -413,6 +459,61 @@ class ChannelPostingTest {
             logger.detachAppender(logs);
             logs.stop();
         }
+    }
+
+    @Test
+    void aPostSheAlreadyWroteIsRefusedBeforeTelegram() {
+        Tool post = enabledPost();
+        assertTrue(post.call(text("тот же пост")).contains("Post published"));
+
+        int sends = actionCalls.size();
+        String outcome;
+        try {
+            outcome = "вернул строку: " + post.call(text("тот же пост"));
+        } catch (RuntimeException e) {
+            outcome = "исключение " + e.getClass().getSimpleName();
+        }
+        assertEquals("исключение LowQualityException", outcome);
+        assertEquals(sends, actionCalls.size(), "повтор не доходит до Telegram");
+    }
+
+    /** Проверка сравнивает смысл, а не факт, что она уже что-то писала. */
+    @Test
+    void differentPostsAreNotRepeats() {
+        Tool post = enabledPost();
+        assertTrue(post.call(text("первый пост")).contains("Post published"));
+        assertTrue(post.call(text("второй пост")).contains("Post published"));
+        assertEquals(List.of("sendMessage", "sendMessage"), actionCalls);
+    }
+
+    @Test
+    void anImpulsePostNeedsNoOpenedChannelButKeepsEveryOtherCheck() {
+        tools.channelsPosting(true);
+        java.util.function.LongUnaryOperator confirmed = id -> {
+            confirmations.add(id);
+            return FINAL;
+        };
+        lookup = () -> chat(new TdApi.ChatTypeSupergroup(123L, true));
+        assertTrue(tools.publishToOwnChannel(CHANNEL, "пост из порыва", lookup, confirmed)
+                        .contains("Post published"),
+                "открыть канал значит сменить адрес ответа и высыпать ленту в чужую переписку");
+        assertEquals("пост из порыва", sentText);
+        assertEquals(List.of(TEMP), confirmations, "подтверждение спрашивается у Telegram, а не выдумывается");
+
+        lookup = () -> chat(new TdApi.ChatTypeSupergroup(123L, false));
+        assertTrue(tools.publishToOwnChannel(CHANNEL, "не туда", lookup, confirmed).contains("Nothing sent"));
+
+        lookup = () -> chat(new TdApi.ChatTypeSupergroup(123L, true));
+        lockdown.allowChannels(false);
+        assertTrue(tools.publishToOwnChannel(CHANNEL, "вне круга", lookup, confirmed).contains("Nothing sent"));
+
+        tools.channelsPosting(false);
+        Supplier<TdApi.Chat> forbidden = () -> {
+            throw new AssertionError("выключенная публикация не читает Telegram");
+        };
+        assertTrue(tools.publishToOwnChannel(CHANNEL, "нельзя", forbidden, confirmed).contains("disabled"));
+        assertEquals(List.of("sendMessage"), actionCalls);
+        assertEquals(List.of(TEMP), confirmations);
     }
 
     private String sanitizedFailure(Tool post) {

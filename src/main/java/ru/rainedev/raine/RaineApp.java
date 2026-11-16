@@ -16,6 +16,8 @@ import ru.rainedev.raine.core.Notification;
 import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.core.NoticeWindow;
 import ru.rainedev.raine.core.Rest;
+import ru.rainedev.raine.core.ChannelImpulse;
+import ru.rainedev.raine.core.OwnChannel;
 import ru.rainedev.raine.core.Spontaneity;
 import ru.rainedev.raine.core.Toolbox;
 import ru.rainedev.raine.llm.LlmClient;
@@ -111,6 +113,10 @@ public final class RaineApp implements AutoCloseable {
     /** Насколько часто сообщение из заглушённого чата остаётся без внимания. */
     private static final double MUTED_IGNORE_CHANCE = 0.8;
     private Spontaneity spontaneity;
+    /** Публикации в свой канал по собственному желанию, вне разговора. */
+    private ChannelImpulse channelImpulse;
+    /** Разбирается один раз при старте: номер нужен промпту, порыву и фильтру уведомлений. */
+    private volatile OwnChannel ownChannel = OwnChannel.NONE;
 
     /** Скользящее окно уведомлений: пока в чат пишут, она к нему не идёт. */
     private NoticeWindow notices = new NoticeWindow();
@@ -229,6 +235,7 @@ public final class RaineApp implements AutoCloseable {
         // ней уже лежат, можно выкладывать и тогда, когда рисовать нечем
         tools.gallery(config.camera().gallery());
         tools.channelsPosting(config.channelsPostingEnabled());
+        ownChannel = resolveOwnChannel();
 
         var horde = new ru.rainedev.raine.image.HordeClient(
                 config.camera().baseUrl(), config.camera().apiKey(), config.camera().models(),
@@ -324,7 +331,8 @@ public final class RaineApp implements AutoCloseable {
         loop = new NotificationLoop(
                 llm,
                 () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix(loop.audience())
-                        + (settings.current().trustLedgerEnabled() ? trust.asPromptSuffix() : "")),
+                        + (settings.current().trustLedgerEnabled() ? trust.asPromptSuffix() : "")
+                        + ownChannel.asPromptSuffix(config.channelsPostingEnabled())),
                 always, config.contextTokenLimit());
         // доверие смягчает поведение: на ходу разговора она знает, кому отвечает,
         // и строка об этом человеке стоит в промпте, а не в контексте
@@ -468,6 +476,18 @@ public final class RaineApp implements AutoCloseable {
         spontaneity.asleepWhen(rest::isResting);
         tools.actingOnImpulse(spontaneity::isActing);
         spontaneity.start();
+        // порыв публикации живёт отдельным запросом: он не читает переписку
+        // с владельцем и не пишет в неё, поэтому контекст разговора остаётся целым
+        channelImpulse = new ChannelImpulse(llm,
+                () -> prompts.system(around.asPromptSuffix()
+                        + workingMemory.asPromptSuffix(new ru.rainedev.raine.memory.Audience(
+                                ownChannel.chatId(), 0, false))),
+                random);
+        channelImpulse.channel(ownChannel.chatId());
+        channelImpulse.blockedWhen(() -> rest.isResting() || !config.channelsPostingEnabled());
+        channelImpulse.recentPosts(this::herRecentPosts);
+        channelImpulse.publishWith((chatId, post) -> tools.publishToOwnChannel(chatId, post));
+        channelImpulse.start();
         // холостой порыв не должен ни тратить воспоминания, ни помечать снимки
         // чатов как показанные
         loop.idleImpulseSnapshot(() -> {
@@ -708,6 +728,73 @@ public final class RaineApp implements AutoCloseable {
      * Файл доверия вырос дольше отведённых строк и обрезан: часть записей больше
      * не доходит до системного промпта. Слышит владелец — один раз на случай.
      */
+    /**
+     * Свой канал из настройки: либо номер чата, либо имя — «@name» или «t.me/name».
+     * Пустая строка и неразрешимое имя означают «канала нет»: молчание честнее,
+     * чем пост в чужой чат по опечатке в настройке.
+     */
+    private OwnChannel resolveOwnChannel() {
+        String raw = config.ownChannel() == null ? "" : config.ownChannel().strip();
+        if (raw.isEmpty()) {
+            return OwnChannel.NONE;
+        }
+        String username = ru.rainedev.raine.phone.TmeLink.username(raw).orElse("");
+        try {
+            if (username.isEmpty() && raw.matches("-?\\d+")) {
+                long chatId = Long.parseLong(raw);
+                TdApi.Chat chat = telegram.chatCached(chatId);
+                return channelOf(chat, chatId, "");
+            }
+            if (username.isEmpty()) {
+                log.warn("Настройка own_channel не разобрана: «{}» — канала нет", raw);
+                return OwnChannel.NONE;
+            }
+            return telegram.publicObject(username)
+                    .map(object -> channelOf(object.chat(), object.chat().id, username))
+                    .orElseGet(() -> {
+                        log.warn("Канал «{}» из own_channel не найден — канала нет", username);
+                        return OwnChannel.NONE;
+                    });
+        } catch (RuntimeException e) {
+            log.warn("Свой канал «{}» не разобрался: {}", raw, ru.rainedev.raine.core.ErrorNote.of(e.getMessage()));
+            return OwnChannel.NONE;
+        }
+    }
+
+    /** Настройка обещает канал; группа или личка под этим номером — ошибка в настройке. */
+    private OwnChannel channelOf(TdApi.Chat chat, long chatId, String username) {
+        if (chat == null || chat.id != chatId
+                || ru.rainedev.raine.phone.ChatKind.of(chat) != ru.rainedev.raine.phone.ChatKind.CHANNEL) {
+            log.warn("Чат {} не канал — own_channel игнорируется", chatId);
+            return OwnChannel.NONE;
+        }
+        return new OwnChannel(chatId, chat.title == null ? "" : chat.title, username);
+    }
+
+    /** Несколько последних её постов: после перезапуска копилка повторов пуста. */
+    private String herRecentPosts() {
+        if (!ownChannel.isSet()) {
+            return "";
+        }
+        try {
+            StringBuilder posts = new StringBuilder();
+            for (TdApi.Message message : telegram.history(ownChannel.chatId(), 4)) {
+                String text = ru.rainedev.raine.phone.MessageContent.describe(message.content);
+                if (text == null || text.isBlank()) {
+                    continue;
+                }
+                posts.append("- ").append(text.strip().replace("\n", " ")).append('\n');
+            }
+            String written = posts.toString();
+            return written.length() > 1200 ? written.substring(0, 1200) : written;
+        } catch (RuntimeException e) {
+            // лента недоступна — порыв всё равно состоится: повтор отсекает проверка
+            // повторов, а не этот список
+            log.debug("Прежние посты своего канала не прочитались: {}", e.getMessage());
+            return "";
+        }
+    }
+
     private void tellOwnerAboutTrustLedger(long lines) {
         long ownerId = config.ownerId();
         if (ownerId <= 0) {
@@ -830,6 +917,18 @@ public final class RaineApp implements AutoCloseable {
         // и незнакомые, и это нормально — переписка там общая
         if (!lockdown.allows(telegram.chatCached(message.chatId), telegram.isContact(senderId))) {
             log.debug("Пропускаю сообщение из чата {} — он вне круга общения", message.chatId);
+            return;
+        }
+
+        // канал, на который она не подписана, не должен становиться вечным
+        // потоком уведомлений: TDLib присылает посты и просто просмотренного
+        // канала, а просмотр по ссылке подпиской не является
+        TdApi.Chat chat = telegram.chatCached(message.chatId);
+        if (ru.rainedev.raine.phone.ChatKind.of(chat) == ru.rainedev.raine.phone.ChatKind.CHANNEL
+                // свой канал она ведёт сама: подписка на него не проверяется
+                && message.chatId != ownChannel.chatId()
+                && !telegram.isChannelMember(message.chatId)) {
+            log.debug("Пропускаю пост канала {} — подписки на него нет", message.chatId);
             return;
         }
 
@@ -1110,6 +1209,9 @@ public final class RaineApp implements AutoCloseable {
         }
         if (spontaneity != null) {
             spontaneity.close();   // новых порывов не заводим
+        }
+        if (channelImpulse != null) {
+            channelImpulse.close();
         }
         // недоданные уведомления не догоняем: чат остаётся непрочитанным, и его
         // найдёт догон при следующем запуске

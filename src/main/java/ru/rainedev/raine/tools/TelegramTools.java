@@ -425,19 +425,25 @@ public final class TelegramTools {
 
             actions.markRead(chatId, history.stream().mapToLong(message -> message.id).toArray());
 
-            // свои прошлые реплики — чтобы не повторяться и после перезапуска
+            // свои прошлые реплики — чтобы не повторяться и после перезапуска.
+            // В канале она постит от имени чата, а не от имени пользователя: без
+            // этой ветки проверка повторов в канале стартовала бы пустой лентой
             history.stream()
-                    .filter(message -> message.senderId instanceof TdApi.MessageSenderUser sender
-                            && sender.userId == telegram.myId())
+                    .filter(message -> message.senderId instanceof TdApi.MessageSenderUser person
+                            && person.userId == telegram.myId()
+                            || message.senderId instanceof TdApi.MessageSenderChat author
+                            && author.chatId == chatId)
                     .filter(message -> message.content instanceof TdApi.MessageText)
                     .forEach(message -> antiRepeat.remember(chatId, ((TdApi.MessageText) message.content).text.text));
 
             // пустой чат — это человек, с которым она ещё не говорила ни разу.
             // Заговаривать с незнакомыми первой можно разрешить настройкой,
-            // но по умолчанию это выключено: слишком легко написать не туда
+            // но по умолчанию это выключено: слишком легко написать не туда.
+            // Наводка владельца («глянь кента t.me/friend» в его ходу) включает
+            // исключение для конкретного человека на весь разговор
             boolean stranger = history.isEmpty() && rendered.kind() == ChatKind.DM
                     && !lockdown.isOwner(chat);
-            if (stranger && !behaviour.writeToNewPeople()) {
+            if (stranger && !behaviour.writeToNewPeople() && !leads.allows(chatId)) {
                 log.info("Чат {} пуст, а писать незнакомым не разрешено", chatId);
                 return "This chat is empty — you have never talked to this person. "
                         + "You cannot write to them. Go back to a chat you already have.";
@@ -499,6 +505,23 @@ public final class TelegramTools {
         return postToChannel(chatId, () -> telegram.chatCached(chatId), id -> telegram.confirmedId(id));
     }
 
+    /**
+     * Публикация по порыву в свой канал: тот же путь, что у тулзы, но канал не
+     * открывается. Открытие сменило бы адрес ответа и высыпало ленту канала в
+     * чужую переписку, а порыв живёт отдельным запросом.
+     *
+     * @throws LowQualityException если пост похож на уже опубликованный
+     */
+    public String publishToOwnChannel(long chatId, String text) {
+        return publishToOwnChannel(chatId, text, () -> telegram.chatCached(chatId), telegram::confirmedId);
+    }
+
+    /** Ленивые зависимости позволяют проверить публикацию порыва без клиента Telegram. */
+    String publishToOwnChannel(long chatId, String text, java.util.function.Supplier<TdApi.Chat> chat,
+                               java.util.function.LongUnaryOperator confirmedId) {
+        return publish(chatId, text, chat, confirmedId, false);
+    }
+
     Tool postToChannel(long chatId, java.util.function.Supplier<TdApi.Chat> chat,
                        java.util.function.LongUnaryOperator confirmedId) {
         return Tool.named("post_to_channel")
@@ -508,66 +531,86 @@ public final class TelegramTools {
                 .requiredString("text", "Non-blank post text, at most 4096 UTF-16 characters")
                 .mutating()
                 .build(arguments -> {
-                    if (!channelsPostingEnabled) {
-                        return "Channel posting is disabled. Nothing sent.";
-                    }
-                    // Набор сохраняет старую тулзу при переходе из канала в личку.
-                    if (writingChatId != chatId) {
-                        return "Open this channel before posting. Nothing sent.";
-                    }
                     var value = arguments == null ? null : arguments.get("text");
-                    if (value == null || !value.isTextual() || value.textValue().isBlank()
-                            || value.textValue().length() > 4096) {
-                        return "Text must be a non-blank string of at most 4096 UTF-16 characters. Nothing sent.";
-                    }
-                    try {
-                        TdApi.Chat target = chat.get();
-                        if (target == null || target.id != chatId || ChatKind.of(target) != ChatKind.CHANNEL) {
-                            return "This is not the opened channel. Nothing sent.";
-                        }
-                        if (!allowed(target)) {
-                            return "This channel is outside the allowed circle. Nothing sent.";
-                        }
-                    } catch (RuntimeException e) {
-                        Fatal.check(e);
-                        return channelPostingError(chatId,
-                                "Channel check failed before sending. Nothing sent.", e.getMessage());
-                    }
-
-                    long temporaryId;
-                    try {
-                        temporaryId = actions.sendMessage(chatId, value.textValue(), null);
-                    } catch (RuntimeException e) {
-                        Fatal.check(e);
-                        // Таймаут не доказывает, что Telegram не принял запрос.
-                        return channelPostingError(chatId,
-                                "Send failed before acceptance was confirmed. Delivery is unknown; "
-                                        + "check the channel and do not duplicate the post.", e.getMessage());
-                    }
-                    if (temporaryId == 0) {
-                        return channelPostingError(chatId,
-                                "Delivery is unknown; check the channel and do not duplicate the post.",
-                                "Telegram returned no message id.");
-                    }
-                    long finalId;
-                    try {
-                        finalId = confirmedId.applyAsLong(temporaryId);
-                    } catch (RuntimeException e) {
-                        Fatal.check(e);
-                        return channelPostingError(chatId,
-                                "Post accepted, but confirmation failed. Delivery is unknown; "
-                                        + "check the channel and do not duplicate the post.", e.getMessage());
-                    }
-                    if (finalId == 0) {
-                        return channelPostingError(chatId, "Telegram reported that the post failed.",
-                                "The post was not published.");
-                    }
-                    if (finalId == temporaryId) {
-                        return "Post accepted, but delivery is not yet confirmed (temporary message_id="
-                                + temporaryId + "). Check the channel; do not duplicate the post.";
-                    }
-                    return "Post published. message_id=" + finalId;
+                    String text = value == null || !value.isTextual() ? null : value.textValue();
+                    return publish(chatId, text, chat, confirmedId, true);
                 });
+    }
+
+    /**
+     * Один путь публикации для разговора и для порыва: флаг, адрес, круг общения,
+     * проверка на повтор, отправка и подтверждение.
+     *
+     * @param requireOpened пост из разговора возможен только в открытом канале —
+     *                      набор сохраняет тулзу прежнего чата при переходе в личку
+     * @return что сказать модели: подтверждение публикации или почему ничего не отправлено
+     */
+    private String publish(long chatId, String text, java.util.function.Supplier<TdApi.Chat> chat,
+                           java.util.function.LongUnaryOperator confirmedId, boolean requireOpened) {
+        if (!channelsPostingEnabled) {
+            return "Channel posting is disabled. Nothing sent.";
+        }
+        if (requireOpened && writingChatId != chatId) {
+            return "Open this channel before posting. Nothing sent.";
+        }
+        if (text == null || text.isBlank() || text.length() > 4096) {
+            return "Text must be a non-blank string of at most 4096 UTF-16 characters. Nothing sent.";
+        }
+        try {
+            TdApi.Chat target = chat.get();
+            if (target == null || target.id != chatId || ChatKind.of(target) != ChatKind.CHANNEL) {
+                return "This is not the opened channel. Nothing sent.";
+            }
+            if (!allowed(target)) {
+                return "This channel is outside the allowed circle. Nothing sent.";
+            }
+        } catch (RuntimeException e) {
+            Fatal.check(e);
+            return channelPostingError(chatId,
+                    "Channel check failed before sending. Nothing sent.", e.getMessage());
+        }
+
+        // канал она ведёт сама, и повторяться в нём так же заметно, как в разговоре
+        antiRepeat.check(chatId, text);
+
+        long temporaryId;
+        try {
+            temporaryId = actions.sendMessage(chatId, text, null);
+        } catch (RuntimeException e) {
+            Fatal.check(e);
+            // Таймаут не доказывает, что Telegram не принял запрос.
+            return channelPostingError(chatId,
+                    "Send failed before acceptance was confirmed. Delivery is unknown; "
+                            + "check the channel and do not duplicate the post.", e.getMessage());
+        }
+        if (temporaryId == 0) {
+            return channelPostingError(chatId,
+                    "Delivery is unknown; check the channel and do not duplicate the post.",
+                    "Telegram returned no message id.");
+        }
+        long finalId;
+        try {
+            finalId = confirmedId.applyAsLong(temporaryId);
+        } catch (RuntimeException e) {
+            Fatal.check(e);
+            return channelPostingError(chatId,
+                    "Post accepted, but confirmation failed. Delivery is unknown; "
+                            + "check the channel and do not duplicate the post.", e.getMessage());
+        }
+        if (finalId == 0) {
+            return channelPostingError(chatId, "Telegram reported that the post failed.",
+                    "The post was not published.");
+        }
+        if (finalId == temporaryId) {
+            return "Post accepted, but delivery is not yet confirmed (temporary message_id="
+                    + temporaryId + "). Check the channel; do not duplicate the post.";
+        }
+        // в память повтор ушёл ещё на проверке: тут остаётся только не печатать
+        // этот пост второй раз в снимке канала
+        if (screen != null) {
+            screen.markSent(chatId, finalId);
+        }
+        return "Post published. message_id=" + finalId;
     }
 
     private static String channelPostingError(long chatId, String status, String reason) {
