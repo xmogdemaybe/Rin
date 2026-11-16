@@ -103,6 +103,21 @@ public interface TelegramActions {
     long sendPhoto(long chatId, java.nio.file.Path file, String caption);
 
     /**
+     * Подписка на канал: действие видимое, аккаунт появляется в списке подписчиков.
+     *
+     * @throws RuntimeException в безопасном режиме и если Telegram отказал
+     */
+    void joinChat(long chatId);
+
+    /**
+     * Отписка от канала. В отличие от бана, чат не покидается со скандалом:
+     * она просто перестаёт получать его посты.
+     *
+     * @throws RuntimeException в безопасном режиме и если Telegram отказал
+     */
+    void leaveChat(long chatId);
+
+    /**
      * Выкладывание истории. Видно всем, кого она выбрала, и висит сутки —
      * поэтому решение «выкладывать ли» и «кому показывать» принимает владелец настройкой.
      *
@@ -389,6 +404,18 @@ public interface TelegramActions {
         }
 
         @Override
+        public void joinChat(long chatId) {
+            TdApi.JoinChat request = new TdApi.JoinChat();
+            request.chatId = chatId;
+            ask(request);
+        }
+
+        @Override
+        public void leaveChat(long chatId) {
+            ask(new TdApi.LeaveChat(chatId));
+        }
+
+        @Override
         public long sendVoice(long chatId, java.nio.file.Path file, int seconds) {
             TdApi.InputMessageVoiceNote content = new TdApi.InputMessageVoiceNote();
             content.voiceNote = new TdApi.InputFileLocal(file.toAbsolutePath().toString());
@@ -549,6 +576,16 @@ public interface TelegramActions {
         @Override
         public void saveContact(long userId, String firstName, String lastName) {
             throw refused("запись контакта " + firstName + " (" + userId + ")");
+        }
+
+        @Override
+        public void joinChat(long chatId) {
+            throw refused("подписка на канал " + chatId);
+        }
+
+        @Override
+        public void leaveChat(long chatId) {
+            throw refused("отписка от канала " + chatId);
         }
 
         @Override

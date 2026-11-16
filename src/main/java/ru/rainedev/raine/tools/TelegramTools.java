@@ -199,6 +199,13 @@ public final class TelegramTools {
         this.traitSignals = signals;
     }
 
+    /** Наводки владельца: кому писать первой и какие каналы трогать разрешено. */
+    private final ru.rainedev.raine.core.OwnerLeads leads = new ru.rainedev.raine.core.OwnerLeads();
+
+    public ru.rainedev.raine.core.OwnerLeads leads() {
+        return leads;
+    }
+
     public void traitDiary(ru.rainedev.raine.memory.Diary diary) {
         this.traitDiary = diary;
     }
@@ -409,6 +416,7 @@ public final class TelegramTools {
             actions.setOnline(true);   // зашла в Telegram — это видно собеседнику
             actions.openChat(chatId);
             opened.add(chatId);
+            leads.vouch(chatId);
             onChatEntered.accept(chat);
 
             List<TdApi.Message> history = recentEnough(telegram.history(chatId, HISTORY_DEPTH));
@@ -930,8 +938,93 @@ public final class TelegramTools {
                         return "Provide a name or @username to search for.";
                     }
                     Telegram.Found found = telegram.searchChats(query, SEARCH_LIMIT);
+                    // наводка запоминается на весь разговор: ссылку владелец дал
+                    // в первом сообщении, а «да, напиши» ответит во втором
+                    found.mine().forEach(chat -> leads.vouch(chat.id));
+                    found.elsewhere().forEach(chat -> leads.vouch(chat.id));
                     return foundAnswer(query, found, this::allowed);
                 });
+    }
+
+    /**
+     * Подписка на канал. Отдельная тулза, а не часть открытия чата: посмотреть
+     * канал по ссылке можно и без подписки, а подписка — видимое действие,
+     * аккаунт появляется в списке подписчиков, и решать его должен владелец.
+     */
+    public Tool joinChannel() {
+        return Tool.named("join_channel")
+                .describedAs("Subscribes to a public channel by chat_id so its new posts reach you. "
+                        + "Channels only — groups are refused. Take chat_id from search_chats or from a "
+                        + "<telegram_object> block. Do it when the owner pointed you at the channel or asked "
+                        + "you to subscribe; do not subscribe to everything you happen to see.")
+                .requiredInteger("chat_id", "Id of the channel to subscribe to")
+                .mutating()
+                .build(arguments -> channelMembership(arguments, true));
+    }
+
+    /** Отписка — симметрично подписке, без бана и без выхода из чата со скандалом. */
+    public Tool leaveChannel() {
+        return Tool.named("leave_channel")
+                .describedAs("Unsubscribes from a channel by chat_id: its posts stop reaching you. "
+                        + "This is not a ban and not a block. Use it when the owner asks you to leave "
+                        + "a channel, even if no link is at hand.")
+                .requiredInteger("chat_id", "Id of the channel to leave")
+                .mutating()
+                .build(arguments -> channelMembership(arguments, false));
+    }
+
+    /**
+     * Общее у подписки и отписки: только канал, только в круге, только по воле
+     * владельца. Разрешение не привязано к открытому чату: она могла открыть
+     * канал поиском, и writingChatId уже сменился бы на него — а ход всё равно
+     * начал владелец.
+     */
+    private String channelMembership(com.fasterxml.jackson.databind.JsonNode arguments, boolean join) {
+        return channelMembership(arguments, join, telegram::chatCached, this::allowed);
+    }
+
+    /** Ленивые зависимости позволяют проверить гейтинг без клиента Telegram. */
+    String channelMembership(com.fasterxml.jackson.databind.JsonNode arguments, boolean join,
+                             java.util.function.LongFunction<TdApi.Chat> chats,
+                             java.util.function.Predicate<TdApi.Chat> circle) {
+        long chatId = ru.rainedev.raine.core.Numbers.longAt(arguments, "chat_id", 0);
+        if (chatId == 0) {
+            return "Provide the chat_id of the channel.";
+        }
+        TdApi.Chat chat;
+        try {
+            chat = chats.apply(chatId);
+        } catch (RuntimeException e) {
+            return "There is no chat with id " + chatId + ". Find it with search_chats first.";
+        }
+        if (ru.rainedev.raine.phone.ChatKind.of(chat) != ru.rainedev.raine.phone.ChatKind.CHANNEL) {
+            log.info("Чат {} не канал — подписка не применяется", chatId);
+            return "This is not a channel. Subscribing works for channels only; groups are left alone.";
+        }
+        if (!circle.test(chat)) {
+            return "This channel is outside the allowed circle. Nothing changed.";
+        }
+        if (!leads.allows(chatId)) {
+            log.info("Канал {} не по наводке владельца — подписка не применяется", chatId);
+            return "Only the owner can point you at a channel to subscribe to or leave. "
+                    + "Ask them first; nothing changed.";
+        }
+        try {
+            if (join) {
+                actions.joinChat(chatId);
+            } else {
+                actions.leaveChat(chatId);
+            }
+        } catch (RuntimeException e) {
+            Fatal.check(e);
+            log.info("Подписка на канал {} не удалась: {}", chatId, e.getMessage());
+            return (join ? "Subscription" : "Unsubscription") + " failed: "
+                    + ru.rainedev.raine.core.ErrorNote.of(String.valueOf(e.getMessage()));
+        }
+        log.info(join ? "Подписалась на канал {}" : "Отписалась от канала {}", chatId);
+        return join
+                ? "Subscribed. New posts of this channel will reach you."
+                : "Left the channel. Its posts will no longer reach you.";
     }
 
     /**

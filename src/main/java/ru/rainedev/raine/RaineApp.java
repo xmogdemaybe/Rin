@@ -268,6 +268,11 @@ public final class RaineApp implements AutoCloseable {
         always.add(tools.saveContact());
         always.add(tools.searchChats());
         always.add(tools.openById());
+        // подписка и отписка — по chat_id, без обязательного открытия канала:
+        // открыть его поиском значит сменить writingChatId, а ход всё равно владельца
+        always.add(tools.joinChannel());
+        always.add(tools.leaveChannel());
+        tools.leads().ownerTurn(() -> loop.startedBy(config.ownerId()));
         // истории живут за своим тумблером: снял — и лента, и просмотр исчезают из набора
         if (config.storiesEnabled()) {
             always.add(tools.viewStories());
@@ -372,7 +377,12 @@ public final class RaineApp implements AutoCloseable {
         loop.onLoopStopped(() -> rememberConversation.accept("Останавливаюсь"));
         // контекст выброшен — снимки чатов начинают печатать историю заново,
         // иначе новые уведомления приходят в пустой разговор без старых сообщений
-        loop.onContextCleared(screen::forgetShown);
+        loop.onContextCleared(() -> {
+            screen.forgetShown();
+            // наводки владельца живут ровно сколько разговор: с новым контекстом
+            // старые ссылки права писать первой больше не дают
+            tools.leads().clear();
+        });
 
         // ход закончен — выходим из чатов, в которые заходили
         loop.onNotificationDone(done -> tools.closeOpened());

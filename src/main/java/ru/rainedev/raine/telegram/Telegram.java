@@ -918,6 +918,44 @@ public final class Telegram {
     private static final int OBJECT_POSTS = 3;
 
     /**
+     * Подписана ли она на канал. Статус берётся из локальной базы TDLib
+     * ({@code Supergroup.status}), а не сетевым запросом: он всегда свежий и
+     * ничего не стоит. Участником считается не только Member, но и администратор,
+     * создатель и ограниченный с isMember — иначе свой же канал с админкой
+     * выглядел бы чужим, и уведомления о его постах отсекались бы.
+     */
+    public boolean isChannelMember(long chatId) {
+        try {
+            TdApi.Chat chat = chatCached(chatId);
+            if (!(chat.type instanceof TdApi.ChatTypeSupergroup supergroup) || !supergroup.isChannel) {
+                return false;
+            }
+            TdApi.ChatMemberStatus status = ask(new TdApi.GetSupergroup(supergroup.supergroupId)).status;
+            return isMemberStatus(status);
+        } catch (RuntimeException e) {
+            // статус не прочитался — считаем, что не подписана: лишний поток
+            // уведомлений хуже, чем один пропущенный пост
+            log.debug("Статус канала {} не получен: {}", chatId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Кто считается участником: не только Member, но и администратор, создатель
+     * и ограниченный с isMember. Иначе свой же канал с админкой выглядел бы
+     * чужим, и уведомления о его постах отсекались бы.
+     */
+    static boolean isMemberStatus(TdApi.ChatMemberStatus status) {
+        return switch (status) {
+            case TdApi.ChatMemberStatusMember ignored -> true;
+            case TdApi.ChatMemberStatusAdministrator ignored -> true;
+            case TdApi.ChatMemberStatusCreator ignored -> true;
+            case TdApi.ChatMemberStatusRestricted restricted -> restricted.isMember;
+            case null, default -> false;
+        };
+    }
+
+    /**
      * Объект за именем: канал, человек или группа. Ссылка «t.me/имя» не говорит,
      * кто там, поэтому спрашиваем Telegram и отдаём готовым — номер чата, тип,
      * описание, а у канала последние посты. У человека заодно личный канал из

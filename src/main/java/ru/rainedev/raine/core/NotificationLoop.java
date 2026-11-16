@@ -261,6 +261,18 @@ public final class NotificationLoop {
         this.aboutPerson = suffix;
     }
 
+    /**
+     * Начал ли текущий ход этот человек. Нужно решениям, которым важен
+     * инициатор: подписка на канал и письмо незнакомому по наводке владельца
+     * разрешаются в его ходу, а не по тому, какой чат сейчас открыт.
+     */
+    public boolean startedBy(long personId) {
+        Turn turn = active;
+        return turn != null && personId != 0
+                && turn.notification.trigger() == Notification.Trigger.INCOMING
+                && turn.notification.personId() == personId;
+    }
+
     public void chatOrigin(java.util.function.LongFunction<Origin> origin) {
         this.chatOrigin = origin;
     }
