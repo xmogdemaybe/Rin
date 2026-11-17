@@ -290,6 +290,11 @@ public final class Vision {
      * размеченный блок им мешает, а расщеплять чужую разметку обратно регуляркой
      * значит завести вторую копию знания о формате.
      */
+    /** Разгляден ли файл уже: по этому список решает, тратить ли свежий взгляд. */
+    public boolean known(Path file) {
+        return fromCache(file) != null;
+    }
+
     public String words(Path file, Kind kind, List<Message> context) {
         return words(file, kind, context, true);
     }

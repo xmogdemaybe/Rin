@@ -9,6 +9,7 @@ import ru.rainedev.raine.phone.ChatScreen;
 import ru.rainedev.raine.phone.Markup;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
+import ru.rainedev.raine.vision.Glimpses;
 import ru.rainedev.raine.vision.TelegramMedia;
 
 /**
@@ -21,6 +22,9 @@ public final class StickerTools {
 
     /** Столько стикеров помещается в избранном и недавних. */
     private static final int LIMIT = 40;
+
+    /** Сколько стикеров за один список досматривать зрением; кэш места не стоит. */
+    static final int GLIMPSES = 6;
 
     /** Сколько из них влезает в снимок чата: дальше список становится шумом. */
     static final int FAVOURITES = 18;
@@ -188,7 +192,8 @@ public final class StickerTools {
      */
     public Tool list() {
         return Tool.simple("sticker_list", "Returns your saved stickers with a description of each. "
-                + "Use this before #sticker_send.", arguments -> {
+                + "Your <favourite_stickers> shelf in the screen already lists the usual ones: call this "
+                + "only when the shelf has nothing that fits.", arguments -> {
                     List<TdApi.Sticker> stickers = telegram.savedStickers(LIMIT);
                     if (stickers.isEmpty()) {
                         // паки могут быть и при пустом избранном: тогда выбор есть,
@@ -250,18 +255,40 @@ public final class StickerTools {
 
     /** Список с описаниями — общий вид и для своих стикеров, и для пака. */
     private String describe(List<TdApi.Sticker> stickers) {
+        return describe(stickers, media == null ? null
+                : (sticker, budget) -> media.describeSticker(sticker, budget));
+    }
+
+    /**
+     * <p>
+     * Свежих просмотров на один список отводится {@link #GLIMPSES}: пак в тридцать
+     * с лишним стикеров стоит минуты, а когда квота кончилась, каждый файл ещё и
+     * бьётся об отказ трижды. То, что уже разглядено и лежит в кэше, лимит не тратит.
+     *
+     * @param look чем смотреть на стикер; пусто — описания нет, и в списке
+     *             остаётся только эмодзи
+     */
+    static String describe(List<TdApi.Sticker> stickers, Look look) {
+        Glimpses budget = new Glimpses(GLIMPSES);
         StringBuilder out = new StringBuilder("<stickers>\n");
         for (TdApi.Sticker sticker : stickers) {
             out.append("<sticker sticker_id=\"").append(sticker.id)
                     .append("\" emoji=\"").append(Markup.attribute(sticker.emoji))
-                    .append("\">");
-            if (media != null) {
-                out.append('\n').append(media.describeSticker(sticker).strip()).append('\n');
-            }
-            out.append("</sticker>\n");
+                    .append("\">\n");
+            String looks = look == null ? "" : look.of(sticker, budget).strip();
+            out.append(looks.isBlank() ? UNSEEN : looks).append("\n</sticker>\n");
         }
         return out.append("</stickers>").toString();
     }
+
+    /** Как выглядит стикер, до которого в этом списке не дошло зрение. */
+    static final String UNSEEN = "no description yet — emoji only";
+
+    /** Чем список смотрит один стикер: шов нужен проверкам бюджета. */
+    interface Look {
+        String of(TdApi.Sticker sticker, Glimpses budget);
+    }
+
 
     /**
      * Имена своих паков идут следом за стикерами — без них она не знает,
@@ -286,13 +313,17 @@ public final class StickerTools {
     public Tool save() {
         return Tool.named("sticker_save")
                 .describedAs("Saves a sticker so you can use it later. Use this if you liked a sticker someone sent.")
-                .requiredInteger("sticker_id", "Id of the sticker to save")
+                .requiredString("sticker_id", "Sticker id exactly as printed. Keep it as text: "
+                        + "sent as a number it loses its last digits.")
                 .mutating()
                 .build(arguments -> {
-                    long stickerId = ru.rainedev.raine.core.Numbers.longAt(arguments, "sticker_id", 0);
-                    if (stickerId == 0) {
-                        return "Provide the sticker_id you want to save.";
+                    java.util.Optional<Long> asked =
+                            ru.rainedev.raine.core.Numbers.longAt(arguments, "sticker_id");
+                    if (asked.isEmpty()) {
+                        return "Send the sticker_id exactly as it is printed, as text — as a number it "
+                                + "arrives rounded and would save another sticker.";
                     }
+                    long stickerId = asked.get();
                     java.util.Optional<Telegram.StickerRef> sticker = telegram.sticker(stickerId);
                     if (sticker.isEmpty()) {
                         return "You have not seen that sticker. Use sticker_list, open a pack with "
@@ -308,8 +339,10 @@ public final class StickerTools {
     /** Стикер вместо слов — иногда точнее любого текста. */
     public Tool send(long chatId) {
         return Tool.named("sticker_send")
-                .describedAs("Sends one of your saved stickers. Call sticker_list first to see what you have.")
-                .requiredInteger("sticker_id", "Id of the sticker to send")
+                .describedAs("Sends one sticker. Take sticker_id from your <favourite_stickers> shelf in "
+                        + "the screen; call sticker_list only when that shelf has nothing that fits.")
+                .requiredString("sticker_id", "Sticker id exactly as printed, e.g. 541175087705903941. "
+                        + "Keep it as text: sent as a number it loses its last digits.")
                 .optionalString("reply_to_message_id",
                         "Optional. Quote a specific message — a sticker in reply to something said earlier.")
                 .mutating()
@@ -320,7 +353,14 @@ public final class StickerTools {
                         log.info("Стикер в чат {} вне круга общения не отправлен", chatId);
                         return "You cannot send anything to that chat.";
                     }
-                    long stickerId = ru.rainedev.raine.core.Numbers.longAt(arguments, "sticker_id", 0);
+                    java.util.Optional<Long> asked =
+                            ru.rainedev.raine.core.Numbers.longAt(arguments, "sticker_id");
+                    if (asked.isEmpty()) {
+                        // id, пришедший дробным числом, — это уже соседний стикер
+                        // того же пака; угадывать, какой она имела в виду, нечем
+                        return "Send the sticker_id exactly as it is printed in <favourite_stickers>, as text.";
+                    }
+                    long stickerId = asked.get();
                     // отправить можно всё, что ей известно: избранное, недавнее,
                     // открытый пак, присланный только что стикер. Проверка по одному
                     // избранному отсекала целые паки — а именно ими и пользуются

@@ -877,6 +877,29 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
+     * Стикер для списка: описание из кэша бесплатно, а свежий взгляд — только по
+     * бюджету. Без него пак в 34 стикера стоит минуты и разбивается о квоту по
+     * три попытки на каждый файл.
+     *
+     * @return описание или пустая строка — список сам скажет, что описания нет
+     */
+    public String describeSticker(TdApi.Sticker sticker, Glimpses budget) {
+        if (!sees() || sticker == null) {
+            return "";
+        }
+        Optional<java.nio.file.Path> file = stillOf(sticker).flatMap(telegram::download);
+        if (file.isEmpty()) {
+            return stickerFallback(sticker);
+        }
+        if (!budget.allows(vision.known(file.get()))) {
+            return "";
+        }
+        String seen = lookAt(file.get(), Vision.Kind.STICKER, null, false);
+        budget.spent(seen);
+        return seen.isBlank() ? stickerFallback(sticker) : seen;
+    }
+
+    /**
      * Стикер словами, без обёртки разметки: для компактной полки избранного.
      * Тот же кэш и та же цена просмотра; расщеплять обратно чужую разметку
      * регуляркой значило бы завести вторую копию знания о формате.

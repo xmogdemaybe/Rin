@@ -23,18 +23,21 @@ public final class Numbers {
 
     private Numbers() {}
 
+    /**
+     * Наибольшее целое, которое double хранит без потери цифры: два в 53-й степени минус один.
+     */
+    private static final double EXACT_LIMIT = 9_007_199_254_740_991D;
+
     /** @return число из поля, если его вообще удалось прочитать */
     public static Optional<Long> longFrom(JsonNode node) {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return Optional.empty();
         }
-        if (node.canConvertToLong()) {
+        if (node.isIntegralNumber() && node.canConvertToLong()) {
             return Optional.of(node.longValue());
         }
-        if (node.isNumber()) {
-            long coerced = (long) node.doubleValue();
-            log.warn("Число {} приведено к целому: {}", node, coerced);
-            return Optional.of(coerced);
+        if (node.isFloatingPointNumber()) {
+            return exact(node.doubleValue(), node.asText());
         }
         String text = node.asText("").strip();
         if (text.isEmpty()) {
@@ -46,13 +49,29 @@ public final class Numbers {
             // может оказаться дробным или в научной записи
         }
         try {
-            long coerced = (long) Double.parseDouble(text);
-            log.warn("Строка \"{}\" приведена к целому: {}", text, coerced);
-            return Optional.of(coerced);
+            return exact(Double.parseDouble(text), text);
         } catch (NumberFormatException e) {
             log.warn("Не удалось прочитать число из {}", node);
             return Optional.empty();
         }
+    }
+
+    /**
+     * Дробное число становится целым только тогда, когда целое в нём настоящее:
+     * без дробной части и не больше {@link #EXACT_LIMIT}.
+     * <p>
+     * Идентификатор стикера — 18–19 знаков, и шлюз отдаёт его через double, то
+     * есть уже округлённым («5.4117508770590394e+17» вместо
+     * «541175087705903941»). Молча превратить такое в целое значит взять
+     * соседний стикер из того же пака — он ведь существует. Пустой ответ
+     * честнее: инструмент попросит прислать id текстом, как он напечатан.
+     */
+    private static Optional<Long> exact(double value, String written) {
+        if (value != Math.rint(value) || Math.abs(value) > EXACT_LIMIT) {
+            log.warn("Идентификатор {} пришёл дробным числом — точного целого в нём нет", written);
+            return Optional.empty();
+        }
+        return Optional.of((long) value);
     }
 
     /**
