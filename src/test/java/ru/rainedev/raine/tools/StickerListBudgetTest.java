@@ -21,6 +21,10 @@ import ru.rainedev.raine.vision.Glimpses;
 class StickerListBudgetTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private final StickerTools tools = new StickerTools(null,
+            (TelegramActions) java.lang.reflect.Proxy.newProxyInstance(
+                    TelegramActions.class.getClassLoader(), new Class<?>[]{TelegramActions.class},
+                    (proxy, method, args) -> null), null);
 
     private static TdApi.Sticker sticker(long id) {
         TdApi.Sticker sticker = new TdApi.Sticker();
@@ -62,12 +66,32 @@ class StickerListBudgetTest {
     @Test
     void theFirstRefusalClosesTheRestOfTheList() {
         AtomicInteger spent = new AtomicInteger();
+        AtomicInteger asked = new AtomicInteger();
 
-        String out = StickerTools.describe(pack(10), (sticker, budget) -> look(sticker, budget, spent, true));
+        String out = StickerTools.describe(pack(10), (sticker, budget) -> {
+            if (!budget.allows(false)) {
+                return "";
+            }
+            asked.incrementAndGet();
+            budget.spent("");          // зрение молчит: квота или ошибка
+            spent.incrementAndGet();
+            return "";
+        });
 
-        assertEquals(0, spent.get(), "после отказа зрение больше не дёргают");
+        assertEquals(1, asked.get(), "после отказа в остальные файлы этого списка не стучатся");
+        assertEquals(1, spent.get());
         assertFalse(out.contains("котик"), out);
-        assertEquals(10, out.split("<sticker ", -1).length - 1);
+        assertEquals(10, out.split("<sticker ", -1).length - 1, "стикеров в ответе меньше не стало");
+    }
+
+    /** Схема просит id текстом: числом он приезжает уже округлённым. */
+    @Test
+    void theIdIsDeclaredAsTextNotAsNumber() {
+        for (Tool tool : List.of(tools.send(7L), tools.save())) {
+            JsonNode schema = tool.asJson().path("function").path("parameters");
+            assertEquals("string", schema.path("properties").path("sticker_id").path("type").asText(),
+                    tool.name() + ": id должен приходить текстом");
+        }
     }
 
     @Test
