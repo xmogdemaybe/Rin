@@ -269,4 +269,82 @@ class TextualToolCallsTest {
         assertFalse(repaired.text().contains("tool call"), "служебные строки не уйдут в чат: " + repaired.text());
         assertTrue(repaired.text().contains("- thought:"), repaired.text());
     }
+
+    /**
+     * Дословный ответ 08:28:38: разделитель — двоеточие, а не решётка, и имя с
+     * пространством имён. Оба сообщения человека тогда не были отправлены, а шаг
+     * сгорел как «модель не вызвала ни одного инструмента».
+     */
+    private static final String FROM_LOG_COLON = """
+            - thought: xmogde пишет, что со стихом всё нормально, и еще что-то хочет сказать.
+            - emotion: спокойная, сонная, чуть любопытная.
+            - to remember: -
+            - intention: ответить на его сообщение про стих и послушать, что он там дальше расскажет.
+            tool call: default_api:open{}
+            tool call: default_api:send_telegram_message{text:ну нихуя себе, даже не спалился нигде? хвыахывха}
+            tool call: default_api:send_telegram_message{text:давай выкладывай, что там еще у тебя случилось}""";
+
+    @Test
+    void theColonFormWithNamespaceIsReadToo() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG_COLON);
+
+        assertEquals(3, parsed.calls().size(), "пропали оба сообщения: " + parsed.calls());
+        assertEquals(List.of("open", "send_telegram_message", "send_telegram_message"),
+                parsed.calls().stream().map(ToolCall::name).toList(), "префикс default_api: отбрасывается");
+        assertEquals("{\"text\":\"ну нихуя себе, даже не спалился нигде? хвыахывха\"}",
+                parsed.calls().get(1).arguments(), "некавыченный текст разбирается так же, как в <call:>");
+        assertEquals("{}", parsed.calls().getFirst().arguments(), "вызов без аргументов — пустой объект");
+        assertFalse(parsed.text().contains("tool call"), parsed.text());
+        assertTrue(parsed.text().contains("- intention:"), "мысли остаются: " + parsed.text());
+    }
+
+    @Test
+    void repairRescuesTheStepWrittenWithColons() {
+        Message message = new Message(Message.Role.ASSISTANT, FROM_LOG_COLON, List.of(), null, null);
+        ChatResponse response = new ChatResponse("id", "model",
+                List.of(new ChatResponse.Choice(0, message, "stop")), ChatResponse.Usage.EMPTY);
+
+        ChatResponse repaired = TextualToolCalls.repair(response);
+
+        assertEquals(3, repaired.toolCalls().size(), "шаг не должен сгорать на форме записи");
+        assertEquals(2, repaired.toolCalls().stream()
+                .filter(call -> "send_telegram_message".equals(call.name())).count(),
+                "оба сообщения должны уйти человеку");
+    }
+
+    /**
+     * Случай 17:19:50: настоящий вызов был, а хвост разметки model дописала
+     * рядом — и он разъезжал по контексту в «Мысли» следующие полчаса.
+     */
+    @Test
+    void theDanglingTagIsCutEvenWhenRealCallsAreThere() {
+        Message message = new Message(Message.Role.ASSISTANT,
+                "- thought: отправить стикер.\n- intention: ответить стикером.\n</call>",
+                List.of(new ToolCall("call-1", "function",
+                        new ToolCall.Function("sticker_send", "{\"sticker_id\":\"541175087705903941\"}"))),
+                null, null);
+        ChatResponse response = new ChatResponse("id", "model",
+                List.of(new ChatResponse.Choice(0, message, "tool_calls")), ChatResponse.Usage.EMPTY);
+
+        ChatResponse repaired = TextualToolCalls.repair(response);
+
+        assertFalse(repaired.text().contains("</call>"), "мусорный тег не едет в контекст: " + repaired.text());
+        assertTrue(repaired.text().contains("- thought:"), repaired.text());
+        assertEquals(1, repaired.toolCalls().size(), "настоящий вызов не удваивается и не теряется");
+        assertEquals("call-1", repaired.toolCalls().getFirst().id());
+    }
+
+    @Test
+    void danglingOutputTagsAreCutWhenNothingWasParsed() {
+        Message message = new Message(Message.Role.ASSISTANT,
+                "<output>\n- thought: отвечу текстом.\n</output>", List.of(), null, null);
+        ChatResponse response = new ChatResponse("id", "model",
+                List.of(new ChatResponse.Choice(0, message, "stop")), ChatResponse.Usage.EMPTY);
+
+        ChatResponse repaired = TextualToolCalls.repair(response);
+
+        assertFalse(repaired.text().contains("<output>"), repaired.text());
+        assertFalse(repaired.text().contains("</output>"), repaired.text());
+        assertTrue(repaired.text().contains("- thought: отвечу текстом."), repaired.text());
+    }
 }

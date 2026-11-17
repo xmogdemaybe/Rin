@@ -33,12 +33,23 @@ final class TextualToolCalls {
     private static final Pattern JSON_MARKER = Pattern.compile("(?i)\\bjson\\s*[=:]?\\s*[\"']?$");
 
     /**
-     * Вызов с решёткой — форму модель копирует из примеров характера. Скобка вокруг
-     * аргументов необязательна: в логах бывают обе. Засчитывается только с начала
-     * строки, иначе упомянутый в предложении вызов стал бы действием.
+     * Вызов, написанный строкой: модель копирует форму из примеров характера, а
+     * шлюз добавляет своё пространство имён. Бывают оба разделителя — «tool call
+     * #имя(...)» и «tool call: имя{...}»; скобка вокруг аргументов и сами
+     * аргументы необязательны. Засчитывается только с начала строки, иначе
+     * упомянутый в предложении вызов стал бы действием.
      */
-    private static final Pattern LINE_CALL =
-            Pattern.compile("(?m)^[ \\t]*tool call #[ \\t]*([A-Za-z0-9_]+)[ \\t]*\\(?[ \\t]*\\{");
+    private static final Pattern LINE_CALL = Pattern.compile(
+            "(?m)^[ \\t]*tool call[ \\t]*[ #:][ \\t]*(?:[A-Za-z0-9_]+:[ \\t]*)?([A-Za-z0-9_]+)"
+                    + "[ \\t]*\\(?[ \\t]*\\{");
+
+    /**
+     * Хвосты служебной разметки вызовов. Модель дописывает их и рядом с
+     * настоящими tool_calls, и когда вызов не состоялся; оставленные, они
+     * разъезжаются по контексту и потом показываются в «Мысли».
+     */
+    private static final Pattern DANGLING =
+            Pattern.compile("</?call>|</?output>|</?tool_call>|</?function_call>");
 
     private TextualToolCalls() {}
 
@@ -61,15 +72,23 @@ final class TextualToolCalls {
             return response;
         }
         Message message = response.firstMessage().orElse(null);
-        if (message == null || message.content() == null || !message.toolCallsOrEmpty().isEmpty()) {
+        if (message == null || message.content() == null) {
             return response;
         }
-        Parsed parsed = parse(message.content());
-        if (parsed.calls().isEmpty()) {
-            return response;
+        List<ToolCall> nativeCalls = message.toolCallsOrEmpty();
+        // настоящий вызов — не повод оставлять в тексте хвосты его разметки, а
+        // отсутствие вызова — не повод оставлять саму разметку: в логах шага
+        // 17:19:50 </call> висел рядом с корректным tool_calls
+        Parsed parsed = nativeCalls.isEmpty() ? parse(message.content()) : new Parsed(message.content(), List.of());
+        String text = parsed.calls().isEmpty()
+                ? DANGLING.matcher(parsed.text()).replaceAll("").strip()
+                : parsed.text();
+        if (parsed.calls().isEmpty() && text.equals(message.content())) {
+            return response;   // разбирать и чистить было нечего
         }
-        Message fixed = new Message(message.role(), parsed.text().isEmpty() ? null : parsed.text(),
-                parsed.calls(), message.toolCallId(), message.reasoningContent());
+        Message fixed = new Message(message.role(), text.isEmpty() ? null : text,
+                nativeCalls.isEmpty() ? parsed.calls() : nativeCalls,
+                message.toolCallId(), message.reasoningContent());
         List<ChatResponse.Choice> choices = new ArrayList<>(response.choices());
         ChatResponse.Choice first = choices.getFirst();
         choices.set(0, new ChatResponse.Choice(first.index(), fixed, first.finishReason()));
