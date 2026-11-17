@@ -82,7 +82,7 @@ class VisionTest {
     private Vision visionWith(ScriptedLlm llm, Path cache) {
         return new Vision(llm, new Prompts(Path.of("prompts"),
                 new Config.Character("Raine", "@raine_tyan", "RaineDev")),
-                cache, "основная-модель", "дешёвая-модель", "Raine");
+                cache, cache.resolveSibling("stickers"), "основная-модель", "дешёвая-модель", "Raine");
     }
 
     private static Path imageFile(Path dir, String name) throws IOException {

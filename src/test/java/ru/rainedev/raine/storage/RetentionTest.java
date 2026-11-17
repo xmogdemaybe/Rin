@@ -114,7 +114,8 @@ class RetentionTest {
                 """);
         List<Path> targets = Retention.targets(config);
         List<Path> protectedDirs = List.of(config.diaryDir(), config.diaryDir().resolve("archive"),
-                config.diaryDir().resolveSibling("pending"), config.sessionDir(), config.camera().gallery());
+                config.diaryDir().resolveSibling("pending"), config.sessionDir(), config.camera().gallery(),
+                config.stickerCacheDir());
         for (Path kept : protectedDirs) {
             for (Path target : targets) {
                 assertFalse(target.startsWith(kept), kept + " — под срок подводить нельзя");

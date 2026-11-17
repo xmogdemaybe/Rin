@@ -3,6 +3,7 @@ package ru.rainedev.raine.vision;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -67,6 +68,8 @@ public final class Vision {
     private final LlmClient llm;
     private final Prompts prompts;
     private final Path cacheDir;
+    /** Куда ложатся описания стикеров: их не сносит уборка временных файлов. */
+    private final Path stickerDir;
     private final String mainModel;
     private final String cheapModel;
     private final String characterName;
@@ -74,11 +77,12 @@ public final class Vision {
     /** Слух подключается отдельно: без него видео остаётся немым. */
     private ru.rainedev.raine.speech.ModelHearing hearing;
 
-    public Vision(LlmClient llm, Prompts prompts, Path cacheDir,
+    public Vision(LlmClient llm, Prompts prompts, Path cacheDir, Path stickerDir,
                   String mainModel, String cheapModel, String characterName) {
         this.llm = llm;
         this.prompts = prompts;
         this.cacheDir = cacheDir;
+        this.stickerDir = stickerDir;
         this.mainModel = mainModel;
         this.cheapModel = cheapModel;
         this.characterName = characterName;
@@ -145,7 +149,7 @@ public final class Vision {
                             + "\n</f>\n</video transcription>\n")
                     .orElse("");
             if (!onlySound.isEmpty() && file != null && allowCache) {
-                toCache(file, onlySound);
+                toCache(file, onlySound, Kind.VIDEO);
             }
             if (onlySound.isEmpty() && file != null && allowCache) {
                 rememberFailure(file);
@@ -190,7 +194,7 @@ public final class Vision {
                 + "</video transcription instructions=\"You finished watching this video and should "
                 + "acknowledge its contents shown above.\">\n";
         if (file != null && allowCache) {
-            toCache(file, described);
+            toCache(file, described, Kind.VIDEO);
         }
         return described;
     }
@@ -295,12 +299,22 @@ public final class Vision {
         return fromCache(file) != null;
     }
 
+    /**
+     * Готовое описание текстом или пусто, если его нет. Ни скачивания, ни
+     * обращения к модели: так читают полку, которая пересобирается на ходу
+     * разговора и ждать не имеет права.
+     */
+    public String cachedDescription(Path file) {
+        String cached = fromCache(file);
+        return cached == null ? "" : Markup.body(cached).strip();
+    }
+
     public String words(Path file, Kind kind, List<Message> context) {
         return words(file, kind, context, true);
     }
 
     private String words(Path file, Kind kind, List<Message> context, boolean allowCache) {
-        String cached = allowCache ? fromCache(file) : null;
+        String cached = allowCache ? fromCache(file, kind) : null;
         if (cached != null) {
             return Markup.body(cached).strip();
         }
@@ -344,7 +358,7 @@ public final class Vision {
                 }
                 if (description != null && !description.isBlank()) {
                     if (allowCache) {
-                        toCache(file, description.strip());
+                        toCache(file, description.strip(), kind);
                     }
                     log.info("Разглядела {}: {}", kind.tag, description.strip().lines().findFirst().orElse(""));
                     return Markup.body(description.strip()).strip();
@@ -419,8 +433,29 @@ public final class Vision {
      * просмотренная картинка без единого слова о ней.
      */
     private String fromCache(Path file) {
+        return fromCache(file, null);
+    }
+
+    /**
+     * @param kind описание стикера, найденное в папке под сроком, переезжает в
+     *             вечную: уборка сносит её раз в две недели по времени записи,
+     *             а любимым стикером пользуются каждый день
+     */
+    private String fromCache(Path file, Kind kind) {
+        String kept = readCache(stickerCacheFor(file));
+        if (kept != null) {
+            return kept;
+        }
+        String keptAside = readCache(cacheFor(file));
+        if (keptAside != null && kind == Kind.STICKER) {
+            moveUp(file);
+        }
+        return keptAside;
+    }
+
+    private static String readCache(Path cache) {
         try {
-            String description = Files.readString(cacheFor(file));
+            String description = Files.readString(cache);
             return description.isBlank() ? null : description;
         } catch (IOException e) {
             return null;   // файла нет или он не прочитался — смотрят заново
@@ -428,12 +463,28 @@ public final class Vision {
     }
 
     /**
+     * Перенос один на файл: дальше описание читается из вечной папки, а старое
+     * место освободится самой уборкой. Не переехало — читаем и прежнее.
+     */
+    private void moveUp(Path file) {
+        try {
+            Files.createDirectories(stickerDir);
+            Files.move(cacheFor(file), stickerCacheFor(file), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            log.debug("Описание стикера {} не переехало в вечную папку: {}", file.getFileName(), e.getMessage());
+        }
+    }
+
+    /**
      * Замена идёт через временный файл: прежний кэш либо остаётся целым, либо
      * уступает место целому новому — но никогда не оборванному на середине.
      */
-    private void toCache(Path file, String description) {
+    private void toCache(Path file, String description, Kind kind) {
         try {
-            AtomicFiles.writeString(cacheFor(file), description);
+            AtomicFiles.writeString(cacheFor(file, kind), description);
+            // раз описание есть, память о неудаче больше не о чём: её маркер
+            // лежит в папке под сроком и без ухода накопился бы за все годы
+            Files.deleteIfExists(failureFor(file));
         } catch (IOException e) {
             log.debug("Описание не сохранилось в кэш: {}", e.getMessage());
         }
@@ -441,6 +492,31 @@ public final class Vision {
 
     private Path cacheFor(Path file) {
         return cacheDir.resolve(file.getFileName() + ".md");
+    }
+
+    private Path cacheFor(Path file, Kind kind) {
+        return (kind == Kind.STICKER ? stickerDir : cacheDir).resolve(file.getFileName() + ".md");
+    }
+
+    private Path stickerCacheFor(Path file) {
+        return stickerDir.resolve(file.getFileName() + ".md");
+    }
+
+    /**
+     * Смотреть нечем без всякого обращения к модели: файл недавно не разгляделся,
+     * его нет на диске или он недокачан. Это пропуск, а не отказ зрения, — поэтому
+     * списки на нём не обрываются, а бюджет свежих просмотров не тратится.
+     */
+    public boolean unusable(Path file) {
+        return failedRecently(file) || !readable(file);
+    }
+
+    private static boolean readable(Path file) {
+        try {
+            return Files.isRegularFile(file) && Files.size(file) >= MIN_IMAGE_BYTES;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**
@@ -466,5 +542,51 @@ public final class Vision {
 
     private Path failureFor(Path file) {
         return cacheDir.resolve(file.getFileName() + ".failed");
+    }
+
+    /**
+     * Перенос прежних описаний стикеров в вечную папку — один раз на запуск.
+     * <p>
+     * Уборка сносит кэш картинок по времени последней записи, а стикер
+     * разглядывают однажды и пользуются им годами: без переноса описание
+     * пропало бы через две недели после просмотра, и полка снова платила бы
+     * зрением. Берём только растровые стикерные файлы — фото и ролики под
+     * сроком остаться должны.
+     *
+     * @return сколько описаний переехало
+     */
+    public static int moveStickerCache(Path cacheDir, Path stickerDir) {
+        if (!Files.isDirectory(cacheDir)) {
+            return 0;   // кэша ещё не было: переносить нечего
+        }
+        try (java.util.stream.Stream<Path> files = Files.list(cacheDir)) {
+            List<Path> stale = files.filter(Vision::stickerDescription)
+                    .filter(file -> !Files.exists(stickerDir.resolve(file.getFileName())))
+                    .toList();
+            if (stale.isEmpty()) {
+                return 0;
+            }
+            Files.createDirectories(stickerDir);
+            int moved = 0;
+            for (Path file : stale) {
+                try {
+                    Files.move(file, stickerDir.resolve(file.getFileName()),
+                            StandardCopyOption.REPLACE_EXISTING);
+                    moved++;
+                } catch (IOException e) {
+                    log.warn("Описание стикера {} не переехало: {}", file.getFileName(), e.getMessage());
+                }
+            }
+            log.info("Описаний стикеров перенесено в {}: {}", stickerDir, moved);
+            return moved;
+        } catch (IOException e) {
+            log.warn("Кэш стикеров не удалось разобрать: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    /** Описание стикера: растровый файл. Миниатюры паков тоже растровые. */
+    private static boolean stickerDescription(Path file) {
+        return Files.isRegularFile(file) && file.getFileName().toString().endsWith(".webp.md");
     }
 }

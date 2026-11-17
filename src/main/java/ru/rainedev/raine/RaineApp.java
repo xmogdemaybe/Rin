@@ -194,9 +194,12 @@ public final class RaineApp implements AutoCloseable {
 
         // зрение подключается к разметке: описание встаёт прямо под вложением
         if (config.vision().enabled()) {
-            vision = new Vision(llm, prompts, config.vision().cacheDir(),
+            vision = new Vision(llm, prompts, config.vision().cacheDir(), config.stickerCacheDir(),
                     config.vision().model(), config.vision().cheapModel(), config.character().name());
             vision.hearing(hearing);
+            // прежнее лежит под сроком: без переноса уборка снесла бы описания
+            // стикеров, а разглядеть их заново — снова деньги и минуты
+            Vision.moveStickerCache(config.vision().cacheDir(), config.stickerCacheDir());
         } else {
             log.info("Зрение выключено: вложения видны только по типу, из истории — только текст");
         }

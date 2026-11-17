@@ -56,6 +56,15 @@ public record Config(
         Repeat repeat
 ) {
 
+    /**
+     * Папка описаний стикеров. Она рядом с дневником и вне уборки временных
+     * файлов: описание любимого стикера не должно исчезать через две недели
+     * только потому, что его разглядели однажды.
+     */
+    public Path stickerCacheDir() {
+        return diaryDir().resolveSibling("stickers");
+    }
+
     /** Параметры OpenAI-совместимого эндпоинта. */
     public record Consolidation(int minutes, int maxRequests, long maxTokens) {
         public Consolidation {
