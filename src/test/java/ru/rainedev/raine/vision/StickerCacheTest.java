@@ -139,6 +139,25 @@ class StickerCacheTest {
     }
 
     @Test
+    void theShelfReadPromotesAsWell(@TempDir Path root) throws IOException {
+        Path cache = root.resolve("cache/images");
+        Path stickers = root.resolve("data/stickers");
+        Files.createDirectories(cache);
+        // миниатюра анимированного стикера: сплошной перенос на старте её не
+        // забирает (не .webp), и если полка читает молча, описание так и лежит
+        // под сроком, а потом исчезает
+        Path thumb = file(cache, "thumb.jpg", 2048);
+        Files.writeString(cache.resolve("thumb.jpg.md"), "- CommunicativeMeaning: подмигивает");
+
+        String seen = vision(new OnceLlm(), cache, stickers).cachedDescription(thumb);
+
+        assertEquals("- CommunicativeMeaning: подмигивает", seen);
+        assertTrue(Files.exists(stickers.resolve("thumb.jpg.md")),
+                "чтение полки тоже должно переносить: иначе убранный кэш стоит нового взгляда");
+        assertFalse(Files.exists(cache.resolve("thumb.jpg.md")));
+    }
+
+    @Test
     void unreadableAndRecentlyFailedFilesAreNotWorthALook(@TempDir Path root) throws IOException {
         Path cache = root.resolve("cache/images");
         Path stickers = root.resolve("data/stickers");

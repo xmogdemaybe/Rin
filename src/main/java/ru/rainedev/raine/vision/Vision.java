@@ -305,7 +305,7 @@ public final class Vision {
      * разговора и ждать не имеет права.
      */
     public String cachedDescription(Path file) {
-        String cached = fromCache(file);
+        String cached = fromCache(file, Kind.STICKER);
         return cached == null ? "" : Markup.body(cached).strip();
     }
 
