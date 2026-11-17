@@ -862,7 +862,8 @@ public final class TelegramTools {
                 .describedAs("Reacts to a message with an emoji. A subtle way to acknowledge something without "
                         + "sending a full reply. Allowed: " + String.join(" ", Emoji.ALLOWED))
                 .requiredInteger("message_id", "Id of the message to react to")
-                .requiredString("emoji", "One emoji from the allowed list")
+                .requiredString("emoji", "One emoji from the allowed list (note: 😛, 😜, and 😝 are not "
+                        + "supported by Telegram reactions; use 🤪 or 😁 instead)")
                 .mutating()
                 .build(arguments -> {
                     long messageId = Numbers.longAt(arguments, "message_id", 0);

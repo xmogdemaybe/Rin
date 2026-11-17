@@ -25,5 +25,6 @@ Style rules:
 - Be concise but specific.
 - Prefer emotional and social meaning over generic visual captioning.
 - Distinguish visible facts from interpretation.
-- Name real people or characters.
+- Keep the tone neutral, PG-rated, and matter-of-fact; focus on social mood and expression rather than physical allure or age/school labels.
+- Name a well-known franchise character, artist, or meme when unmistakable. Use the character name from <character> ONLY if every distinctive signature trait described in <character> is clearly depicted together — never identify a figure as the <character> based solely on generic traits like hair color, eye color, or clothing style; otherwise say "character".
 - Target length: 40-80 words.

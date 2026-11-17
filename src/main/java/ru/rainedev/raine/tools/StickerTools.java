@@ -575,7 +575,8 @@ public final class StickerTools {
                     if (asked.isEmpty()) {
                         // id, пришедший дробным числом, — это уже соседний стикер
                         // того же пака; угадывать, какой она имела в виду, нечем
-                        return "Send the sticker_id exactly as it is printed in <favourite_stickers>, as text.";
+                        return "Sticker was NOT sent: Send the sticker_id exactly as it is printed in "
+                                + "<favourite_stickers>, as text.";
                     }
                     long stickerId = asked.get();
                     // отправить можно всё, что ей известно: избранное, недавнее,

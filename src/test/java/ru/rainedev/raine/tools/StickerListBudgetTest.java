@@ -109,6 +109,12 @@ class StickerListBudgetTest {
         assertTrue(tools.save().call(rounded).contains("as text"));
 
         assertTrue(tools.send(7L).call(parse("{}")).contains("as text"), "пустой id — тот же ответ");
+
+        // в 17:19:53 она прочитала старый «Sticker sent.» из более раннего шага
+        // как итог и ушла в wait: отказ обязан называть отсутствие действия
+        String refusal = tools.send(7L).call(rounded);
+        assertTrue(refusal.startsWith("Sticker was NOT sent:"), "неотправленное начинается с этого: " + refusal);
+        assertTrue(tools.save().call(rounded).contains("as text"), "сохранение тоже ничего не сохраняет");
     }
 
     @Test
