@@ -25,6 +25,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
@@ -160,6 +161,38 @@ class ChannelPostingTest {
         }
         Files.writeString(file, Files.readString(file) + "own_channel=" + value + "\n");
         assertEquals(value, Config.load(file).ownChannel());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1,2,0.5", "6,8,0.25", "12,12,1"})
+    void channelImpulseRhythmComesFromSettings(int min, int max, double chance, @TempDir Path dir)
+            throws Exception {
+        Path file = dir.resolve("config.properties");
+        Files.writeString(file, """
+                api_id=1
+                api_hash=test
+                phone=+70000000000
+                owner_id=1
+                llm_base_url=http://example.invalid
+                llm_model=test
+                llm_api_key=test
+                channel_impulse_min_hours=%d
+                channel_impulse_max_hours=%d
+                channel_impulse_chance=%s
+                """.formatted(min, max, chance));
+        Config.ChannelPost post = Config.load(file).channelPost();
+
+        assertEquals(min, post.minHours());
+        assertEquals(max, post.maxHours());
+        assertEquals(chance, post.chance());
+    }
+
+    /** Несуществующий ритм должен быть виден при запуске, а не молча писать не то. */
+    @Test
+    void anImpossibleRhythmIsRefused() {
+        assertThrows(IllegalArgumentException.class, () -> new Config.ChannelPost(8, 6, 0.25));
+        assertThrows(IllegalArgumentException.class, () -> new Config.ChannelPost(0, 8, 0.25));
+        assertThrows(IllegalArgumentException.class, () -> new Config.ChannelPost(6, 8, 1.5));
     }
 
     @Test

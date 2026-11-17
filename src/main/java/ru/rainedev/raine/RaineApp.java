@@ -207,12 +207,13 @@ public final class RaineApp implements AutoCloseable {
         telegramMedia.videoInChannels(config.vision().videoInChannels());
         MediaDescriber media = telegramMedia;
 
+        TmeLinks links = new TmeLinks(telegram);
         MessageFormatter formatter = new MessageFormatter(
                 telegram::nameOf,
                 (chatId, messageId) -> telegram.message(chatId, messageId),
                 media,
                 new MessageEdits(),
-                new TmeLinks(telegram));
+                links);
 
         actions = config.readOnly()
                 ? new TelegramActions.ReadOnly()
@@ -236,6 +237,9 @@ public final class RaineApp implements AutoCloseable {
         tools.gallery(config.camera().gallery());
         tools.channelsPosting(config.channelsPostingEnabled());
         ownChannel = resolveOwnChannel();
+        // карточка, раскрытая из сообщения владельца, — его наводка: решение
+        // «да, напиши» приходит следующим сообщением, а ссылка уже прочитана
+        links.leads(tools.leads());
 
         var horde = new ru.rainedev.raine.image.HordeClient(
                 config.camera().baseUrl(), config.camera().apiKey(), config.camera().models(),
@@ -416,6 +420,9 @@ public final class RaineApp implements AutoCloseable {
                     lockdown.mode(circle);
                     lockdown.allowChannels(fresh.lockdownAllowChannels());
                     antiRepeat.limits(fresh.repeat());
+                    if (channelImpulse != null) {
+                        channelImpulse.frequency(fresh.channelPost());
+                    }
                     diaryMemory.limits(fresh.diaryInjectionMaxLength(), fresh.diaryMinRelatedness());
                     recall.limits(fresh.diaryMinRelatedness());
                     ru.rainedev.raine.llm.Transcript.enabled(fresh.llmTranscript());
@@ -484,8 +491,15 @@ public final class RaineApp implements AutoCloseable {
                                 ownChannel.chatId(), 0, false))),
                 random);
         channelImpulse.channel(ownChannel.chatId());
-        channelImpulse.blockedWhen(() -> rest.isResting() || !config.channelsPostingEnabled());
+        channelImpulse.frequency(config.channelPost());
+        // переписка жива — пост в канал подождёт: он не ответ, а отдельный голос
+        channelImpulse.blockedWhen(() -> rest.isResting()
+                || !config.channelsPostingEnabled()
+                || loop.talkedRecently());
         channelImpulse.recentPosts(this::herRecentPosts);
+        // лента, показанная модели, заодно попадает в память повторов: канал
+        // могли с запуска ни разу не открыть, а сравнение с пустой памятью не спасает
+        channelImpulse.seeding(posts -> tools.seedChannelMemory(ownChannel.chatId(), posts));
         channelImpulse.publishWith((chatId, post) -> tools.publishToOwnChannel(chatId, post));
         channelImpulse.start();
         // холостой порыв не должен ни тратить воспоминания, ни помечать снимки
@@ -771,29 +785,25 @@ public final class RaineApp implements AutoCloseable {
         return new OwnChannel(chatId, chat.title == null ? "" : chat.title, username);
     }
 
-    /** Несколько последних её постов: после перезапуска копилка повторов пуста. */
-    private String herRecentPosts() {
+    /** Последние посты своего канала словами: список чистит и режет сам порыв. */
+    private List<String> herRecentPosts() {
         if (!ownChannel.isSet()) {
-            return "";
+            return List.of();
         }
         try {
-            StringBuilder posts = new StringBuilder();
-            for (TdApi.Message message : telegram.history(ownChannel.chatId(), 4)) {
-                String text = ru.rainedev.raine.phone.MessageContent.describe(message.content);
-                if (text == null || text.isBlank()) {
-                    continue;
-                }
-                posts.append("- ").append(text.strip().replace("\n", " ")).append('\n');
-            }
-            String written = posts.toString();
-            return written.length() > 1200 ? written.substring(0, 1200) : written;
+            return telegram.history(ownChannel.chatId(), 4).stream()
+                    .map(message -> ru.rainedev.raine.phone.MessageContent.describe(message.content).strip())
+                    .filter(text -> !text.isBlank())
+                    .toList();
         } catch (RuntimeException e) {
-            // лента недоступна — порыв всё равно состоится: повтор отсекает проверка
-            // повторов, а не этот список
+            // лента недоступна — порыв всё равно состоится: пост в канал не из
+            // списка складывается
             log.debug("Прежние посты своего канала не прочитались: {}", e.getMessage());
-            return "";
+            return List.of();
         }
     }
+
+
 
     private void tellOwnerAboutTrustLedger(long lines) {
         long ownerId = config.ownerId();

@@ -43,6 +43,9 @@ public final class TmeLinks implements MessageFormatter.LinkLookup {
     private final Resolver resolver;
     private final ObjectResolver objectResolver;
 
+    /** Кому сдавать найденные объекты как наводки владельца; без реестра некуда. */
+    private volatile ru.rainedev.raine.core.OwnerLeads leads;
+
     TmeLinks(Resolver resolver) {
         this(resolver, username -> Optional.empty());
     }
@@ -54,6 +57,15 @@ public final class TmeLinks implements MessageFormatter.LinkLookup {
 
     public TmeLinks(Telegram telegram) {
         this(telegram::linkInfo, telegram::publicObject);
+    }
+
+    /**
+     * Раскрытая по ссылке карточка канала или человека — это наводка, если её дал
+     * владелец: решение «да, напиши» приходит следующим сообщением, а карточка к
+     * тому моменту уже прочитана. Различает чей ход сам реестр.
+     */
+    public void leads(ru.rainedev.raine.core.OwnerLeads registry) {
+        this.leads = registry;
     }
 
     /** Разметка только читает то, что уже раскрыли: сама она к Telegram не ходит. */
@@ -93,7 +105,11 @@ public final class TmeLinks implements MessageFormatter.LinkLookup {
                     continue;
                 }
                 objectBudget--;
-                objects.get(username, objectResolver::resolve);
+                Optional<ru.rainedev.raine.phone.TelegramObject> found =
+                        objects.get(username, objectResolver::resolve);
+                if (leads != null) {
+                    found.ifPresent(object -> leads.vouch(object.chat().id));
+                }
             }
         }
     }

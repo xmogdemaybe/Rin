@@ -512,6 +512,16 @@ public final class TelegramTools {
      *
      * @throws LowQualityException если пост похож на уже опубликованный
      */
+    /**
+     * Прежние посты канала — в память повторов. Порыв сравнивает себя с тем, что
+     * уже было напечатано, даже если канал с запуска процесса ни разу не открывали.
+     */
+    public void seedChannelMemory(long chatId, java.util.List<String> posts) {
+        for (String post : posts) {
+            antiRepeat.remember(chatId, post);
+        }
+    }
+
     public String publishToOwnChannel(long chatId, String text) {
         return publishToOwnChannel(chatId, text, () -> telegram.chatCached(chatId), telegram::confirmedId);
     }

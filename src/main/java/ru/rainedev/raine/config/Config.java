@@ -36,6 +36,7 @@ public record Config(
         boolean lockdownAllowChannels,
         boolean channelsPostingEnabled,
         String ownChannel,
+        ChannelPost channelPost,
         boolean sleepConsolidation,
         boolean characterGrowthEnabled,
         boolean trustLedgerEnabled,
@@ -187,6 +188,29 @@ public record Config(
      */
     public record Repeat(double triggerMax, double triggerAvg, int maxHistory) {}
 
+    /**
+     * Как часто она постит в свой канал по собственному желанию.
+     * <p>
+     * Для молчаливого характера редкие значения по умолчанию — то, что нужно, но
+     * болтливый персонаж в чужом форке обязан жить с болтливой лентой, поэтому
+     * срок и вероятность читаются из настроек, а не зашиты.
+     *
+     * @param minHours минимальный срок между попытками
+     * @param maxHours максимальный срок; каждый раз новый, чтобы не читалось как расписание
+     * @param chance   доля попыток, в которых порыв действительно случается
+     */
+    public record ChannelPost(int minHours, int maxHours, double chance) {
+        public ChannelPost {
+            if (minHours < 1 || maxHours < minHours) {
+                throw new IllegalArgumentException(
+                        "Срок между порывами в канал должен расти: " + minHours + "–" + maxHours + " часов");
+            }
+            if (chance <= 0 || chance > 1) {
+                throw new IllegalArgumentException("Шанс порыва в канал — доля от 0 до 1, а не " + chance);
+            }
+        }
+    }
+
     private static final Path DEFAULT_FILE = Path.of("config.properties");
 
     public static Path defaultFile() {
@@ -294,7 +318,13 @@ public record Config(
                         "разрешить ли текстовые публикации в открытом канале при наличии прав Telegram"),
                 s.get("own_channel", "",
                         "её собственный канал: chat_id или @username — строка в промпте и порывы публикаций"),
-                s.flag("sleep_consolidation", false, "пересматривать ли память во сне"),
+                new ChannelPost(
+                        s.integer("channel_impulse_min_hours", 6,
+                                "не чаще какого срока в часах она не пытается написать в свой канал"),
+                        s.integer("channel_impulse_max_hours", 8,
+                                "до какого срока в часах разбегается ожидание; ровный срок читается как расписание"),
+                        s.fraction("channel_impulse_chance", 0.25,
+                                "какая доля попыток кончается постом; остальное — молчание")),                s.flag("sleep_consolidation", false, "пересматривать ли память во сне"),
                 s.flag("character_growth_enabled", false,
                         "расти ли характером: днём она оставляет о себе заметки, ночью заметки закрепляются"),
                 s.flag("trust_ledger_enabled", true,

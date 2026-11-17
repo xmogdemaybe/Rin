@@ -2,6 +2,7 @@ package ru.rainedev.raine.telegram;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import it.tdlight.jni.TdApi;
 import java.util.HashMap;
@@ -119,6 +120,31 @@ class TmeLinksTest {
 
         assertEquals(2, objectAsked.get(), "объекты по своему бюджету");
         assertEquals(2, asked.get(), "посты по своему");
+    }
+
+    /** Объект, найденный в ходу владельца, — его наводка на весь разговор. */
+    @Test
+    void aLinkFromTheOwnersTurnBecomesHisLead() {
+        ru.rainedev.raine.core.OwnerLeads leads = new ru.rainedev.raine.core.OwnerLeads();
+        leads.ownerTurn(() -> true);
+        TmeLinks both = new TmeLinks(url -> Optional.empty(), username -> Optional.of(object(username)));
+        both.leads(leads);
+
+        both.lookAhead(List.of(message(1L, "глянь t.me/blameyourselfandnotme")));
+
+        assertEquals(1, leads.size(), "номер чата запомнен: «да, напиши» придёт следующим сообщением");
+    }
+
+    /** Ссылка в чужом ходу наводкой не становится. */
+    @Test
+    void aLinkFromAStrangerTurnIsNotALead() {
+        ru.rainedev.raine.core.OwnerLeads leads = new ru.rainedev.raine.core.OwnerLeads();
+        TmeLinks both = new TmeLinks(url -> Optional.empty(), username -> Optional.of(object(username)));
+        both.leads(leads);
+
+        both.lookAhead(List.of(message(1L, "t.me/blameyourselfandnotme")));
+
+        assertEquals(0, leads.size(), "иначе любой пост в группе открывал бы путь в личку");
     }
 
     private static ru.rainedev.raine.phone.TelegramObject object(String username) {

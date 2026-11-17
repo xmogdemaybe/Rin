@@ -32,18 +32,15 @@ public final class ChannelImpulse implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ChannelImpulse.class);
 
     /**
-     * Между порывами — от шести до восьми часов. Разговорному хватает получаса,
-     * но пост в канал виден не одному человеку, и лента из трёх постов в день
-     * читается как спам.
+     * Частота по умолчанию: от шести до восьми часов и примерно каждый четвёртый
+     * случай. Разговорному порыву хватает получаса, но пост в канал виден не
+     * одному человеку, и лента из трёх постов в день читается как спам.
+     * <p>
+     * Значения приходят из настроек ({@code channel_impulse_*}): молчаливому
+     * персонажу редкая лента в пору, а болтливому она же была бы тесна.
      */
-    static final int MIN_HOURS = 6;
-    static final int MAX_HOURS = 8;
-
-    /** Срабатывает примерно в каждом четвёртом случае — вдвое реже разговорного порыва. */
-    static final double CHANCE = 0.25;
-
-    /** Столько же часов должно пройти с собственной публикации, чтобы пробовать снова. */
-    static final Duration COOLDOWN = Duration.ofHours(MIN_HOURS);
+    private static final ru.rainedev.raine.config.Config.ChannelPost DEFAULT_POST =
+            new ru.rainedev.raine.config.Config.ChannelPost(6, 8, 0.25);
 
     private static final String PROMPT = """
             Write one post for your own channel. It is yours: you speak there to everyone who reads it, \
@@ -62,9 +59,11 @@ public final class ChannelImpulse implements AutoCloseable {
     private volatile long chatId;
     private volatile BiFunction<Long, String, String> publish =
             (id, text) -> "Nothing is wired to publish there. Nothing sent.";
-    private volatile Supplier<String> recentPosts = () -> "";
+    private volatile Supplier<List<String>> recentPosts = List::of;
+    private volatile java.util.function.Consumer<List<String>> seed = posts -> { };
     private volatile BooleanSupplier blocked = () -> false;
     private volatile Supplier<Instant> clock = Instant::now;
+    private volatile ru.rainedev.raine.config.Config.ChannelPost post = DEFAULT_POST;
     private volatile Instant lastPublished = Instant.EPOCH;
 
     public ChannelImpulse(LlmClient llm, Supplier<String> systemPrompt, RandomGenerator random) {
@@ -87,13 +86,27 @@ public final class ChannelImpulse implements AutoCloseable {
     }
 
     /** Последние её посты: после перезапуска копилка повторов пуста, а лента остаётся. */
-    public void recentPosts(Supplier<String> posts) {
+    public void recentPosts(Supplier<List<String>> posts) {
         this.recentPosts = posts;
+    }
+
+    /**
+     * Куда сдать прочитанную ленту, чтобы проверка повторов знала о ней до
+     * публикации: канал могли с запуска ни разу не открыть, а сравнение с пустой
+     * памятью не остановит повтор.
+     */
+    public void seeding(java.util.function.Consumer<List<String>> seeder) {
+        this.seed = seeder;
     }
 
     /** Пока она отдыхает или канал недоступен, порыв проходит мимо. */
     public void blockedWhen(BooleanSupplier blocked) {
         this.blocked = blocked;
+    }
+
+    /** Частота порыва из настроек: при сборке и при перечитывании конфига. */
+    public void frequency(ru.rainedev.raine.config.Config.ChannelPost frequency) {
+        this.post = frequency;
     }
 
     /** Часы: кулдаун и момент публикации отсчитываются по ним, в проверках они свои. */
@@ -107,13 +120,14 @@ public final class ChannelImpulse implements AutoCloseable {
             return;
         }
         scheduleNext();
-        log.info("Порывы в свой канал: через {}–{} часов, примерно в каждом четвёртом случае",
-                MIN_HOURS, MAX_HOURS);
+        log.info("Порывы в свой канал: через {}–{} часов, примерно в {} случаев",
+                post.minHours(), post.maxHours(), Math.round(post.chance() * 100) + "%");
     }
 
     /** Ровный интервал читался бы как расписание, поэтому каждый раз новый. */
     long nextDelayMinutes() {
-        return TimeUnit.HOURS.toMinutes(MIN_HOURS + random.nextInt(MAX_HOURS - MIN_HOURS + 1));
+        return TimeUnit.HOURS.toMinutes(post.minHours()
+                + random.nextInt(post.maxHours() - post.minHours() + 1));
     }
 
     private void scheduleNext() {
@@ -143,10 +157,12 @@ public final class ChannelImpulse implements AutoCloseable {
             log.debug("Свой канал свеж после публикации — порыв проходит мимо");
             return;
         }
-        if (random.nextDouble() >= CHANCE) {
+        if (random.nextDouble() >= post.chance()) {
             return;
         }
-        String post = compose();
+        List<String> written = fit(recentPosts.get());
+        seed.accept(written);
+        String post = compose(written);
         if (post.isEmpty()) {
             return;
         }
@@ -160,9 +176,34 @@ public final class ChannelImpulse implements AutoCloseable {
                 ErrorNote.of(answer == null ? "публикация ничего не ответила" : answer));
     }
 
-    /** Пора ли пробовать: с последней вышедшей публикации должно пройти шесть часов. */
+    /**
+     * Сколько букв прежних постов показывать порыву и срезается список по границе
+     * поста, а не по символу: оборванная фраза в списке «что ты уже писала»
+     * читается как чужой недописанный пост.
+     */
+    static final int FEED_LIMIT = 1200;
+
+    static List<String> fit(List<String> posts) {
+        List<String> kept = new java.util.ArrayList<>();
+        int length = 0;
+        for (String post : posts) {
+            if (post.isBlank()) {
+                continue;
+            }
+            // стоп, а не пропуск: список читается как хвост ленты, а дырка посередине
+            // выглядит так, будто она о том посте забыла
+            if (length + post.length() > FEED_LIMIT) {
+                break;
+            }
+            length += post.length();
+            kept.add(post.strip());
+        }
+        return kept;
+    }
+
+    /** Пора ли пробовать: с последней вышедшей публикации должен пройти минимальный срок. */
     boolean cooldownExpired() {
-        return Duration.between(lastPublished, clock.get()).compareTo(COOLDOWN) >= 0;
+        return Duration.between(lastPublished, clock.get()).compareTo(Duration.ofHours(post.minHours())) >= 0;
     }
 
     /**
@@ -171,11 +212,11 @@ public final class ChannelImpulse implements AutoCloseable {
      *
      * @return текст поста или пустая строка, если публиковать нечего
      */
-    String compose() {
-        String written = recentPosts.get();
-        String prompt = PROMPT.formatted(written.isBlank()
+    String compose(List<String> written) {
+        String prompt = PROMPT.formatted(written.isEmpty()
                 ? ""
-                : "  - <your_recent_posts>\n" + Markup.body(written).strip() + "\n    </your_recent_posts>");
+                : "  - <your_recent_posts>\n" + Markup.body(String.join("\n", written)).strip()
+                        + "\n    </your_recent_posts>");
         ChatResponse response = llm.chat(systemPrompt.get(), List.of(Message.user(prompt)), null);
         String text = response.text() == null ? "" : response.text().strip();
         // «#none» — её собственный отказ писать, а длиннее поста Telegram не

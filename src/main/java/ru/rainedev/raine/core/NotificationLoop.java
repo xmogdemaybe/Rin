@@ -439,7 +439,8 @@ public final class NotificationLoop {
      * либо поверх живого разговора, либо через минуту после того, как она сама
      * всё сказала.
      */
-    boolean talkedRecently() {
+    /** Порывы — и разговорный, и в свой канал — молчат, пока переписка жива. */
+    public boolean talkedRecently() {
         return talkedAgo(IMPULSE_QUIET);
     }
 
