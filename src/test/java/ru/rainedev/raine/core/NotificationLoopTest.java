@@ -960,4 +960,87 @@ class NotificationLoopTest {
         assertTrue(loop.context().size() > before.size(), "сказанное остаётся в истории");
         assertTrue(loop.lastTalkStatus().contains("send_telegram_message"), loop.lastTalkStatus());
     }
+
+    /**
+     * Ход 21:11: стикер, три реакции, подписка — и после каждого шага память
+     * поднималась заново, потому что «последние три сообщения» уже состоят из
+     * ответов тулз. Итог того хода — 112 077 токенов на одну реакцию.
+     */
+    @Test
+    void memoryIsAskedOnceEvenWhenTheTurnRunsSeveralTools() {
+        List<String> moments = new ArrayList<>();
+        Toolbox tools = new Toolbox(
+                Tool.simple("sticker_send", "Отправляет стикер", arguments -> "Sticker sent."),
+                Tool.simple("react_with_emoji", "Ставит реакцию", arguments -> "Reaction added."),
+                Tool.simple("join_channel", "Подписывается", arguments -> "Joined."));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("sticker_send")), 10));
+        llm.willRespond(withToolCalls(List.of(call("react_with_emoji")), 10));
+        llm.willRespond(withToolCalls(List.of(call("join_channel")), 10));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, tools);
+        loop.memory((ctx, audience) -> {
+            moments.add("вспомнила");
+            return "";
+        });
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(1, moments.size(),
+                "память поднимается один раз за ход, а не после каждого инструмента: " + moments);
+    }
+
+    /** Тот же шаг 1, но без действия: пинк цикла «только вызов инструментов» тоже не поводы вспоминать. */
+    @Test
+    void theToolNudgeDoesNotBringMemoryBack() {
+        List<String> moments = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText("просто текст без вызова"));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.memory((ctx, audience) -> {
+            moments.add("вспомнила");
+            return "";
+        });
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(1, moments.size(), "на шаге 1 последним стоит подсказка цикла: " + moments);
+    }
+
+    /** Откат ответа низкого качества дописывает в контекст реплику цикла — тот же случай. */
+    @Test
+    void theLowQualityRollbackDoesNotBringMemoryBack() {
+        List<String> moments = new ArrayList<>();
+        Toolbox tools = new Toolbox(Tool.simple("send_telegram_message", "Отправляет", arguments -> {
+            throw new LowQualityException("слишком длинно, напиши короче");
+        }));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, tools);
+        loop.memory((ctx, audience) -> {
+            moments.add("вспомнила");
+            return "";
+        });
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(1, moments.size(), "после отката память не возвращается: " + moments);
+    }
+
+    /** В 17:19:53 страницы дневника вклеились в ответ тулзы, и настоящий ответ уехал в конец пяти килобайт. */
+    @Test
+    void memoryNeverGoesInsideAToolResultOrHerOwnLine() {
+        assertEquals(-1, NotificationLoop.recallTarget(List.of()), "пустой контекст — подмешивать некуда");
+        assertEquals(0, NotificationLoop.recallTarget(List.of(Message.user("тебе написали"))));
+        assertEquals(-1, NotificationLoop.recallTarget(List.of(
+                Message.user("тебе написали"), Message.toolResult("call-1", "Sticker sent."))),
+                "память не прячет ответ инструмента");
+        assertEquals(-1, NotificationLoop.recallTarget(List.of(Message.assistant("- thought: ок"))),
+                "и не вклеивается в её же реплику");
+    }
 }

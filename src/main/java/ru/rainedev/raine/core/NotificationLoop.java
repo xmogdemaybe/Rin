@@ -634,8 +634,15 @@ public final class NotificationLoop {
         boolean recallMemories = turn.recall;
         for (int step = turn.step; step < MAX_STEPS_PER_NOTIFICATION; step++) {
             turn.step = step;
-            if (!turn.prepared && recallMemories) {
+            if (recallMemories) {
+                // память поднимается один раз за ход — на шаге 0, по входящему
+                // сообщению. На шаге 1 и дальше «последние три сообщения» — это
+                // уже мысли модели и ответы тулз, запрос выходит другим, и
+                // каждый шаг вытаскивал новые страницы: 112 077 токенов на одну
+                // реакцию — они же
                 recallIntoContext();
+                recallMemories = false;
+                turn.recall = false;
             }
             // набор пересобирается каждый шаг: инструменты появляются по ходу дела.
             // открытие чата добавляет отправку — со снимком, снятым заранее, её бы не было
@@ -706,8 +713,6 @@ public final class NotificationLoop {
                 context.add(response.firstMessage().orElseThrow());
                 context.addAll(e.results());
                 appendToLast("\n" + PARTIAL_NOTE_PREFIX + e.getMessage());
-                turn.recall = false;
-                recallMemories = false;
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
                     endTurn(turn);
@@ -736,12 +741,6 @@ public final class NotificationLoop {
             if (!visible.isEmpty()) {
                 turn.lastAction = visible;
             }
-
-            // после отправки сообщения за воспоминаниями не ходим: подмешанные между
-            // репликами, они сбивают мысль, и вместо связного ответа выходит поток
-            // случайных фактов
-            recallMemories = calls.stream().noneMatch(call -> "send_telegram_message".equals(call.name()));
-            turn.recall = recallMemories;
 
             if (calls.stream().anyMatch(call -> finishes(notification, tools, call))) {
                 reportCost(startedAt, spentTokens, step + 1);
@@ -903,14 +902,36 @@ public final class NotificationLoop {
                 from != null && from.source() == Source.OWNER_DM);
     }
 
-    /** Воспоминания встают перед последним сообщением — как будто вспомнилось до ответа. */
+    /** Воспоминания встают перед последним сообщением человека — как будто вспомнилось до ответа. */
     private void recallIntoContext() {
+        int at = recallTarget(context);
+        if (at < 0) {
+            return;
+        }
         String recalled = memory.recall(context, audience);
         if (recalled.isEmpty()) {
             return;
         }
+        Message last = context.get(at);
+        context.set(at, last.withContent(recalled + last.content()));
+    }
+
+    /**
+     * Куда подмешивать память: перед последним сообщением человека.
+     * <p>
+     * Ответ инструмента и реплика модели — не её место: вклеенная внутрь
+     * {@code role=tool}, страница дневника прятала настоящий ответ тулзы в
+     * конце пятикилобайтового сообщения, и следующий шаг модель решала так,
+     * будто действие уже выполнено.
+     *
+     * @return индекс сообщения или -1, если подмешивать не во что
+     */
+    static int recallTarget(List<Message> context) {
+        if (context.isEmpty()) {
+            return -1;
+        }
         Message last = context.getLast();
-        context.set(context.size() - 1, last.withContent(recalled + last.content()));
+        return last.role() == Message.Role.USER ? context.size() - 1 : -1;
     }
 
     /** wait и pause доступны всегда: иначе ход невозможно закончить. */
