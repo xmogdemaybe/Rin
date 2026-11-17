@@ -397,6 +397,12 @@ public final class RaineApp implements AutoCloseable {
             // наводки владельца живут ровно сколько разговор: с новым контекстом
             // старые ссылки права писать первой больше не дают
             tools.leads().clear();
+            // полка догоняет то, что она сохранила и открыла за разговор.
+            // В сторонней нити и без зрения: сброс контекста не имеет права
+            // ждать, пока перебирают паки
+            if (config.behaviour().stickers()) {
+                Thread.ofVirtual().name("rin-shelf").start(tools.stickers()::refresh);
+            }
         });
 
         // ход закончен — выходим из чатов, в которые заходили
@@ -473,9 +479,18 @@ public final class RaineApp implements AutoCloseable {
             if (fresh.characterGrowthEnabled()) {
                 growth.pass(() -> wokeUp.getAsBoolean() || !settings.current().characterGrowthEnabled());
             }
+            // стикеры досматривают той же ночью: днём на это нет времени,
+            // а ночью тот же просмотр ничего не срывает
+            if (fresh.behaviour().stickers() && fresh.stickerWarmup().enabled()) {
+                tools.stickers().warmPacks(fresh.stickerWarmup().limit(),
+                        () -> wokeUp.getAsBoolean() || !settings.current().stickerWarmup().enabled());
+            }
         });
         log.info("Пересмотр памяти во сне: {}", config.sleepConsolidation() ? "включён" : "выключен");
         log.info("Рост личности: {}", config.characterGrowthEnabled() ? "включён" : "выключен");
+        log.info("Ночной досмотр стикеров: {}", config.stickerWarmup().enabled()
+                ? "до %d стикеров за ночь".formatted(config.stickerWarmup().limit())
+                : "выключен");
         log.info("Счёт доверия: {}", config.trustLedgerEnabled() ? "ведётся" : "не ведётся");
 
         // порыв адресован владельцу, поэтому его личка открывается на шаге 0:

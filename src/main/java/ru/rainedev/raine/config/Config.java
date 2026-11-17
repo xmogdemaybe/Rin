@@ -37,6 +37,7 @@ public record Config(
         boolean channelsPostingEnabled,
         String ownChannel,
         ChannelPost channelPost,
+        StickerWarmup stickerWarmup,
         boolean sleepConsolidation,
         boolean characterGrowthEnabled,
         boolean trustLedgerEnabled,
@@ -220,6 +221,26 @@ public record Config(
         }
     }
 
+    /**
+     * Ночной досмотр установленных стикерпаков во время сна.
+     * <p>
+     * Паки пополняются когда угодно, а разглядывать их в разговоре дорого:
+     * ночью тот же просмотр ничего не срывает. Лимит держит потолок свежих
+     * просмотров за ночь, чтобы жадный до новых паков персонаж не выжег квоту
+     * до утра.
+     *
+     * @param enabled досматривать ли паки ночью
+     * @param limit   сколько стикеров за ночь разглядеть заново
+     */
+    public record StickerWarmup(boolean enabled, int limit) {
+        public StickerWarmup {
+            if (enabled && limit < 1) {
+                throw new IllegalArgumentException(
+                        "sticker_night_warmup_limit: за ночь стоит досматривать хотя бы один стикер, а не " + limit);
+            }
+        }
+    }
+
     private static final Path DEFAULT_FILE = Path.of("config.properties");
 
     public static Path defaultFile() {
@@ -333,7 +354,13 @@ public record Config(
                         s.integer("channel_impulse_max_hours", 8,
                                 "до какого срока в часах разбегается ожидание; ровный срок читается как расписание"),
                         s.fraction("channel_impulse_chance", 0.25,
-                                "какая доля попыток кончается постом; остальное — молчание")),                s.flag("sleep_consolidation", false, "пересматривать ли память во сне"),
+                                "какая доля попыток кончается постом; остальное — молчание")),
+                new StickerWarmup(
+                        s.flag("sticker_night_warmup_enabled", true,
+                                "досматривать ли во сне стикеры из установленных паков, до которых не дошло зрение"),
+                        s.integer("sticker_night_warmup_limit", 20,
+                                "сколько таких стикеров разглядеть за одну ночь")),
+                s.flag("sleep_consolidation", false, "пересматривать ли память во сне"),
                 s.flag("character_growth_enabled", false,
                         "расти ли характером: днём она оставляет о себе заметки, ночью заметки закрепляются"),
                 s.flag("trust_ledger_enabled", true,

@@ -14,6 +14,15 @@ public final class MessageContent {
     private MessageContent() {}
 
     public static String describe(TdApi.MessageContent content) {
+        return describe(content, setId -> "");
+    }
+
+    /**
+     * @param packs короткое имя пака по его номеру — пустая строка, если имя
+     *              неизвестно; без него стикер нечем добавить в свои
+     */
+    public static String describe(TdApi.MessageContent content,
+                                  java.util.function.LongFunction<String> packs) {
         // свободный текст сообщений проходит через Markup: он приходит от
         // посторонних людей и не должен закрывать блоки переписки
         return switch (content) {
@@ -30,7 +39,8 @@ public final class MessageContent {
             // id обязателен: без него стикер не забрать себе и не отправить потом,
             // а взять его больше неоткуда — эмодзи стикер не опознаёт
             case TdApi.MessageSticker sticker ->
-                    "[стикер sticker_id=%d] %s".formatted(sticker.sticker.id, Markup.body(sticker.sticker.emoji));
+                    "[стикер sticker_id=%d%s] %s".formatted(sticker.sticker.id,
+                            packMark(packs, sticker.sticker.setId), Markup.body(sticker.sticker.emoji));
             case TdApi.MessageAudio audio ->
                     withCaption("[аудио] " + Markup.body(audio.audio.title), audio.caption);
             case TdApi.MessageDocument document -> withCaption(
@@ -218,5 +228,19 @@ public final class MessageContent {
     private static String withCaption(String prefix, TdApi.FormattedText caption) {
         return caption == null || caption.text.isEmpty()
                 ? prefix : prefix + "\n" + Markup.body(caption.text);
+    }
+
+    /**
+     * Имя пака, если оно уже известно: присланный стикер — единственный случай,
+     * где по нему просят «добавь этот стикерпак», а {@code #sticker_pack}
+     * вызывается коротким именем из ссылки, не номером.
+     */
+    private static String packMark(java.util.function.LongFunction<String> packs, long setId) {
+        if (setId == 0) {
+            return "";
+        }
+        String name = packs.apply(setId);
+        String safe = name == null ? "" : Markup.attribute(name);
+        return safe.isEmpty() ? "" : " pack=\"" + safe + '"';
     }
 }

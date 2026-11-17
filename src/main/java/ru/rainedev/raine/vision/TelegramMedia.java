@@ -891,7 +891,7 @@ public final class TelegramMedia implements MediaDescriber {
         if (file.isEmpty()) {
             return stickerFallback(sticker);
         }
-        if (!budget.allows(vision.known(file.get()))) {
+        if (!worthLooking(file.get(), budget)) {
             return "";
         }
         String seen = lookAt(file.get(), Vision.Kind.STICKER, null, false);
@@ -900,23 +900,78 @@ public final class TelegramMedia implements MediaDescriber {
     }
 
     /**
-     * Стикер словами, без обёртки разметки: для компактной полки избранного.
-     * Тот же кэш и та же цена просмотра; расщеплять обратно чужую разметку
-     * регуляркой значило бы завести вторую копию знания о формате.
+     * Тот же взгляд, что и {@link #look}, но без обёртки: полка избранного сама
+     * решает, как ей выглядеть, а свежий взгляд стоит столько же, сколько в списке.
      */
-    public String stickerWords(TdApi.Sticker sticker) {
+    public String stickerWords(TdApi.Sticker sticker, Glimpses budget) {
         if (!sees() || sticker == null) {
             return "";
         }
-        String seen = lookWords(stillOf(sticker));
+        Optional<java.nio.file.Path> file = stillOf(sticker).flatMap(telegram::download);
+        if (file.isEmpty()) {
+            return stickerFallback(sticker);
+        }
+        if (!worthLooking(file.get(), budget)) {
+            return "";
+        }
+        String seen = vision.words(file.get(), Vision.Kind.STICKER, asking(context.get(), null));
+        budget.spent(seen);
         return seen.isBlank() ? stickerFallback(sticker) : seen;
     }
 
-    /** Тот же взгляд, что и {@link #look}, но без обёртки: список сам решает, как ему выглядеть. */
-    private String lookWords(Optional<Integer> fileId) {
-        return fileId.flatMap(telegram::download)
-                .map(file -> vision.words(file, Vision.Kind.STICKER, asking(context.get(), null)))
+    /**
+     * Кэш бесплатен, а свежий взгляд — по бюджету. Файл, который нельзя прочитать
+     * или который недавно не разгляделся, пропускают молча: это не отказ зрения,
+     * и из-за одного такого файла остаток списка или ночной проход не обрывают.
+     */
+    private boolean worthLooking(java.nio.file.Path file, Glimpses budget) {
+        boolean cached = vision.known(file);
+        return budget.allows(cached) && (cached || !vision.unusable(file));
+    }
+
+    /**
+     * Путь к файлу стикера, если он уже лежит на диске. Ни закачки, ни зрения:
+     * так полку и ночному досмотру можно перебрать сотни стикеров подряд.
+     */
+    public Optional<java.nio.file.Path> localStickerFile(TdApi.Sticker sticker) {
+        if (sticker == null) {
+            return Optional.empty();
+        }
+        return stillOf(sticker).flatMap(telegram::localPath);
+    }
+
+    /** Разгляден ли стикер уже: по локальному файлу и кэшу, без сети. */
+    public boolean described(TdApi.Sticker sticker) {
+        return sees() && localStickerFile(sticker).filter(vision::known).isPresent();
+    }
+
+    /**
+     * Смотреть нечем до всякой модели: файла нет, он недокачан или недавно
+     * не разгляделся. Ночной досмотр пропускает такие заранее, чтобы не
+     * выкачивать стикер ради заведомо пустого взгляда.
+     */
+    public boolean unviewable(java.nio.file.Path file) {
+        return !sees() || vision.unusable(file);
+    }
+
+    /**
+     * Описание для полки, если оно готово: без скачивания и без обращения к
+     * модели. Пустая строка значит «этого стикера на полке не будет» — список
+     * решает сам, чем её заполнить.
+     */
+    public String shelfWords(TdApi.Sticker sticker) {
+        if (!sees()) {
+            return "";
+        }
+        return localStickerFile(sticker)
+                .map(vision::cachedDescription)
                 .orElse("");
+    }
+
+    /** Имя пака по его номеру — атрибут присланного стикера. */
+    @Override
+    public String packName(long setId) {
+        return telegram.packName(setId);
     }
 
     /**

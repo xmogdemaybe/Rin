@@ -346,6 +346,28 @@ public final class Telegram {
     }
 
     /**
+     * Путь к файлу, если он уже лежит рядом. TDLib отвечает на это по своему
+     * индексу и ничего не качает, поэтому так можно спрашивать про сотни стикеров
+     * подряд: {@link #download} на том же списке выкачала бы их все.
+     */
+    public Optional<java.nio.file.Path> localPath(int fileId) {
+        try {
+            TdApi.GetFile request = new TdApi.GetFile();
+            request.fileId = fileId;
+            TdApi.File file = ask(request);
+            if (file.local == null || !file.local.isDownloadingCompleted
+                    || file.local.path == null || file.local.path.isEmpty()) {
+                return Optional.empty();
+            }
+            java.nio.file.Path path = java.nio.file.Path.of(file.local.path);
+            return java.nio.file.Files.exists(path) ? Optional.of(path) : Optional.empty();
+        } catch (RuntimeException e) {
+            log.debug("Не удалось узнать, скачан ли файл {}: {}", fileId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * История в сообщение не вкладывается: в нём остаются только чат и номер,
      * а содержимое, подпись и плашки спрашиваются по ним отдельно.
      */
@@ -705,6 +727,9 @@ public final class Telegram {
 
     private final Map<Long, StickerRef> stickerFiles = new ConcurrentHashMap<>();
 
+    /** Номера паков, уже переведённые в короткие имена. */
+    private final Map<Long, String> packNames = new ConcurrentHashMap<>();
+
     public void rememberSticker(TdApi.Sticker sticker) {
         if (sticker == null || sticker.sticker == null) {
             return;
@@ -736,11 +761,50 @@ public final class Telegram {
             for (TdApi.Sticker sticker : set.stickers) {
                 rememberSticker(sticker);
             }
+            // память об имени наполняется бесплатно: тот, кто открыл пак, уже
+            // знает, как зовётся каждый его стикер
+            packNames.put(set.id, set.name == null ? "" : set.name);
             return Optional.of(set);
         } catch (RuntimeException e) {
             log.debug("Пак {} не нашёлся: {}", name, e.getMessage());
             return Optional.empty();
         }
+    }
+
+    /** Короткое имя пака по его номеру — то, чем зовут {@code sticker_pack}. */
+    public String packName(long setId) {
+        return packName(packNames, setId, id -> {
+            TdApi.GetStickerSet request = new TdApi.GetStickerSet();
+            request.setId = id;
+            String name = ask(request).name;
+            return Optional.of(name == null ? "" : name);
+        });
+    }
+
+    /**
+     * Имя пака по его номеру — то, чем открывают {@code sticker_pack}.
+     * <p>
+     * Пустой результат тоже попадает в память: стикер из удалённого или чужого
+     * пака прилетает в историю снова и снова, а повторять один и тот же вопрос
+     * Telegram ни к чему.
+     */
+    static String packName(Map<Long, String> memo, long setId,
+                           java.util.function.Function<Long, Optional<String>> ask) {
+        if (setId == 0) {
+            return "";   // стикер без пака: спрашивать не о чем
+        }
+        String known = memo.get(setId);
+        if (known != null) {
+            return known;
+        }
+        String found = "";
+        try {
+            found = ask.apply(setId).orElse("");
+        } catch (RuntimeException e) {
+            log.debug("Пак {} не отозвался: {}", setId, e.getMessage());
+        }
+        memo.put(setId, found);
+        return found;
     }
 
     /**
@@ -759,7 +823,13 @@ public final class Telegram {
         try {
             TdApi.GetInstalledStickerSets request = new TdApi.GetInstalledStickerSets();
             request.stickerType = new TdApi.StickerTypeRegular();
-            return List.of(ask(request).sets);
+            List<TdApi.StickerSetInfo> sets = List.of(ask(request).sets);
+            // имена установленных паков известны из этого же ответа: пока они
+            // в памяти, стикер из любого из них не стоит ни одного запроса
+            for (TdApi.StickerSetInfo set : sets) {
+                packNames.put(set.id, set.name == null ? "" : set.name);
+            }
+            return sets;
         } catch (RuntimeException e) {
             log.debug("Установленные паки недоступны: {}", e.getMessage());
             return List.of();

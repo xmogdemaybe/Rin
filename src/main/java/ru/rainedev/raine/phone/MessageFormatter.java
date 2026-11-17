@@ -395,7 +395,7 @@ public final class MessageFormatter {
         return MessageContent.describe(content);
     }
 
-    private static String content(TdApi.MessageContent content) {
-        return MessageContent.describe(content);
+    private String content(TdApi.MessageContent content) {
+        return MessageContent.describe(content, media::packName);
     }
 }

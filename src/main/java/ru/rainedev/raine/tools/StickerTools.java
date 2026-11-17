@@ -2,6 +2,7 @@ package ru.rainedev.raine.tools;
 
 import it.tdlight.jni.TdApi;
 import java.util.List;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.Tool;
@@ -29,6 +30,15 @@ public final class StickerTools {
     /** Сколько из них влезает в снимок чата: дальше список становится шумом. */
     static final int FAVOURITES = 18;
 
+    /** Столько мест полки отдаётся ротации из установленных паков. */
+    static final int ROTATION = 8;
+
+    /** Столько мест остаётся избранному и недавнему. */
+    static final int SHELF_HEAD = FAVOURITES - ROTATION;
+
+    /** Сколько имён паков влезает в строку: дальше она перестаёт читаться. */
+    static final int PACK_NAMES = 12;
+
     private final Telegram telegram;
     private final TelegramActions actions;
     private final ChatScreen screen;
@@ -36,6 +46,19 @@ public final class StickerTools {
 
     /** Готовый блок избранного для снимка чата; пуст, пока не прогрето. */
     private volatile String favourites = "";
+
+    /** Разгляденные стикеры установленных паков: из них берётся ротация полки. */
+    private volatile List<TdApi.Sticker> pool = List.of();
+
+    /** Короткие имена установленных паков — тем и зовут #sticker_pack. */
+    private volatile String packNames = "";
+
+    /** Сколько стикеров встало на полку: об этом докладывает прогрев. */
+    private volatile int shelfSize;
+
+    /** Сдвиг окна ротации: следующий заход берёт других стикеров паков. */
+    private final java.util.concurrent.atomic.AtomicLong rotationMark =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /** Отправлять стикер можно ровно туда же, куда и обычное сообщение. */
     private java.util.function.LongPredicate allowed = chatId -> true;
@@ -71,18 +94,192 @@ public final class StickerTools {
      * @return сколько стикеров встанет в снимок чата
      */
     public int warmUp() {
-        List<TdApi.Sticker> saved = telegram.savedStickers(LIMIT);
-        // избранное у аккаунта бывает пустым, а паки стоят: добрать из первого
-        // установленного дешевле, чем угадывать по одному эмодзи
-        List<TdApi.Sticker> known = saved.size() >= FAVOURITES ? saved
-                : telegram.stickerSets().stream().findFirst()
-                        .flatMap(set -> telegram.stickerSet(set.name))
-                        .map(set -> mergeFresh(saved, List.of(set.stickers)))
-                        .orElse(saved);
-        List<TdApi.Sticker> shown = known.stream().limit(FAVOURITES).toList();
-        favourites = favouritesBlock(shown, FAVOURITES,
-                sticker -> media == null ? "" : media.stickerWords(sticker));
-        return shown.size();
+        build(true, true);
+        return shelfSize;
+    }
+
+    /**
+     * Пересборка на ходу: после сохранённого стикера, открытого пака, ночного
+     * досмотра и сброса контекста.
+     * <p>
+     * Только по памяти и по тому, что уже лежит на диске: полка меняется
+     * посреди разговора, и платить за неё скачиванием и зрением незачем.
+     */
+    public void refresh() {
+        build(false, false);
+    }
+
+    /** Пересборка, когда состав паков мог измениться: их пак открыли или досмотрели. */
+    public void reshelve() {
+        build(false, true);
+    }
+
+    /**
+     * Ночной досмотр установленных паков: разглядеть то, до чего в разговоре
+     * не дошло зрение. Днём такой просмотр стоит минуту молчания на пак,
+     * ночью — ничего.
+     *
+     * @param limit   сколько стикеров за ночь разглядеть
+     * @param wokeUp  проснулась ли: сверяется перед каждым шагом
+     * @return сколько свежих просмотров зрение потратило
+     */
+    public int warmPacks(int limit, java.util.function.BooleanSupplier wokeUp) {
+        if (media == null || limit < 1) {
+            return 0;   // без глаз досматривать нечем, а ноль за ночь — не досмотр
+        }
+        List<List<TdApi.Sticker>> packs = new java.util.ArrayList<>();
+        for (TdApi.StickerSetInfo info : telegram.stickerSets()) {
+            telegram.stickerSet(info.name).ifPresent(set -> packs.add(List.of(set.stickers)));
+        }
+        int looked = warmPacks(packs, new Night(), limit, wokeUp);
+        if (looked > 0) {
+            log.info("Стикеров за ночь досмотрено: {}", looked);
+            // досмотренное встаёт на полку сразу: утром оно должно быть видно без запроса
+            reshelve();
+        }
+        return looked;
+    }
+
+    /** Чем ночной проход смотрит один стикер: шов нужен проверкам лимита и отсечки. */
+    interface Sight {
+        /** Уже разгляден: кэш ничего не стоит. */
+        boolean ready(TdApi.Sticker sticker);
+
+        /** Смотреть нечем до всякой модели: файла нет, он недокачан или недавно не разгляделся. */
+        boolean blocked(TdApi.Sticker sticker);
+
+        /** Свежий взгляд: скачивает и просит зрение. */
+        void look(TdApi.Sticker sticker, Glimpses budget);
+    }
+
+    /** Досмотр через зрение и файлы: тот же {@link Sight}, но без швов. */
+    private final class Night implements Sight {
+        @Override
+        public boolean ready(TdApi.Sticker sticker) {
+            return media.described(sticker);
+        }
+
+        @Override
+        public boolean blocked(TdApi.Sticker sticker) {
+            return media.localStickerFile(sticker).filter(media::unviewable).isPresent();
+        }
+
+        @Override
+        public void look(TdApi.Sticker sticker, Glimpses budget) {
+            media.describeSticker(sticker, budget);
+        }
+    }
+
+    /**
+     * Ночной проход по установленным пакам.
+     * <p>
+     * Описанное и недоступное локально пропускают молча, без закачки; лимит
+     * считают только по свежим взглядам. Дальнейшие взгляды закрывает само
+     * зрение: после первого отказа {@code Glimpses} больше ничего не разрешает, и
+     * проход сам останавливается — биться об исчерпанную квоту до утра
+     * означает сотни оплаченных попыток впустую.
+     *
+     * @return сколько свежих взглядов потрачено
+     */
+    static int warmPacks(List<List<TdApi.Sticker>> packs, Sight sight, int limit,
+                         java.util.function.BooleanSupplier wokeUp) {
+        Glimpses budget = new Glimpses(limit);
+        for (List<TdApi.Sticker> pack : packs) {
+            for (TdApi.Sticker sticker : pack) {
+                if (wokeUp.getAsBoolean() || !budget.allows(false)) {
+                    return budget.spent();
+                }
+                if (sight.ready(sticker) || sight.blocked(sticker)) {
+                    continue;
+                }
+                sight.look(sticker, budget);
+            }
+        }
+        return budget.spent();
+    }
+
+    /**
+     * @param look      досматривать ли зрением недостающее (только на старте)
+     * @param withPacks перебирать ли установленные паки заново
+     */
+    private void build(boolean look, boolean withPacks) {
+        if (withPacks) {
+            List<TdApi.StickerSetInfo> sets = telegram.stickerSets();
+            packNames = namesOf(sets);
+            pool = poolOf(sets);
+        }
+        List<TdApi.Sticker> head = telegram.savedStickers(LIMIT);
+        List<TdApi.Sticker> mine = head.size() > SHELF_HEAD ? head.subList(0, SHELF_HEAD) : head;
+        List<TdApi.Sticker> shown = mergeFresh(mine, rotated(pool)).stream().limit(FAVOURITES).toList();
+        shelfSize = shown.size();
+        // платный взгляд положен только тому, что встанет на полку, и только на
+        // старте: перебирать зрением весь пак заранее незачем
+        Glimpses budget = new Glimpses(look ? GLIMPSES : 0);
+        favourites = favouritesBlock(shown, FAVOURITES, sticker -> {
+            if (media == null) {
+                return "";
+            }
+            String ready = media.shelfWords(sticker);
+            if (!ready.isBlank() || !look) {
+                return ready;   // на ходу — что есть на диске, то и полка
+            }
+            return budget.allows(false) ? media.stickerWords(sticker, budget) : "";
+        }, packNames);
+    }
+
+    /**
+     * Ротация полки живёт разгляденными стикерами паков: чего нет в кэше, то на
+     * полку не попадёт, а досмотрит его ночной проход. Заодно каждый стикер
+     * пака попадает в реестр файлов — без него {@code sticker_send} отказал бы
+     * по строчке, взятой с этой же полки.
+     */
+    private List<TdApi.Sticker> poolOf(List<TdApi.StickerSetInfo> sets) {
+        if (media == null) {
+            return List.of();
+        }
+        List<TdApi.Sticker> ready = new java.util.ArrayList<>();
+        for (TdApi.StickerSetInfo info : sets) {
+            Optional<TdApi.StickerSet> found = telegram.stickerSet(info.name);
+            if (found.isEmpty()) {
+                continue;
+            }
+            for (TdApi.Sticker sticker : found.get().stickers) {
+                if (media.described(sticker)) {
+                    ready.add(sticker);
+                }
+            }
+        }
+        return List.copyOf(ready);
+    }
+
+    private List<TdApi.Sticker> rotated(List<TdApi.Sticker> ready) {
+        return rotated(ready, rotationMark.getAndIncrement());
+    }
+
+    /**
+     * Полка берёт следующий кусок списка, а не тот, что показала в прошлый раз:
+     * иначе восемь мест вечно держала бы одна и та же восьмёрка.
+     */
+    static List<TdApi.Sticker> rotated(List<TdApi.Sticker> ready, long mark) {
+        if (ready.isEmpty()) {
+            return List.of();
+        }
+        List<TdApi.Sticker> ordered = ready.stream()
+                .sorted(java.util.Comparator.comparingLong(sticker -> sticker.id))
+                .toList();
+        int start = (int) (Math.floorMod(mark, ordered.size()));
+        List<TdApi.Sticker> picked = new java.util.ArrayList<>();
+        for (int taken = 0; taken < ROTATION && taken < ordered.size(); taken++) {
+            picked.add(ordered.get((start + taken) % ordered.size()));
+        }
+        return picked;
+    }
+
+    /** Имена установленных паков для строки на полке. */
+    static String namesOf(List<TdApi.StickerSetInfo> sets) {
+        return String.join(", ", sets.stream().map(set -> set.name)
+                .filter(name -> name != null && !name.isBlank())
+                .limit(PACK_NAMES).toList());
     }
 
     /**
@@ -92,6 +289,16 @@ public final class StickerTools {
      */
     static String favouritesBlock(List<TdApi.Sticker> stickers, int cap,
                                   java.util.function.Function<TdApi.Sticker, String> describe) {
+        return favouritesBlock(stickers, cap, describe, "");
+    }
+
+    /**
+     * @param packs короткие имена установленных паков; без них она не знает,
+     *              что у неё есть и что открывать {@code #sticker_pack}
+     */
+    static String favouritesBlock(List<TdApi.Sticker> stickers, int cap,
+                                  java.util.function.Function<TdApi.Sticker, String> describe,
+                                  String packs) {
         List<TdApi.Sticker> shown = stickers.stream().limit(cap).toList();
         if (shown.isEmpty()) {
             return "";
@@ -110,6 +317,10 @@ public final class StickerTools {
         if (stickers.size() > shown.size()) {
             out.append("  %d more are yours too — #sticker_list shows them all.\n"
                     .formatted(stickers.size() - shown.size()));
+        }
+        if (packs != null && !packs.isBlank()) {
+            out.append("Installed packs: ").append(Markup.body(packs))
+                    .append(". Open one with #sticker_pack(name) to keep its stickers.\n");
         }
         return out.append("</favourite_stickers>\n").toString();
     }
@@ -234,6 +445,9 @@ public final class StickerTools {
                         telegram.installStickerSet(set.id);
                     }
                     log.info("Пак {} ({}) открыт, стикеров: {}", set.name, set.title, set.stickers.length);
+                    // открытый пак сразу попадает и на полку, и в строку имён:
+                    // иначе «я его добавила» снова останется незакрытым обещанием
+                    reshelve();
                     List<TdApi.Sticker> shown = set.stickers.length > LIMIT
                             ? List.of(set.stickers).subList(0, LIMIT)
                             : List.of(set.stickers);
@@ -331,6 +545,9 @@ public final class StickerTools {
                     }
                     actions.saveSticker(sticker.get());
                     log.info("Стикер {} сохранён", stickerId);
+                    // полка обязана догнать сохранённое: иначе «забрала себе»
+                    // оборачивается «такого стикера у меня нет» в том же разговоре
+                    refresh();
                     // сохранить молча — странно: человек в такой момент говорит «о, забрала себе»
                     return "Sticker saved. Tell them you liked it and kept it.";
                 });
