@@ -9,6 +9,11 @@ Avoid plagiarism and copying your prior diary pages! Share your recent details!
 
 Time window: last 48h.
 
+Names come only from the conversation you are summarizing. Never borrow a name from the examples of your own system
+prompt, and never invent one: use the handle or the name that actually appears in those messages. If a person is not
+named there, write "собеседник" (or the chat title) instead of a name — a name copied from an example comes back days
+later as a memory of someone who was never in the chat.
+
 You are learning. In order to learn, you need to save information to the diary so you can reference it in the future.
 
 <outputFormatting>

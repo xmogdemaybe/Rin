@@ -46,10 +46,37 @@ final class TextualToolCalls {
     /**
      * Хвосты служебной разметки вызовов. Модель дописывает их и рядом с
      * настоящими tool_calls, и когда вызов не состоялся; оставленные, они
-     * разъезжаются по контексту и потом показываются в «Мысли».
+     * разъезжаются по контексту и потом показываются в «Мысли». Обёртки
+     * `tools`/`args` добавлены по дампу 23:59:04: целые блоки вызовов оттуда
+     * разбираются, а пустая обёртка обязана исчезнуть вместе с ними.
      */
     private static final Pattern DANGLING =
-            Pattern.compile("</?call>|</?output>|</?tool_call>|</?function_call>");
+            Pattern.compile("</?call>|</?output>|</?tool_call>|</?function_call>"
+                    + "|</?tools>|</?args>|<tool\\s[^>]*>|</?tool>|<arg[^>]*>|</arg>");
+
+    /**
+     * `- call: send_telegram_message(text="…")` — вызов свёрнут в пункт списка,
+     * как поля `- thought:` (дамп 23:58:12). Ни слова «tool call», ни `<call:`
+     * в нём нет, и без этого разбора шаг сгорал целиком.
+     */
+    private static final Pattern DASH_CALL = Pattern.compile(
+            "(?m)^[ \\t]*-[ \\t]*call[ \\t]*:[ \\t]*([A-Za-z0-9_]+)[ \\t]*\\((.*)\\)[ \\t]*$");
+
+    /** Та же строка-мусор рядом: модель включает себе право на опечатки. */
+    private static final Pattern DASH_JUNK = Pattern.compile(
+            "(?m)^[ \\t]*-[ \\t]*allow_typos[ \\t]*:.*\\n?");
+
+    /** `<tool name="имя"> … </tool>` из блока `<tools>` (дамп 23:59:04). */
+    private static final Pattern XML_TOOL = Pattern.compile(
+            "<tool[ \\t]+name=\"([A-Za-z0-9_]+)\"[ \\t]*>([\\s\\S]*?)</tool>");
+
+    /** `<arg name="ключ">значение</arg>` внутри такого инструмента. */
+    private static final Pattern XML_ARG = Pattern.compile(
+            "<arg[ \\t]+name=\"([A-Za-z0-9_]+)\"[ \\t]*>([\\s\\S]*?)</arg>");
+
+    /** Пара `ключ="значение"` или `ключ=текст` в аргументах вызова. */
+    private static final Pattern NAMED_PAIR = Pattern.compile(
+            "([A-Za-z_][A-Za-z0-9_]*)[ \\t]*=[ \\t]*(\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|[^,]*)");
 
     private TextualToolCalls() {}
 
@@ -102,15 +129,96 @@ final class TextualToolCalls {
         if (text == null || text.isEmpty()) {
             return new Parsed(text == null ? "" : text, List.of());
         }
-        Parsed tagged = taggedCalls(text);
-        return lineCalls(tagged.text(), tagged.calls());
+        Parsed xml = xmlCalls(text);
+        Parsed tagged = taggedCalls(xml.text(), xml.calls());
+        Parsed lines = lineCalls(tagged.text(), tagged.calls());
+        Parsed dashes = dashCalls(lines.text(), lines.calls());
+        if (dashes.calls().isEmpty()) {
+            return dashes;
+        }
+        // вызовы разобраны — от их разметки не должно остаться хвостов: блоки
+        // ушли вместе со своими строками, а обёртка <tools> жила отдельно
+        return new Parsed(DANGLING.matcher(dashes.text()).replaceAll("").strip(), dashes.calls());
     }
 
-    private static Parsed taggedCalls(String text) {
-        if (!text.contains("<call:")) {
+    /**
+     * Блок `<tools><tool name="имя"><args><arg name="ключ">значение</arg></args></tool></tools>`.
+     * Значения остаются строками: числа длиннее 2^53 через double теряют младшие
+     * цифры, а `sticker_id` — именно такой.
+     */
+    private static Parsed xmlCalls(String text) {
+        Matcher matcher = XML_TOOL.matcher(text);
+        List<ToolCall> calls = new ArrayList<>();
+        StringBuilder kept = new StringBuilder();
+        int cursor = 0;
+        while (matcher.find()) {
+            ObjectNode args = MAPPER.createObjectNode();
+            Matcher arg = XML_ARG.matcher(matcher.group(2));
+            while (arg.find()) {
+                args.put(arg.group(1), arg.group(2).strip());
+            }
+            calls.add(new ToolCall("text-call-" + UUID.randomUUID(), "function",
+                    new ToolCall.Function(matcher.group(1), args.toString())));
+            kept.append(text, cursor, matcher.start());
+            cursor = matcher.end();
+        }
+        if (calls.isEmpty()) {
             return new Parsed(text, List.of());
         }
-        List<ToolCall> calls = new ArrayList<>();
+        kept.append(text, cursor, text.length());
+        return new Parsed(kept.toString().strip(), List.copyOf(calls));
+    }
+
+    /**
+     * Строки `- call: имя(ключ="значение", …)`: вызов становится настоящим,
+     * строка уходит из текста вместе с соседней `- allow_typos:`.
+     */
+    private static Parsed dashCalls(String text, List<ToolCall> collected) {
+        Matcher matcher = DASH_CALL.matcher(text);
+        List<ToolCall> calls = new ArrayList<>(collected);
+        StringBuilder kept = new StringBuilder();
+        int cursor = 0;
+        while (matcher.find()) {
+            calls.add(new ToolCall("text-call-" + UUID.randomUUID(), "function",
+                    new ToolCall.Function(matcher.group(1), namedArguments(matcher.group(2)))));
+            kept.append(text, cursor, matcher.start());
+            cursor = endOfLine(text, matcher.end());
+        }
+        if (calls.size() == collected.size()) {
+            return new Parsed(text, collected);
+        }
+        kept.append(text, cursor, text.length());
+        return new Parsed(DASH_JUNK.matcher(kept).replaceAll("").strip(), List.copyOf(calls));
+    }
+
+    /** Аргументы вида `text="привет", photo_filename="1.jpg"`; без кавычек — как есть. */
+    private static String namedArguments(String raw) {
+        ObjectNode args = MAPPER.createObjectNode();
+        Matcher matcher = NAMED_PAIR.matcher(raw.strip());
+        while (matcher.find()) {
+            put(args, matcher.group(1), matcher.group(2).strip());
+        }
+        // у пустого набора ObjectNode.toString() и есть "{}" — отдельная ветка не нужна
+        return args.toString();
+    }
+
+    /** Конец строки вместе с переносом: вызов из списка не оставляет пустой строки. */
+    private static int endOfLine(String text, int from) {
+        int i = skipSpaces(text, from);
+        if (i >= text.length()) {
+            return i;
+        }
+        if (text.startsWith("\r\n", i)) {
+            return i + 2;
+        }
+        return text.charAt(i) == '\n' ? i + 1 : i;
+    }
+
+    private static Parsed taggedCalls(String text, List<ToolCall> collected) {
+        if (!text.contains("<call:")) {
+            return new Parsed(text, collected);
+        }
+        List<ToolCall> calls = new ArrayList<>(collected);
         StringBuilder kept = new StringBuilder();
         int cursor = 0;
         int search = 0;

@@ -347,4 +347,85 @@ class TextualToolCallsTest {
         assertFalse(repaired.text().contains("</output>"), repaired.text());
         assertTrue(repaired.text().contains("- thought: отвечу текстом."), repaired.text());
     }
+
+    /**
+     * Дословный ответ 23:58:12 (18.11): вызов свёрнут в пункт списка, и рядом
+     * служебная строка про опечатки. Тогда шаг 0 сгорел, а сообщение человек не
+     * получил.
+     */
+    private static final String FROM_LOG_DASH = """
+            - thought: Дима пишет, переживает, что я уснула.
+            - emotion: сонная, немного растроганная, мягкая.
+            - to remember: -
+            - intention: ответить, что не сплю еще, и успокоить его.
+            - allow_typos: true
+            - call: send_telegram_message(text="да не сплю я еще, сижу тут")""";
+
+    @Test
+    void theCallWrittenAsListItemIsRead() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG_DASH);
+
+        assertEquals(1, parsed.calls().size(), "вызов из списка должен засчитаться: " + parsed.calls());
+        assertEquals("send_telegram_message", parsed.calls().getFirst().name());
+        assertEquals("{\"text\":\"да не сплю я еще, сижу тут\"}", parsed.calls().getFirst().arguments(),
+                "запятая внутри текста — часть текста, а не новый аргумент");
+        assertFalse(parsed.text().contains("- call:"), "служебная строка съедена: " + parsed.text());
+        assertFalse(parsed.text().contains("allow_typos"), "мусорная строка рядом тоже: " + parsed.text());
+        assertTrue(parsed.text().contains("- intention: ответить"), "намерение остаётся: " + parsed.text());
+    }
+
+    /**
+     * Дословный ответ 23:59:04 (18.11): модель открыла под вызовы отдельный
+     * XML-блок. Ни «tool call», ни `<call:` в нём нет — разборщик их не знал, и
+     * шаг сгорел целиком на 25 560 токенов.
+     */
+    private static final String FROM_LOG_XML = """
+            - thought: Дима допытывается, какая у меня реакция на его арты, и шлет стикеры.
+            - emotion: расслабленная, слегка игривая.
+            - to remember: -
+            - intention: отправить сердечко-стикер в ответ на его настойчивость.
+            <tools>
+            <tool name="sticker_send">
+              <args>
+                <arg name="sticker_id">541175087705903942</arg>
+              </args>
+            </tool>
+            <tool name="send_telegram_message">
+              <args>
+                <arg name="text">ну всё, заслужил сердечко, художник</arg>
+              </args>
+            </tool>
+            </tools>""";
+
+    @Test
+    void theXmlBlockOfCallsIsRead() {
+        TextualToolCalls.Parsed parsed = TextualToolCalls.parse(FROM_LOG_XML);
+
+        assertEquals(2, parsed.calls().size(), "оба вызова из блока: " + parsed.calls());
+        assertEquals(List.of("sticker_send", "send_telegram_message"),
+                parsed.calls().stream().map(ToolCall::name).toList());
+        assertEquals("{\"sticker_id\":\"541175087705903942\"}", parsed.calls().getFirst().arguments(),
+                "двадцатизначный id идёт строкой: через число он теряет младшие цифры");
+        assertEquals("{\"text\":\"ну всё, заслужил сердечко, художник\"}", parsed.calls().get(1).arguments());
+        assertFalse(parsed.text().contains("<tools>"), "обёртка съедена: " + parsed.text());
+        assertFalse(parsed.text().contains("<tool name="), parsed.text());
+        assertFalse(parsed.text().contains("<arg"), parsed.text());
+        assertTrue(parsed.text().contains("- intention: отправить сердечко-стикер"), parsed.text());
+    }
+
+    @Test
+    void theRepairRescuesBothEveningForms() {
+        // проверка на пути, которым идёт живой ответ: repair, а не parse
+        Message dash = new Message(Message.Role.ASSISTANT, FROM_LOG_DASH, List.of(), null, null);
+        ChatResponse fixed = TextualToolCalls.repair(new ChatResponse("id", "model",
+                List.of(new ChatResponse.Choice(0, dash, "stop")), ChatResponse.Usage.EMPTY));
+        assertEquals(1, fixed.toolCalls().size(), "шаг не должен сгорать: " + fixed.toolCalls());
+        assertTrue(fixed.text().contains("- thought:"), fixed.text());
+
+        Message xml = new Message(Message.Role.ASSISTANT, FROM_LOG_XML, List.of(), null, null);
+        ChatResponse fixedXml = TextualToolCalls.repair(new ChatResponse("id", "model",
+                List.of(new ChatResponse.Choice(0, xml, "stop")), ChatResponse.Usage.EMPTY));
+        assertEquals(2, fixedXml.toolCalls().size(), fixedXml.toolCalls().toString());
+        assertFalse(fixedXml.text().contains("<tools>"), fixedXml.text());
+    }
 }

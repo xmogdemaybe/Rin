@@ -267,11 +267,15 @@ class NotificationLoopTest {
         assertEquals(List.of("send_telegram_message"), acted);
     }
 
-    /** Снимок чата с полкой своих стикеров — как его собирает {@code TelegramTools}. */
+    /** Снимок чата с полкой и пояснением — как его собирают TelegramTools и ChatScreen. */
     private static Toolbox screenWithShelf(String marker) {
         return new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
                 You switched to the chat "xmogde" in Telegram. You see last messages:
                 <message message_id="1">привет, %s</message>
+
+                <instructions>
+                You are in private chat with xmogde. Answer as yourself.
+                </instructions>
 
                 <favourite_stickers>
                 Your own stickers. Send one with #sticker_send(sticker_id) — no need to look them up.
@@ -300,6 +304,21 @@ class NotificationLoopTest {
         assertEquals(1, shelves.size(), "полка остаётся одна: " + loop.context());
         assertTrue(shelves.getFirst().contains("свежая"), "и самая свежая: " + shelves);
         assertFalse(shelves.getFirst().contains("прежняя"), "прежний снимок должен остаться без полки: " + shelves);
+        assertEquals(1, withText(loop.context(), "<instructions>"),
+                "пояснение к чату тоже остаётся в одном экземпляре: " + loop.context());
+        assertEquals(1, withText(loop.context(), "</instructions>"), loop.context().toString());
+    }
+
+    /** Сколько сообщений в истории содержат метку. */
+    private static int withText(List<Message> history, String needle) {
+        int hits = 0;
+        for (Message message : history) {
+            String text = message.content();
+            if (text != null && text.contains(needle)) {
+                hits++;
+            }
+        }
+        return hits;
     }
 
     @Test
@@ -326,8 +345,8 @@ class NotificationLoopTest {
                 "его снимка не осталось: " + after);
         for (int i = 0; i < before.size(); i++) {
             String was = before.get(i).content();
-            assertEquals(was == null ? null : ScreenMarkup.stripShelf(was), after.get(i).content(),
-                    "прежнее сообщение изменилось ровно на одну полку, индекс " + i);
+            assertEquals(was == null ? null : ScreenMarkup.stripScreen(was), after.get(i).content(),
+                    "от прежнего сообщения осталась одна обвязка снимка, индекс " + i);
         }
     }
 
@@ -379,6 +398,196 @@ class NotificationLoopTest {
         assertEquals(before, loop.context().size(), "холостой порыв откатан целиком");
         assertTrue(undone[0], "отметки за его пределами сняты");
         assertTrue(memory.injected.isEmpty(), "вспомненное вернулось в выборку: " + memory.injected);
+    }
+
+    @Test
+    void pagesReadOnAPreviousTurnLeaveTheHistory() {
+        // страница, которую модель прочитала и по которой ответила, больше не
+        // нужна в запросе: в 00:07 19.11 такие страницы ездили в контексте по
+        // три хода, а строка журнала про «страниц не осталось» была неправдой
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        RotatingMemory memory = new RotatingMemory();
+        loop.memory(memory);
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        loop.process(new Notification("второй ход", screenWithShelf("свежая")));
+
+        List<String> pages = loop.context().stream()
+                .map(m -> String.valueOf(m.content()))
+                .filter(t -> t.contains("your_diary_page"))
+                .toList();
+        assertEquals(1, pages.size(), "страницы остаются только у текущего хода: " + loop.context());
+        assertEquals(1, withText(loop.context(), "</your_diary_page>"),
+                "закрывающий тег остался только у самой свежей вклейки: " + loop.context());
+        assertTrue(pages.getFirst().contains("страница номер 2"), "и самые свежие: " + pages);
+        assertFalse(pages.getFirst().contains("страница номер 1"), pages.getFirst());
+        assertEquals(0, memory.restores, "прочитанное не возвращается в выборку: " + memory.injected);
+        assertEquals(Set.of(1L, 2L), memory.injected);
+    }
+
+    @Test
+    void aRefusedTurnLeavesNoPagesFromEarlierTurnsEither() {
+        // откат текущего хода плюс зачистка прошлых: после отказа в истории не
+        // должно остаться ни одной страницы дневника
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.alwaysRespond(refused());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.filterRetryPause(Duration.ofMillis(10));
+        RotatingMemory memory = new RotatingMemory();
+        loop.memory(memory);
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        loop.process(new Notification("второй ход", screenWithShelf("свежая")));
+
+        assertTrue(loop.context().stream().noneMatch(m -> String.valueOf(m.content()).contains("your_diary_page")),
+                "ни прочитанных, ни отменённых страниц не осталось: " + loop.context());
+        assertEquals(1, memory.restores, "откатился только текущий ход: " + memory.restores);
+        assertEquals(Set.of(1L), memory.injected, "страница первого хода считает себя прочитанной: " + memory.injected);
+    }
+
+    @Test
+    void servedPingsDoNotRideAlong() {
+        String ping = NotificationLoop.serviceInsertions().getFirst();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText("- thought: надо ответить.\n- intention: послать привет."));
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        assertTrue(loop.context().stream().anyMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+                "промах шага 0 оставил пинк: " + loop.context());
+
+        loop.process(new Notification("второй ход", screenWithShelf("свежая")));
+        assertTrue(loop.context().stream().noneMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+                "отработанный пинк убран из истории: " + loop.context());
+    }
+
+    @Test
+    void theMissedStepHandsItsIntentionToTheNextStep() {
+        // 23:57:55: на шаге 0 модель задумала реакцию, шаг 1 под required поставил
+        // wait — своего черновика она уже не видела
+        String draft = "- thought: надо поддержать.\n- intention: поставить реакцию на его арт.";
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText(draft));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(2, llm.calls);
+        List<Message> second = llm.seenContexts.get(1);
+        assertTrue(second.stream().anyMatch(m -> m.role() == Message.Role.ASSISTANT
+                        && String.valueOf(m.content()).contains("- intention: поставить реакцию")),
+                "шаг 1 должен видеть намерение шага 0: " + second);
+        assertTrue(llm.seenContexts.get(0).stream().noneMatch(m -> m.role() == Message.Role.ASSISTANT),
+                "до промаха черновика в истории не было");
+    }
+
+    /**
+     * Снимок, открытый самой моделью в середине хода, чистит прежние сообщения,
+     * но не трогает их позиции: пинк прошлого хода остаётся на месте, иначе
+     * индекс, который помнит снимок вклейки, уедет и откат вернёт не то сообщение.
+     */
+    @Test
+    void aSnapshotInsideTheTurnKeepsMessagePositions() {
+        String ping = NotificationLoop.serviceInsertions().getFirst();
+        Toolbox choice = new Toolbox(
+                Tool.simple("open", "Открывает чат", arguments -> """
+                        You switched to the chat "xmogde" in Telegram.
+                        <message message_id="9">привет, свежая</message>
+                        <instructions>
+                        You are in private chat with xmogde. Answer as yourself.
+                        </instructions>
+                        <favourite_stickers>
+                          - sticker_id="1" emoji="❤️": Chibi anime character with white hair.
+                        </favourite_stickers>"""),
+                // вторая тулза не даёт циклу открыть чат молча на входе хода
+                Tool.simple("ignore", "Игнорирует", arguments -> "ok"));
+
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText("- thought: надо ответить.\n- intention: послать привет."));
+        llm.willRespond(finishing());                                   // ход 1, шаг 1
+        llm.willRespond(withToolCalls(List.of(call("open")), 10));      // ход 2, шаг 0
+        llm.willRespond(finishing());                                   // ход 2, шаг 1
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        loop.process(new Notification("второй ход", choice));
+
+        assertEquals(1, withText(loop.context(), ping.substring(0, 40)),
+                "пинк прошлого хода остался на своём месте: " + loop.context());
+        assertEquals(1, withText(loop.context(), "</favourite_stickers>"), loop.context().toString());
+        assertEquals(1, withText(loop.context(), "</instructions>"), loop.context().toString());
+        assertTrue(loop.context().stream().filter(m -> String.valueOf(m.content()).contains("</favourite_stickers>"))
+                .allMatch(m -> String.valueOf(m.content()).contains("свежая")),
+                "в истории осталась только свежая полка: " + loop.context());
+    }
+
+    /**
+     * Стикеры могут быть выключены настройкой — тогда в снимке только пояснение.
+     * Триггер зачистки обязан срабатывать и в этом случае, иначе прошлые
+     * страницы и пинки переживают такой ход нетронутыми.
+     */
+    @Test
+    void notesWithoutShelfStillTidyTheHistory() {
+        Toolbox screen = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
+                You switched to the chat "xmogde" in Telegram.
+                <message message_id="1">привет, прежняя</message>
+                <instructions>
+                You are in private chat with xmogde. Answer as yourself.
+                </instructions>"""));
+        Toolbox fresh = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
+                You switched to the chat "xmogde" in Telegram.
+                <message message_id="2">привет, свежая</message>
+                <instructions>
+                You are in private chat with xmogde. Answer as yourself.
+                </instructions>"""));
+
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        RotatingMemory memory = new RotatingMemory();
+        loop.memory(memory);
+
+        loop.process(new Notification("первый ход", screen));
+        loop.process(new Notification("второй ход", fresh));
+
+        assertEquals(1, withText(loop.context(), "</instructions>"),
+                "пояснение остаётся одно: " + loop.context());
+        assertEquals(1, withText(loop.context(), "</your_diary_page>"),
+                "и страница памяти тоже одна: " + loop.context());
+    }
+
+    /** Память, которая на каждый ход поднимает свою страницу. */
+    private static final class RotatingMemory implements Memory {
+        final Set<Long> injected = new java.util.HashSet<>();
+        int restores;
+        private int turn;
+
+        @Override
+        public String recall(List<Message> recentContext, Audience audience) {
+            turn++;
+            injected.add((long) turn);
+            return DiaryMarkup.page("[from: your private chat with your person]", "страница номер " + turn);
+        }
+
+        @Override
+        public Set<Long> markInjected() {
+            return Set.copyOf(injected);
+        }
+
+        @Override
+        public void restoreInjected(Set<Long> snapshot) {
+            restores++;
+            injected.clear();
+            injected.addAll(snapshot);
+        }
     }
 
     /** Память с отпечатками: как настоящая, но без дневника и эмбеддингов. */

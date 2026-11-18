@@ -14,6 +14,7 @@ import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.memory.Audience;
+import ru.rainedev.raine.memory.DiaryMarkup;
 import ru.rainedev.raine.memory.Memory;
 import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
@@ -650,7 +651,7 @@ public final class NotificationLoop {
                 text = opened;
             }
             Message screen = Message.user(text + "\nCurrent time: " + Instant.now() + " UTC");
-            retireStaleShelves(List.of(screen));
+            retireStaleScreens(List.of(screen), true);
             context.add(screen);
             // метка снимается здесь, а не когда уведомление создано: событие из
             // очереди иначе приписало бы свой чат чужому разговору, который ещё
@@ -750,6 +751,14 @@ public final class NotificationLoop {
                     active = null;
                     return;
                 }
+                // Черновик остаётся в истории: на следующем шаге модель обязана
+                // вызвать то, что замыслила. Без своего текста она выбирала заново:
+                // 23:57:55 — «intention: поставить реакцию на последние сообщения»,
+                // а шаг 1 под required ответил wait. В пересказ дневника этот блок
+                // не уезжает: её заметки о намерениях снимает withoutMentalNotes.
+                if (!response.text().isBlank()) {
+                    context.add(response.firstMessage().orElseThrow());
+                }
                 // ответ текстом действием не является — напоминаем, и до конца
                 // хода текст запрещён: каждый следующий шаг обязан содержать вызов
                 context.add(Message.user(BE_TOOL_CENTRIC));
@@ -769,7 +778,7 @@ public final class NotificationLoop {
                 });
             } catch (Toolbox.PartialFailure e) {
                 // Earlier actions are real: retain the complete tool protocol and do not replay them.
-                retireStaleShelves(e.results());
+                retireStaleScreens(e.results(), false);
                 context.add(response.firstMessage().orElseThrow());
                 context.addAll(e.results());
                 appendToLast("\n" + PARTIAL_NOTE_PREFIX + e.getMessage());
@@ -794,9 +803,9 @@ public final class NotificationLoop {
                 continue;
             }
 
-            // снимок открытого самим ходом чата приезжает ответом тулзы: полка
+            // снимок открытого самим ходом чата приезжает ответом тулзы: обвязка
             // в нём свежее той, что лежала в истории
-            retireStaleShelves(results);
+            retireStaleScreens(results, false);
             context.add(response.firstMessage().orElseThrow());
             context.addAll(results);
 
@@ -1020,42 +1029,93 @@ public final class NotificationLoop {
     }
 
     /**
-     * Полка своих стикеров приклеивается к каждому снимку чата, а смысл у неё
-     * один на весь разговор: копия от прошлого снимка — это 4 719 знаков входных
-     * токенов и ещё один раз тех же описаний, за которые и цепляется
-     * фильтр-политика (вечер 18.11: три копии в одном запросе).
+     * Новый снимок чата приносит свою полку и своё пояснение, а память следом
+     * вклеивает страницы. В прежних сообщениях всё это — мёртвый груз прошлого
+     * хода: вечер 18.11 дал четыре побайтово одинаковые копии полки (по 4 719
+     * знаков) и пять копий пояснений в одном запросе, а в 00:07 19.11 снятие
+     * вклейки оставляло в истории страницы, подмешанные тремя ходами раньше, —
+     * и строка журнала про «страниц не осталось» была неправдой. Сюда же идут
+     * отработанные пинки «твой ответ был просто текстом»: они относятся к шагу,
+     * который модель уже исправила.
      *
-     * @param incoming то, что сейчас ложится в историю: снимок — сообщением
-     *                 пользователя, а вызов {@code #open} — ответом инструмента
+     * <p>
+     * Отпечатки прочитанных страниц здесь НЕ сбрасываются: на прошлых успешных
+     * ходах эти страницы были прочитаны по-настоящему, и откатывает их только
+     * {@link #undoRecall(Turn)} — когда отказал текущий ход.
+     *
+     * @param incoming  то, что сейчас ложится в историю: снимок — сообщением
+     *                  пользователя, а вызов {@code #open} — ответом инструмента
+     * @param turnStart был ли это вход в новый ход. Только там из истории
+     *                  убираются и пинки: внутри хода позицию вклейки помнит
+     *                  {@code recallSnapshot}, а удаление сообщения сдвинуло бы
+     *                  все индексы за собой
      */
-    private void retireStaleShelves(Iterable<Message> incoming) {
+    private void retireStaleScreens(Iterable<Message> incoming, boolean turnStart) {
         boolean fresh = false;
         for (Message message : incoming) {
-            fresh |= ScreenMarkup.hasShelf(message.content());
+            String text = message.content();
+            fresh |= ScreenMarkup.hasShelf(text) || ScreenMarkup.hasNotes(text);
         }
         if (!fresh) {
             return;
         }
-        for (int i = 0; i < context.size(); i++) {
-            context.set(i, withoutShelf(context.get(i)));
-        }
         Turn turn = active;
+        for (int i = 0; i < context.size(); i++) {
+            context.set(i, served(context.get(i)));
+        }
         if (turn != null && turn.contextBefore != null) {
             // откат холостого порыва сверяет начало истории дословно: правку
             // надо провести и по её снимку, иначе проверка «история не тронута»
             // перестанет узнавать прежние сообщения и порыв не откатится
             List<Message> before = new ArrayList<>(turn.contextBefore.size());
             for (Message message : turn.contextBefore) {
-                before.add(withoutShelf(message));
+                before.add(served(message));
             }
+            turn.contextBefore = List.copyOf(before);
+        }
+        if (!turnStart) {
+            return;
+        }
+        int kept = sizeWithoutPings(context);
+        if (kept == context.size()) {
+            return;
+        }
+        dropPings(context);
+        if (turn != null && turn.contextBefore != null) {
+            List<Message> before = new ArrayList<>(turn.contextBefore);
+            dropPings(before);
             turn.contextBefore = List.copyOf(before);
         }
     }
 
-    /** Сообщение без полки: остальные его слова остаются как были. */
-    private static Message withoutShelf(Message message) {
+    /** Сообщение прошлого хода: без обвязки снимка и без прочитанных страниц памяти. */
+    private static Message served(Message message) {
         String text = message.content();
-        return ScreenMarkup.hasShelf(text) ? message.withContent(ScreenMarkup.stripShelf(text)) : message;
+        if (text == null) {
+            return message;
+        }
+        String clean = DiaryMarkup.strip(ScreenMarkup.stripScreen(text));
+        return clean.equals(text) ? message : message.withContent(clean);
+    }
+
+    /** Пинк «ответ текстом ничего не делает»: после того как модель его исполнила, это шум. */
+    private static boolean isPing(Message message) {
+        String text = message.content();
+        return text != null && text.startsWith(BE_TOOL_CENTRIC);
+    }
+
+    private static int sizeWithoutPings(List<Message> history) {
+        int kept = 0;
+        for (Message message : history) {
+            if (!isPing(message)) {
+                kept++;
+            }
+        }
+        return kept;
+    }
+
+    private static void dropPings(List<Message> history) {
+        history.removeIf(NotificationLoop::isPing);
     }
 
     /**

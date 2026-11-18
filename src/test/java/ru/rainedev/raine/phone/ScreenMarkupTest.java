@@ -115,8 +115,13 @@ class ScreenMarkupTest {
     @Test
     void theDetectorAgreesWithTheCutter() {
         assertTrue(ScreenMarkup.hasShelf(SCREEN));
+        assertTrue(ScreenMarkup.hasNotes(SCREEN), "пояснение тоже должно находиться по тегу");
         assertFalse(ScreenMarkup.hasShelf("просто текст без разметки"), "");
+        assertFalse(ScreenMarkup.hasNotes("просто текст без разметки"), "");
         assertFalse(ScreenMarkup.hasShelf(null), "пустого сообщения это тоже касается");
+        assertFalse(ScreenMarkup.hasNotes(null), "и здесь тоже");
         assertFalse(ScreenMarkup.hasShelf(ScreenMarkup.stripShelf(SCREEN)), "после снятия — чисто");
+        String notesGone = ScreenMarkup.cut(SCREEN, ScreenMarkup.NOTES_OPEN, ScreenMarkup.NOTES_CLOSE);
+        assertFalse(ScreenMarkup.hasNotes(notesGone), notesGone);
     }
 }

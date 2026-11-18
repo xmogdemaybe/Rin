@@ -34,6 +34,11 @@ public final class ScreenMarkup {
         return text != null && text.contains(SHELF_OPEN);
     }
 
+    /** Есть ли в тексте пояснение снимка чата. */
+    public static boolean hasNotes(String text) {
+        return text != null && text.contains(NOTES_OPEN);
+    }
+
     /** Вырезает полку вместе с разметкой. */
     public static String stripShelf(String text) {
         return cut(text, SHELF_OPEN, SHELF_CLOSE);
