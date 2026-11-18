@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingDeque;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,13 @@ public final class NotificationLoop {
 
     /** Пауза между такими возвращениями: сеть здесь пропадает на минуты, не на секунды. */
     private Duration retryPause = Duration.ofSeconds(60);
+
+    /**
+     * Сколько ждать перед единственным повтором после отказа контент-фильтра.
+     * Секунда: вердикт входной безопасности приходит сразу, ждать дольше
+     * ничего «остудить» не может — очередь стоит, а человек остаётся без ответа.
+     */
+    private Duration filterRetryPause = Duration.ofSeconds(1);
 
     /**
      * Дальше не ждать: занятая модель оттаивает десятками минут, а пять попыток
@@ -151,6 +159,10 @@ public final class NotificationLoop {
         boolean forceToolCall;
         /** Сколько шагов подряд модель не позвала ни одного инструмента. */
         int emptySteps;
+        /** Повтор после отказа контент-фильтра сделан ровно один раз за ход. */
+        boolean filterRetried;
+        /** Что вклеила память в этом ходе — чтобы снять, если ход провалился. */
+        RecallSnapshot recallSnapshot;
         /** Последнее действие, видимое человеку: send_telegram_message, react_with_emoji. */
         String lastAction = "";
         /** Чем был контекст до хода порыва: холостый ход не должен оставлять следа. */
@@ -159,6 +171,14 @@ public final class NotificationLoop {
         Runnable undoOutside;
         Turn(Notification notification) { this.notification = notification; }
     }
+
+    /**
+     * Снимок вклейки: куда она легла, чем было сообщение до неё и что память
+     * уже считала вспомненным. Нужен, чтобы ход, зарубленный фильтром на
+     * пустом месте, не оставлял в истории страницы дневника, которых модель
+     * так и не увидела в ответе.
+     */
+    private record RecallSnapshot(int index, Message original, Set<Long> injectedBefore) {}
 
     public void onNotificationFailed(java.util.function.BiConsumer<Notification, RuntimeException> action) {
         onFailure = action;
@@ -353,6 +373,11 @@ public final class NotificationLoop {
     /** Для проверок: сколько ждать, прежде чем вернуться к уведомлению. */
     void retryPause(Duration pause) {
         this.retryPause = pause;
+    }
+
+    /** Для проверок: повтор после отказа фильтра не должен стоить секунды теста. */
+    void filterRetryPause(Duration pause) {
+        this.filterRetryPause = pause;
     }
 
     /** Для проверок: отмотать часы последнего разговора — ждать по-настоящему нельзя. */
@@ -640,7 +665,7 @@ public final class NotificationLoop {
                 // уже мысли модели и ответы тулз, запрос выходит другим, и
                 // каждый шаг вытаскивал новые страницы: 112 077 токенов на одну
                 // реакцию — они же
-                recallIntoContext();
+                turn.recallSnapshot = recallIntoContext();
                 recallMemories = false;
                 turn.recall = false;
             }
@@ -659,6 +684,29 @@ public final class NotificationLoop {
             turn.tokens = spentTokens;
             List<ToolCall> calls = response.toolCalls();
 
+            // Пустой ответ с finish_reason=content_filter — вердикт входной
+            // безопасности, а не забывчивость. Утро 18.11 показало, что он
+            // выпадает и на тот же самый текст минутой позже (отказ 09:31:48,
+            // успех 09:32:47 при идентичном промпте), поэтому один повтор того
+            // же запроса стоит денег, но не бьётся в стенку. Больше одного —
+            // снова стенка: платится весь контекст.
+            if (step == 0 && calls.isEmpty() && filteredByPolicy(response)
+                    && !turn.filterRetried && !stopping) {
+                turn.filterRetried = true;
+                log.warn("Отказ контент-фильтром на шаге 0 ({} токенов) — повторяю тот же запрос один раз",
+                        response.totalTokens());
+                sleep(filterRetryPause);
+                if (!stopping) {
+                    response = llm.chat(systemPrompt.text() + aboutPerson.apply(notification.personId()),
+                            context, tools.asJson(), toolChoice);
+                    spentTokens += response.totalTokens();
+                    turn.tokens = spentTokens;
+                    calls = response.toolCalls();
+                    log.warn("Повтор: finish_reason={}, вызовов {}, токенов {}, за ход всего {}",
+                            response.finishReason(), calls.size(), response.totalTokens(), spentTokens);
+                }
+            }
+
             // мысли и намерения — то, ради чего вообще стоит смотреть в лог
             if (response.text() != null && !response.text().isBlank()) {
                 log.info("Мысли: {}", response.text().strip());
@@ -674,10 +722,12 @@ public final class NotificationLoop {
                 log.warn("Модель не вызвала ни одного инструмента: шаг {}, finish_reason={}, текста {} симв., "
                                 + "токенов {}",
                         step, reason.isBlank() ? "нет" : reason, response.text().length(), response.totalTokens());
-                if (reason.startsWith("content_filter")) {
-                    // это не забывчивость, а вердикт: тот же контекст даст тот же
-                    // ответ, и напоминание под required лишь умножает счёт
-                    log.warn("Модель отказала контент-фильтром — ход прекращён");
+                if (filteredByPolicy(response)) {
+                    // это не забывчивость, а вердикт: напоминание под required
+                    // лишь умножит счёт, а повтор выше уже был свой
+                    log.warn("Модель отказала контент-фильтром — ход прекращён{}",
+                            turn.filterRetried ? " и после повтора" : "");
+                    undoRecall(turn);
                     reportCost(startedAt, spentTokens, step + 1);
                     endTurn(turn);
                     active = null;
@@ -902,18 +952,57 @@ public final class NotificationLoop {
                 from != null && from.source() == Source.OWNER_DM);
     }
 
-    /** Воспоминания встают перед последним сообщением человека — как будто вспомнилось до ответа. */
-    private void recallIntoContext() {
+    /**
+     * Воспоминания встают перед последним сообщением человека — как будто
+     * вспомнилось до ответа.
+     *
+     * @return чем оборачивать откат, если вклеено было что-то, иначе {@code null}
+     */
+    private RecallSnapshot recallIntoContext() {
         int at = recallTarget(context);
         if (at < 0) {
-            return;
+            return null;
         }
+        // список вспомненного снимается до вызова: память добавляет в него свои
+        // отметки, и вернуть потом будет уже не к чему
+        Set<Long> before = memory.markInjected();
         String recalled = memory.recall(context, audience);
         if (recalled.isEmpty()) {
-            return;
+            return null;
         }
         Message last = context.get(at);
         context.set(at, last.withContent(recalled + last.content()));
+        return new RecallSnapshot(at, last, before);
+    }
+
+    /**
+     * Отказ входной безопасности: ответ пришёл (HTTP 200), но в нём ни текста,
+     * ни вызовов, а причина названа в {@code finish_reason}.
+     */
+    private static boolean filteredByPolicy(ChatResponse response) {
+        return response.finishReason().startsWith("content_filter");
+    }
+
+    /**
+     * Ход, зарубленный фильтром на шаге 0, ничего не сделал и ничего не показал:
+     * вклеенные страницы дневника надо снять и из истории, и из списка
+     * «уже вспоминалось». Иначе они лежат мёртвым грузом до переполнения
+     * контекста и больше никогда не всплывут — память считает их показанными.
+     */
+    private void undoRecall(Turn turn) {
+        RecallSnapshot was = turn.recallSnapshot;
+        if (was == null) {
+            return;
+        }
+        if (turn.contextBefore != null) {
+            // порыв откатывает историю целиком; подменять ей сообщение до
+            // проверки «история не тронута» нельзя — откат тогда не сработает
+            return;
+        }
+        context.set(was.index(), was.original());
+        memory.restoreInjected(was.injectedBefore());
+        turn.recallSnapshot = null;
+        log.info("Вклейку памяти снято: ход кончился отказом фильтра, страниц никто не видел");
     }
 
     /**

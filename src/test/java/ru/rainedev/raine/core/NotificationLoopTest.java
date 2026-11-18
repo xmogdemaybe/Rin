@@ -5,16 +5,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.memory.Audience;
+import ru.rainedev.raine.memory.DiaryMarkup;
+import ru.rainedev.raine.memory.Memory;
 import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
 
@@ -175,16 +179,114 @@ class NotificationLoopTest {
     }
 
     @Test
-    void aContentFilterRefusalEndsTheTurnInsteadOfHammering() {
-        // HTTP 200 с пустым ответом и finish_reason=content_filter — это отказ,
-        // а не «модель поболтала»: тот же контекст даст тот же вердикт, и каждый
-        // повтор стоит сорок тысяч токенов
+    void aContentFilterRefusalIsRetriedOnceAndThenEndsTheTurn() {
+        // HTTP 200 с пустым ответом и finish_reason=content_filter — это отказ
+        // входной безопасности, а не «модель поболтала». Утро 18.11: идентичный
+        // промпт дал отказ в 09:31:48 и ответ в 09:32:47, поэтому одна вторая
+        // попытка имеет смысл; дальше долбить — платить полным контекстом.
         ScriptedLlm llm = new ScriptedLlm();
         llm.alwaysRespond(refused());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.filterRetryPause(Duration.ofMillis(10));
 
-        loopWith(llm, new Toolbox()).process(new Notification("тебе написали"));
+        loop.process(new Notification("тебе написали"));
 
-        assertEquals(1, llm.calls, "после отказа фильтра долбить нельзя: " + llm.calls);
+        assertEquals(2, llm.calls, "повтор ровно один: " + llm.calls);
+    }
+
+    @Test
+    void aFilterRetryThatAnswersKeepsTheTurnAlive() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(refused());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.filterRetryPause(Duration.ofMillis(10));
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(2, llm.calls);
+        assertTrue(loop.context().stream().anyMatch(message -> !message.toolCallsOrEmpty().isEmpty()),
+                "ответ повтора — действие, а не выброшенный ответ: " + loop.context());
+    }
+
+    @Test
+    void aRefusedTurnGivesItsDiaryPagesBackToMemory() {
+        // вклейка легла в сообщение, модель на неё не ответила ничего: страницы
+        // остались бы лежать мёртвым грузом и считать себя показанными
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.alwaysRespond(refused());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.filterRetryPause(Duration.ofMillis(10));
+        RecallingMemory memory = new RecallingMemory();
+        loop.memory(memory);
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(2, llm.calls, "ход с повтором: " + llm.calls);
+        String first = loop.context().getFirst().content();
+        assertFalse(first.contains("your_diary_page"), "вклейка снята: " + first);
+        assertTrue(first.contains("тебе написали"), "реплика осталась: " + first);
+        assertTrue(memory.injected.isEmpty(), "страницы вернулись в выборку: " + memory.injected);
+    }
+
+    @Test
+    void aRefusedImpulseIsRolledBackByTheImpulseUndoAlone() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.alwaysRespond(refused());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.filterRetryPause(Duration.ofMillis(10));
+        RecallingMemory memory = new RecallingMemory();
+        loop.memory(memory);
+        boolean[] undone = {false};
+        loop.idleImpulseSnapshot(() -> () -> undone[0] = true);
+        int before = loop.context().size();
+
+        loop.process(new Notification("порыв в никуда").onOwnInitiative());
+
+        assertTrue(undone[0], "отметки снимаются штатным откатом порыва");
+        assertEquals(before, loop.context().size(), "порыв убран целиком, включая вклейку");
+        assertEquals(2, llm.calls, "на порыве тоже сделан ровно один повтор: " + llm.calls);
+    }
+
+    @Test
+    void aFilterRefusalAfterAnActionIsNotRetried() {
+        // повтор сделан только на шаге 0: дальше «последние три сообщения» —
+        // уже её собственные вызовы, и вердикт по тому же тексту не меняется
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(refused());
+        llm.willRespond(refused());
+        List<String> acted = new ArrayList<>();
+        NotificationLoop loop = loopWith(llm, new Toolbox(mutating("send_telegram_message", acted)));
+        loop.filterRetryPause(Duration.ofMillis(10));
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(2, llm.calls, "шаг 0 — действие, шаг 1 — отказ без повтора: " + llm.calls);
+        assertEquals(List.of("send_telegram_message"), acted);
+    }
+
+    /** Память с отпечатками: как настоящая, но без дневника и эмбеддингов. */
+    private static final class RecallingMemory implements Memory {
+        final Set<Long> injected = new java.util.HashSet<>();
+
+        @Override
+        public String recall(List<Message> recentContext, Audience audience) {
+            injected.add(42L);
+            return DiaryMarkup.page("[from: your private chat with your person]",
+                    "мы ездили на Байкал");
+        }
+
+        @Override
+        public Set<Long> markInjected() {
+            return Set.copyOf(injected);
+        }
+
+        @Override
+        public void restoreInjected(Set<Long> snapshot) {
+            injected.clear();
+            injected.addAll(snapshot);
+        }
     }
 
     @Test
