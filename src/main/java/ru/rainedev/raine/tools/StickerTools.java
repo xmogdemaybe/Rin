@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.Tool;
 import ru.rainedev.raine.phone.ChatScreen;
 import ru.rainedev.raine.phone.Markup;
+import ru.rainedev.raine.phone.ScreenMarkup;
 import ru.rainedev.raine.telegram.Telegram;
 import ru.rainedev.raine.telegram.TelegramActions;
 import ru.rainedev.raine.vision.Glimpses;
@@ -303,7 +304,7 @@ public final class StickerTools {
         if (shown.isEmpty()) {
             return "";
         }
-        StringBuilder out = new StringBuilder("\n\n<favourite_stickers>\n")
+        StringBuilder out = new StringBuilder("\n\n" + ScreenMarkup.SHELF_OPEN + "\n")
                 .append("Your own stickers. Send one with #sticker_send(sticker_id) — no need to look them up.\n");
         for (TdApi.Sticker sticker : shown) {
             out.append("  - sticker_id=\"").append(sticker.id)
@@ -322,7 +323,7 @@ public final class StickerTools {
             out.append("Installed packs: ").append(Markup.body(packs))
                     .append(". Open one with #sticker_pack(name) to keep its stickers.\n");
         }
-        return out.append("</favourite_stickers>\n").toString();
+        return out.append(ScreenMarkup.SHELF_CLOSE + "\n").toString();
     }
 
     /** Сколько символов выделено на описание стикера в полке: дальше шум. */

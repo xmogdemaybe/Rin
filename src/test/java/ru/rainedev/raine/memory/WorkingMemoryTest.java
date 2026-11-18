@@ -23,6 +23,7 @@ class WorkingMemoryTest {
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<String> answers = new ArrayDeque<>();
         String lastPrompt = "";
+        List<Message> lastHistory = List.of();
         int chatCalls;
 
         ScriptedLlm willAnswer(String text) {
@@ -33,6 +34,7 @@ class WorkingMemoryTest {
         @Override
         public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
             chatCalls++;
+            lastHistory = List.copyOf(history);
             lastPrompt = String.valueOf(history.getLast().content());
             String text = answers.isEmpty() ? "" : answers.removeFirst();
             Message message = new Message(Message.Role.ASSISTANT, text, List.of(), null, null);
@@ -191,6 +193,42 @@ class WorkingMemoryTest {
         new WorkingMemory(dir.resolve("working_memory.md"), llm, "Raine").update("промпт", List.of());
 
         assertEquals(0, llm.chatCalls);
+    }
+
+    @Test
+    void theSummaryNeverCarriesTheShelfOrTheChatSurroundings(@TempDir Path dir) {
+        // снимок чата приезжает со своей полкой и своим пояснением: на вечере
+        // 18.11 их копия уезжала в трёхдневную сводку десять раз подряд — 49 850
+        // знаков про стикеры вместо разговора, и ровно на них встал фильтр
+        Path file = dir.resolve("working_memory.md");
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("- Нормальный пункт — последнее обновление: Jul 21");
+        String screen = """
+                You switched to the chat "xmogde" in Telegram.
+                <message message_id="1">мы ездили на Байкал</message>
+                <instructions>
+                Answer as yourself.
+                </instructions>
+                <favourite_stickers>
+                  - sticker_id="1" emoji="❤️": Chibi anime character with white hair.
+                </favourite_stickers>""";
+        List<Message> context = new ArrayList<>(List.of(
+                Message.user(screen),
+                Message.user(DiaryMarkup.page("[from: your private chat with your person]", "ездили на Байкал")
+                        + "тебе написали"),
+                new Message(Message.Role.ASSISTANT, null, List.of(), null, null)));
+
+        new WorkingMemory(file, llm, "Raine").update("промпт", context);
+
+        String sent = llm.lastHistory.stream()
+                .map(message -> String.valueOf(message.content()))
+                .reduce("", (a, b) -> a + "\n" + b);
+        assertFalse(sent.contains("favourite_stickers"), "полка не едет в сводку: " + sent);
+        assertFalse(sent.contains("<instructions>"), "пояснение чата не едет в сводку: " + sent);
+        assertFalse(sent.contains("your_diary_page"), "страницы дневника не едут в сводку: " + sent);
+        assertTrue(sent.contains("мы ездили на Байкал"), "слова человека остаются: " + sent);
+        assertTrue(context.getFirst().content().contains("favourite_stickers"),
+                "исходный список править нельзя: он ещё читается дневником");
+        assertTrue(context.get(1).content().contains("your_diary_page"), "и вклейку тоже: " + context);
     }
 
     /** Строки по ~20 символов: 400 штук заведомо больше предела. */

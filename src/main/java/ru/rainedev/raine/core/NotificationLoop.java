@@ -17,6 +17,7 @@ import ru.rainedev.raine.memory.Audience;
 import ru.rainedev.raine.memory.Memory;
 import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
+import ru.rainedev.raine.phone.ScreenMarkup;
 
 /**
  * Ядро поведения: очередь уведомлений и обработка каждого до тех пор,
@@ -648,7 +649,9 @@ public final class NotificationLoop {
             } else {
                 text = opened;
             }
-            context.add(Message.user(text + "\nCurrent time: " + Instant.now() + " UTC"));
+            Message screen = Message.user(text + "\nCurrent time: " + Instant.now() + " UTC");
+            retireStaleShelves(List.of(screen));
+            context.add(screen);
             // метка снимается здесь, а не когда уведомление создано: событие из
             // очереди иначе приписало бы свой чат чужому разговору, который ещё
             // не сохранён, а новый контекст остался бы без метки вовсе
@@ -693,8 +696,14 @@ public final class NotificationLoop {
             if (step == 0 && calls.isEmpty() && filteredByPolicy(response)
                     && !turn.filterRetried && !stopping) {
                 turn.filterRetried = true;
-                log.warn("Отказ контент-фильтром на шаге 0 ({} токенов) — повторяю тот же запрос один раз",
+                log.warn("Отказ контент-фильтром на шаге 0 ({} токенов) — повторяю шаг без вклейки памяти",
                         response.totalTokens());
+                // Страницы дневника — единственное, что этот ход принёс сам и что
+                // он умеет снять: повтор без них идёт уже другим запросом, а не
+                // дословно тем, который фильтр забраковал (вечер 18.11: 21 679
+                // токенов дважды подряд). Ответить без воспоминаний лучше, чем
+                // промолчать из-за отказа, а снятые страницы вернутся в выборку.
+                undoRecall(turn);
                 sleep(filterRetryPause);
                 if (!stopping) {
                     response = llm.chat(systemPrompt.text() + aboutPerson.apply(notification.personId()),
@@ -760,6 +769,7 @@ public final class NotificationLoop {
                 });
             } catch (Toolbox.PartialFailure e) {
                 // Earlier actions are real: retain the complete tool protocol and do not replay them.
+                retireStaleShelves(e.results());
                 context.add(response.firstMessage().orElseThrow());
                 context.addAll(e.results());
                 appendToLast("\n" + PARTIAL_NOTE_PREFIX + e.getMessage());
@@ -784,6 +794,9 @@ public final class NotificationLoop {
                 continue;
             }
 
+            // снимок открытого самим ходом чата приезжает ответом тулзы: полка
+            // в нём свежее той, что лежала в истории
+            retireStaleShelves(results);
             context.add(response.firstMessage().orElseThrow());
             context.addAll(results);
 
@@ -988,21 +1001,61 @@ public final class NotificationLoop {
      * вклеенные страницы дневника надо снять и из истории, и из списка
      * «уже вспоминалось». Иначе они лежат мёртвым грузом до переполнения
      * контекста и больше никогда не всплывут — память считает их показанными.
+     * <p>
+     * Порыву это не мешает: откат холостого порыва сверяет только начало истории
+     * до его начала, а вклейка всегда лежит в конце — в том сообщении, которое
+     * положил этот же ход. Возврат к {@code original()} возвращает ровно то, что
+     * было записано в снимок истории, поэтому прежний сторож «не трогать порыв»
+     * только мешал снять вклейку до повтора.
      */
     private void undoRecall(Turn turn) {
         RecallSnapshot was = turn.recallSnapshot;
         if (was == null) {
             return;
         }
-        if (turn.contextBefore != null) {
-            // порыв откатывает историю целиком; подменять ей сообщение до
-            // проверки «история не тронута» нельзя — откат тогда не сработает
-            return;
-        }
         context.set(was.index(), was.original());
         memory.restoreInjected(was.injectedBefore());
         turn.recallSnapshot = null;
-        log.info("Вклейку памяти снято: ход кончился отказом фильтра, страниц никто не видел");
+        log.info("Вклейку памяти снято: страниц дневника в истории не осталось");
+    }
+
+    /**
+     * Полка своих стикеров приклеивается к каждому снимку чата, а смысл у неё
+     * один на весь разговор: копия от прошлого снимка — это 4 719 знаков входных
+     * токенов и ещё один раз тех же описаний, за которые и цепляется
+     * фильтр-политика (вечер 18.11: три копии в одном запросе).
+     *
+     * @param incoming то, что сейчас ложится в историю: снимок — сообщением
+     *                 пользователя, а вызов {@code #open} — ответом инструмента
+     */
+    private void retireStaleShelves(Iterable<Message> incoming) {
+        boolean fresh = false;
+        for (Message message : incoming) {
+            fresh |= ScreenMarkup.hasShelf(message.content());
+        }
+        if (!fresh) {
+            return;
+        }
+        for (int i = 0; i < context.size(); i++) {
+            context.set(i, withoutShelf(context.get(i)));
+        }
+        Turn turn = active;
+        if (turn != null && turn.contextBefore != null) {
+            // откат холостого порыва сверяет начало истории дословно: правку
+            // надо провести и по её снимку, иначе проверка «история не тронута»
+            // перестанет узнавать прежние сообщения и порыв не откатится
+            List<Message> before = new ArrayList<>(turn.contextBefore.size());
+            for (Message message : turn.contextBefore) {
+                before.add(withoutShelf(message));
+            }
+            turn.contextBefore = List.copyOf(before);
+        }
+    }
+
+    /** Сообщение без полки: остальные его слова остаются как были. */
+    private static Message withoutShelf(Message message) {
+        String text = message.content();
+        return ScreenMarkup.hasShelf(text) ? message.withContent(ScreenMarkup.stripShelf(text)) : message;
     }
 
     /**

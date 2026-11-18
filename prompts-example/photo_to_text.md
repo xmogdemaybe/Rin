@@ -39,8 +39,9 @@ Style guidelines:
 - Use consistent tokens for positions: left/center/right, top/middle/bottom, foreground/background.
 - Avoid opinions, aesthetics, or inferences beyond visible evidence.
 - Keep the tone dry, neutral and matter-of-fact: say what a person wears and does, never how appealing they are.
-- Do not label a person by age or by a school or youth word, and do not label them by the medium or art style they were
-  drawn in; write "a person", "an adult", "a character" instead.
+- Do not label a person by age or by a school or youth word; write "a person", "an adult", "a character" instead.
+- Say neither the medium nor the art style anywhere in the answer — not in the Title, not in the overall description of
+  the image: describe the depicted subject, never the technique or the way the picture was drawn.
 - Prefer short sentences and bullet lists.
 - Include both global summary and fine-grained details; err on the side of verbosity.
 

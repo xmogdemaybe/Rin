@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.Markup;
+import ru.rainedev.raine.phone.ScreenMarkup;
 
 /**
  * Средняя память — то, что человек держит в голове день-три: обещания,
@@ -142,15 +143,21 @@ public final class WorkingMemory {
         if (context.isEmpty()) {
             return;
         }
-        // вклейки дневника в этот вызов не едут: трёхдневная сводка не должна
-        // пересказывать чужие страницы, а 15 КБ памяти на сообщение удваивают
-        // цену запроса. Исходный список не правится — цикл отдаёт его дневнику
+        // вклейки дневника и обвязка снимка чата в этот вызов не едут: трёхдневная
+        // сводка не должна пересказывать чужие страницы, а 15 КБ памяти на
+        // сообщение удваивают цену запроса. Полка с пояснениями и того дороже:
+        // в вечере 18.11 их копия приезжала в сводку десять раз подряд — 49 850
+        // знаков на список стикеров, к разговорам он отношения не имеет.
+        // Исходный список не правится — цикл отдаёт его дневнику
         List<Message> conversation = new ArrayList<>(context.size() + 1);
         for (Message message : context) {
             String text = message.content();
-            conversation.add(DiaryMarkup.hasPage(text)
-                    ? message.withContent(DiaryMarkup.strip(text))
-                    : message);
+            if (text == null) {
+                conversation.add(message);
+                continue;
+            }
+            String clean = DiaryMarkup.strip(ScreenMarkup.stripScreen(text));
+            conversation.add(clean.equals(text) ? message : message.withContent(clean));
         }
         conversation.add(Message.user(buildPrompt()));
 

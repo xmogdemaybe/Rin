@@ -16,6 +16,7 @@ import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.phone.ChatScreen;
+import ru.rainedev.raine.phone.ScreenMarkup;
 
 /**
  * Переносит разговор в долгую память: просит модель пересказать его записями
@@ -35,14 +36,6 @@ public final class DiaryWriter {
     private static final Pattern QUOTE = Pattern.compile("«([^»\\n]+)»|\"([^\"\\n]+)\"");
 
     private static final int MAX_ATTEMPTS = 3;
-
-    /** Пояснение к разметке, которое снимок чата ставит под своими сообщениями. */
-    private static final String NOTE_OPEN = "<instructions>";
-    private static final String NOTE_CLOSE = "</instructions>";
-
-    /** Полка своих стикеров: вклеивается в снимок чата, к разговору отношения не имеет. */
-    private static final String SHELF_OPEN = "<favourite_stickers>";
-    private static final String SHELF_CLOSE = "</favourite_stickers>";
 
     /** Её слова уходят в аргументах вызова, а не в тексте ответа. */
     private static final String SEND_TOOL = "send_telegram_message";
@@ -179,8 +172,7 @@ public final class DiaryWriter {
                 continue;
             }
             String text = DiaryMarkup.strip(message.content() == null ? "" : message.content());
-            text = cutBlocks(text, NOTE_OPEN, NOTE_CLOSE);
-            text = cutBlocks(text, SHELF_OPEN, SHELF_CLOSE);
+            text = ScreenMarkup.stripScreen(text);
             for (String insertion : NotificationLoop.serviceInsertions()) {
                 text = text.replace(insertion, "");
             }
@@ -341,21 +333,6 @@ public final class DiaryWriter {
             log.debug("Аргументы вызова {} не читаются: {}", call.name(), e.getMessage());
             return ARGUMENTS.createObjectNode();
         }
-    }
-
-    /** Вырезает блоки между разметкой; незакрытый блок уносит всё до конца текста. */
-    private static String cutBlocks(String text, String open, String close) {
-        StringBuilder kept = new StringBuilder();
-        int from = 0;
-        for (int start = text.indexOf(open); start >= 0; start = text.indexOf(open, from)) {
-            kept.append(text, from, start);
-            int end = text.indexOf(close, start);
-            if (end < 0) {
-                return kept.toString();
-            }
-            from = end + close.length();
-        }
-        return kept.append(text, from, text.length()).toString();
     }
 
     private String askForSummary(String systemPrompt, List<Message> context) {

@@ -21,6 +21,7 @@ import ru.rainedev.raine.memory.DiaryMarkup;
 import ru.rainedev.raine.memory.Memory;
 import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
+import ru.rainedev.raine.phone.ScreenMarkup;
 
 class NotificationLoopTest {
 
@@ -264,6 +265,120 @@ class NotificationLoopTest {
 
         assertEquals(2, llm.calls, "шаг 0 — действие, шаг 1 — отказ без повтора: " + llm.calls);
         assertEquals(List.of("send_telegram_message"), acted);
+    }
+
+    /** Снимок чата с полкой своих стикеров — как его собирает {@code TelegramTools}. */
+    private static Toolbox screenWithShelf(String marker) {
+        return new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
+                You switched to the chat "xmogde" in Telegram. You see last messages:
+                <message message_id="1">привет, %s</message>
+
+                <favourite_stickers>
+                Your own stickers. Send one with #sticker_send(sticker_id) — no need to look them up.
+                  - sticker_id="1" emoji="❤️": Chibi anime character with white hair and cat ears.
+                </favourite_stickers>
+                """.formatted(marker)));
+    }
+
+    @Test
+    void onlyTheFreshestScreenshotKeepsTheShelf() {
+        // полка приклеена к каждому снимку чата, а смысл у неё один на весь
+        // разговор: вечер 18.11 дал три побайтово одинаковые копии по 4 719 знаков
+        // в одном запросе — 20% текста и три порции той же лексики
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("первое уведомление", screenWithShelf("прежняя")));
+        loop.process(new Notification("второе уведомление", screenWithShelf("свежая")));
+
+        List<String> shelves = loop.context().stream()
+                .map(Message::content)
+                .filter(ScreenMarkup::hasShelf)
+                .toList();
+        assertEquals(1, shelves.size(), "полка остаётся одна: " + loop.context());
+        assertTrue(shelves.getFirst().contains("свежая"), "и самая свежая: " + shelves);
+        assertFalse(shelves.getFirst().contains("прежняя"), "прежний снимок должен остаться без полки: " + shelves);
+    }
+
+    @Test
+    void anIdleImpulseRollsBackEvenThoughTheShelfWasRetired() {
+        // откат холостого порыва сверяет начало истории дословно; снятие старой
+        // полки правит те же сообщения, поэтому проверка должна увидеть
+        // отредактированный снимок истории, а не прежний
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.process(new Notification("тебе написали", screenWithShelf("прежняя")));
+        loop.windBackLastTalk(Duration.ofMinutes(31));
+        List<Message> before = loop.context();
+        assertTrue(before.stream().anyMatch(m -> ScreenMarkup.hasShelf(m.content())),
+                "полка в истории до порыва есть: " + before);
+
+        loop.process(new Notification("порыв, который ни к чему не привёл", screenWithShelf("свежая"))
+                .onOwnInitiative());
+
+        List<Message> after = loop.context();
+        assertEquals(before.size(), after.size(), "порыв убран целиком");
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("свежая")),
+                "его снимка не осталось: " + after);
+        for (int i = 0; i < before.size(); i++) {
+            String was = before.get(i).content();
+            assertEquals(was == null ? null : ScreenMarkup.stripShelf(was), after.get(i).content(),
+                    "прежнее сообщение изменилось ровно на одну полку, индекс " + i);
+        }
+    }
+
+    @Test
+    void theFilterRetryGoesWithoutTheGluedDiaryPages() {
+        // повтор дословно того же запроса фильтр забраковал дважды (21 679 токенов
+        // дважды подряд) — вклейка памяти единственное, что этот ход принёс сам
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.alwaysRespond(refused());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.filterRetryPause(Duration.ofMillis(10));
+        RecallingMemory memory = new RecallingMemory();
+        loop.memory(memory);
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(2, llm.calls);
+        String first = llm.seenContexts.get(0).getFirst().content();
+        String second = llm.seenContexts.get(1).getFirst().content();
+        assertTrue(first.contains("your_diary_page"), "первый запрос шёл со вклейкой: " + first);
+        assertFalse(second.contains("your_diary_page"), "повтор — без неё: " + second);
+        assertTrue(second.contains("тебе написали"), "слова человека на месте: " + second);
+        assertTrue(memory.injected.isEmpty(), "страницы вернулись в выборку: " + memory.injected);
+    }
+
+    @Test
+    void anIdleImpulseDropsThePagesBeforeItsRetryAndStillRollsBack() {
+        // страж «порыв откатывает историю сам» мешал снять вклейку до повтора;
+        // без него откат порыва должен работать так же чисто
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.alwaysRespond(refused());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.filterRetryPause(Duration.ofMillis(10));
+        RecallingMemory memory = new RecallingMemory();
+        loop.memory(memory);
+        boolean[] undone = {false};
+        loop.idleImpulseSnapshot(() -> () -> undone[0] = true);
+        int before = loop.context().size();
+
+        loop.process(new Notification("порыв в никуда").onOwnInitiative());
+
+        assertEquals(2, llm.calls, "на порыве тоже сделан один повтор: " + llm.calls);
+        assertTrue(llm.seenContexts.get(0).stream()
+                .anyMatch(m -> String.valueOf(m.content()).contains("your_diary_page")),
+                "первый запрос был со вклейкой: " + llm.seenContexts.get(0));
+        assertTrue(llm.seenContexts.get(1).stream()
+                .noneMatch(m -> String.valueOf(m.content()).contains("your_diary_page")),
+                "повтор ушёл без вклейки: " + llm.seenContexts.get(1));
+        assertEquals(before, loop.context().size(), "холостой порыв откатан целиком");
+        assertTrue(undone[0], "отметки за его пределами сняты");
+        assertTrue(memory.injected.isEmpty(), "вспомненное вернулось в выборку: " + memory.injected);
     }
 
     /** Память с отпечатками: как настоящая, но без дневника и эмбеддингов. */

@@ -16,6 +16,12 @@ import org.junit.jupiter.api.Test;
  * «Rin sitting on a bus seat», а вечером 17 ноября такие описания ловил
  * контент-фильтр. Поля формата при этом обязаны остаться — по ним описание
  * ищется потом.
+ * <p>
+ * Вечер 18.11 показал дыру в первой редакции запрета: четыре описания, снятых
+ * уже по новому шаблону, всё равно начинались с «Anime-style illustration of
+ * Rin» и «Two anime-style characters» — запрет был сформулирован про ярлык
+ * человека, а модель указывала манеру рисовки для всей картинки прямо в
+ * заголовке. Теперь правило называет и заголовок.
  */
 class PhotoPromptTest {
 
@@ -62,8 +68,8 @@ class PhotoPromptTest {
         String text = template().toLowerCase();
 
         for (String word : new String[] {"age-range", "sex-presenting", "nipples", "areola", "buttocks", "genitalia",
-                "cleavage", "transparent clothes", "seductive", "attractive", "anime-style girl", "school girl",
-                "young girl"}) {
+                "cleavage", "transparent clothes", "seductive", "attractive", "anime", "cartoon", "manga",
+                "illustration", "anime-style girl", "school girl", "young girl"}) {
             assertFalse(text.contains(word), "триггерное слово вернулось в шаблон: " + word);
         }
     }
@@ -75,7 +81,21 @@ class PhotoPromptTest {
         assertTrue(text.contains("dry, neutral and matter-of-fact"),
                 "тон разбора задан словами, а не надеждой: " + text);
         assertTrue(text.contains("Do not label a person by age"), text);
-        assertTrue(text.contains("the medium or art style"), "без ярлыка «аниме-стиль» описание не начнётся с него: " + text);
+    }
+
+    /**
+     * Запрет на ярлык манеры рисовки должен покрывать заголовок: 18.11 модель
+     * честно не звала людей «anime girl», но ставила «Anime-style illustration
+     * of Rin» в Title — и этого фильтру хватало.
+     */
+    @Test
+    void theMediumBanCoversTheWholeAnswerIncludingTheTitle() throws IOException {
+        String text = template();
+
+        assertTrue(text.contains("Say neither the medium nor the art style"), "правило пропадало: " + text);
+        assertTrue(text.contains("not in the Title"), "заголовок должен быть назван прямо: " + text);
+        assertTrue(text.contains("not in the overall description"), "и общее описание тоже: " + text);
+        assertFalse(text.toLowerCase().contains("anime"), "сам шаблон не должен учить слову, которое запрещает: " + text);
     }
 
     /** Шаблон живёт в чужом форке: приметы конкретного персонажа в него зашивать нельзя. */
