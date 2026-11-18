@@ -1123,6 +1123,11 @@ public final class NotificationLoop {
      * Раздельно они разъезжаются в двусмысленное: без черновика два ответа модели
      * подряд (шаг 0 с мыслями и шаг 1 с вызовами), а сам черновик — единственное,
      * где она ещё видела своё намерение.
+     *
+     * <p>
+     * Обход сзади вперёд, и после обоих вычитаний курсор сдвигается ещё на шаг:
+     * иначе следующий за удалённой парой индекс оказывается за концом списка — на
+     * паре в хвосте истории это стоило потерянным уведомлением с ERROR.
      */
     private static void dropServedPings(List<Message> history) {
         for (int i = history.size() - 1; i >= 0; i--) {
@@ -1132,6 +1137,7 @@ public final class NotificationLoop {
             history.remove(i);
             if (i > 0 && isDraft(history.get(i - 1))) {
                 history.remove(i - 1);
+                i--;
             }
         }
     }

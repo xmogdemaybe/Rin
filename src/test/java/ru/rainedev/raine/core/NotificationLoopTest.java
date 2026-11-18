@@ -545,6 +545,104 @@ class NotificationLoopTest {
         }
     }
 
+    /** Её реплика без вызовов — черновик промавшего шага. */
+    private static Message draftOf(String intention) {
+        return new Message(Message.Role.ASSISTANT, "- intention: " + intention, List.of(), null, null);
+    }
+
+    /** Шаг, который модель исполнила: у него есть tool_calls. */
+    private static Message servedStep() {
+        return new Message(Message.Role.ASSISTANT, "",
+                List.of(new ToolCall("c1", "function", new ToolCall.Function("wait", "{}"))), null, null);
+    }
+
+    private static Message pingOf() {
+        return Message.user(NotificationLoop.serviceInsertions().getFirst());
+    }
+
+    /**
+     * Отказ фильтр-политики на шаге 1 выходит из хода до добавления своей пары,
+     * и в истории [черновик, пинк] остаются последними сообщениями. На входе
+     * следующего хода зачистка спотыкалась об них индексом: после двух вычитаний
+     * курсор выходил за конец списка, уведомление терялось с ERROR, а человек
+     * оставался без ответа.
+     */
+    @Test
+    void aPairLeftAtTheEndOfHistoryDoesNotBreakTheNextTurn() {
+        String draft = "- thought: он прощается.\n- intention: пожелать спокойной ночи.";
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText(draft));    // ход 1, шаг 0 — промах: черновик + пинк
+        llm.willRespond(refused());           // ход 1, шаг 1 — вердикт, ход прекращён
+        llm.willRespond(finishing());         // ход 2, шаг 0
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        List<Message> tail = loop.context();
+        int last = tail.size() - 1;
+        assertTrue(tail.get(last).content() != null
+                        && tail.get(last).content().startsWith(NotificationLoop.serviceInsertions().getFirst()),
+                "пинк — последнее сообщение истории: " + tail);
+        assertTrue(tail.get(last - 1).role() == Message.Role.ASSISTANT
+                        && tail.get(last - 1).toolCallsOrEmpty().isEmpty(),
+                "перед ним — черновик без вызовов: " + tail);
+
+        loop.process(new Notification("второй ход", screenWithShelf("свежая")));
+
+        assertEquals(3, llm.calls, "второй ход дошёл до модели: " + llm.calls);
+        List<Message> after = loop.context();
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content())
+                        .startsWith(NotificationLoop.serviceInsertions().getFirst())),
+                "пинк убран: " + after);
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content())
+                        .contains("- intention: пожелать спокойной ночи")),
+                "черновик ушёл вместе с ним: " + after);
+    }
+
+    /** Все формы подряд идущих пар убираются за один проход, без сирот. */
+    @Test
+    void consecutivePairsLeaveNoOrphanAndNoIndexWalksOffTheList() {
+        Message screen = Message.user("снимок чата");
+        assertEquals(List.of(screen),
+                NotificationLoop.withoutServedPings(List.of(screen, draftOf("а"), pingOf())),
+                "пара в хвосте");
+        assertEquals(List.of(),
+                NotificationLoop.withoutServedPings(List.of(draftOf("а"), pingOf(), draftOf("б"), pingOf())),
+                "две пары подряд");
+        assertEquals(List.of(),
+                NotificationLoop.withoutServedPings(List.of(draftOf("а"), pingOf(), pingOf())),
+                "черновик и два пинка подряд");
+        assertEquals(List.of(),
+                NotificationLoop.withoutServedPings(List.of(draftOf("1"), pingOf(), draftOf("2"), pingOf(),
+                        draftOf("3"), pingOf())),
+                "три пары подряд");
+    }
+
+    /** Пинк нулевым сообщением — единственный случай, где черновику брать неоткуда. */
+    @Test
+    void aLonePingAtTheStartOfHistoryIsRemovedWithoutWalkingOffTheList() {
+        assertEquals(List.of(), NotificationLoop.withoutServedPings(List.of(pingOf())),
+                "без стража «i > 0» проверка черновика идёт по индексу -1");
+        assertEquals(List.of(Message.user("реплика человека")),
+                NotificationLoop.withoutServedPings(List.of(pingOf(), Message.user("реплика человека"))),
+                "и сосед справа от пинка не трогается");
+    }
+
+    /** Зачистка трогает только пары: одинокий черновик и исполненный шаг целы. */
+    @Test
+    void anUnpairedDraftAndAServedStepAreNotTouched() {
+        Message screen = Message.user("снимок чата");
+        Message lone = draftOf("а");
+        assertEquals(List.of(screen, lone), NotificationLoop.withoutServedPings(List.of(screen, lone)),
+                "черновик без пинка — её текст, а не мусор");
+
+        Message served = servedStep();
+        assertEquals(List.of(screen, served),
+                NotificationLoop.withoutServedPings(List.of(screen, served, pingOf())),
+                "перед пинком стоит исполненный шаг с вызовами — убирать его нельзя");
+        assertEquals(List.of(served), NotificationLoop.withoutServedPings(List.of(served, pingOf())),
+                "пинк без черновика уходит один");
+    }
+
     @Test
     void theMissedStepHandsItsIntentionToTheNextStep() {
         // 23:57:55: на шаге 0 модель задумала реакцию, шаг 1 под required поставил
