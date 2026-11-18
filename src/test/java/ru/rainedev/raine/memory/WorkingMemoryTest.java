@@ -14,9 +14,11 @@ import java.util.Deque;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
+import ru.rainedev.raine.llm.ToolCall;
 
 class WorkingMemoryTest {
 
@@ -229,6 +231,42 @@ class WorkingMemoryTest {
         assertTrue(context.getFirst().content().contains("favourite_stickers"),
                 "исходный список править нельзя: он ещё читается дневником");
         assertTrue(context.get(1).content().contains("your_diary_page"), "и вклейку тоже: " + context);
+    }
+
+    /**
+     * Сброс сразу после промаха шага 0: напоминание цикла и её черновик под него
+     * ещё не убраны из истории (это делает вход следующего хода), а сводка памяти
+     * читает контекст дословно — без зачистки они уезжали в промпт целиком.
+     */
+    @Test
+    void theSummaryNeverCarriesTheMissedStepAndItsPing(@TempDir Path dir) {
+        Path file = dir.resolve("working_memory.md");
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("- Нормальный пункт — последнее обновление: Jul 21");
+        String ping = NotificationLoop.serviceInsertions().getFirst();
+        List<Message> context = new ArrayList<>(List.of(
+                Message.user("ты написала «лю тя», и это было приятно"),
+                new Message(Message.Role.ASSISTANT,
+                        "- thought: надо ответить.\n- intention: послать привет и пожелать сна.",
+                        List.of(), null, null),
+                Message.user(ping),
+                new Message(Message.Role.ASSISTANT, "",
+                        List.of(new ToolCall("1", "function",
+                                new ToolCall.Function("send_telegram_message", "{\"text\":\"и я тебя\"}"))),
+                        null, null)));
+
+        new WorkingMemory(file, llm, "Raine").update("промпт", context);
+
+        String sent = llm.lastHistory.stream()
+                .map(message -> String.valueOf(message.content()))
+                .reduce("", (a, b) -> a + "\n" + b);
+        assertFalse(sent.contains("plain text does nothing"),
+                "напоминание цикла не в сводке: " + sent);
+        assertFalse(sent.contains("- intention: послать привет"),
+                "черновик промавшего шага не в сводке: " + sent);
+        assertTrue(sent.contains("ты написала «лю тя»"), "слова человека остаются: " + sent);
+        assertEquals(4, context.size(), "исходный список не правится: " + context);
+        assertTrue(String.valueOf(context.get(1).content()).contains("- intention:"), "и черновик в нём тоже: "
+                + context);
     }
 
     /** Строки по ~20 символов: 400 штук заведомо больше предела. */

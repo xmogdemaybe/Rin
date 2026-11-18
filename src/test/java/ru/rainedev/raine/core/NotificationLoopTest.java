@@ -467,6 +467,84 @@ class NotificationLoopTest {
                 "отработанный пинк убран из истории: " + loop.context());
     }
 
+    /**
+     * Черновик промаха шага 0 остаётся в истории ради шага 1, но на входе
+     * следующего хода уходит вместе со своим пинком. Поодиночке они разъезжаются
+     * в два ответа модели подряд — не то, что модель видела шаг назад.
+     */
+    @Test
+    void aDraftAndItsPingLeaveTheHistoryTogether() {
+        String draft = "- thought: надо ответить.\n- intention: поставить реакцию на его арт.";
+        String ping = NotificationLoop.serviceInsertions().getFirst();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText(draft));    // ход 1, шаг 0 — промах
+        llm.willRespond(finishing());         // ход 1, шаг 1
+        llm.willRespond(finishing());         // ход 2, шаг 0
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        List<Message> during = loop.context();
+        assertTrue(during.stream().anyMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+                "внутри хода пинк на месте: " + during);
+        assertTrue(during.stream().anyMatch(m -> m.role() == Message.Role.ASSISTANT
+                        && String.valueOf(m.content()).contains("- intention: поставить реакцию")),
+                "и черновик рядом с ним: " + during);
+
+        loop.process(new Notification("второй ход", screenWithShelf("свежая")));
+        List<Message> after = loop.context();
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+                "пинк убран: " + after);
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("- intention: поставить реакцию")),
+                "черновик уехал вместе с ним, а не остался сиротой: " + after);
+        for (int i = 1; i < after.size(); i++) {
+            assertFalse(after.get(i - 1).role() == Message.Role.ASSISTANT
+                            && after.get(i).role() == Message.Role.ASSISTANT,
+                    "двух ответов модели подряд не осталось, индексы " + (i - 1) + " и " + i + ": " + after);
+        }
+        assertTrue(after.stream().anyMatch(m -> !m.toolCallsOrEmpty().isEmpty()),
+                "исполненный шаг 1 с вызовами обязан пережить зачистку: " + after);
+    }
+
+    /**
+     * Снимок истории порыва правится вместе с живой историей: сверка в
+     * rollbackIdleImpulse дословная, и без зеркала откат перестал бы узнавать
+     * прежнее начало.
+     */
+    @Test
+    void anIdleImpulseRollsBackOntoHistoryWithoutTheServedPair() {
+        String draft = "- thought: надо ответить.\n- intention: послать привет.";
+        String ping = NotificationLoop.serviceInsertions().getFirst();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(plainText(draft));    // ход 1, шаг 0 — промах
+        llm.willRespond(finishing());         // ход 1, шаг 1
+        llm.willRespond(finishing());         // порыв, шаг 0 — холостой
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        List<Message> before = loop.context();
+        assertTrue(before.stream().anyMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+                "пара пережила конец хода: " + before);
+
+        loop.windBackLastTalk(Duration.ofMinutes(31));
+        loop.process(new Notification("порыв, который ни к чему не привёл", screenWithShelf("свежая"))
+                .onOwnInitiative());
+
+        List<Message> after = loop.context();
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("свежая")),
+                "порыв откатился, его снимка нет: " + after);
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+                "пинк не вернулся из снимка истории: " + after);
+        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("- intention: послать привет")),
+                "черновик не вернулся из снимка истории: " + after);
+        assertEquals(before.size() - 2, after.size(),
+                "из истории ушла ровно пара — откат сверился с зеркалом: " + after);
+        for (int i = 0; i < after.size(); i++) {
+            String text = String.valueOf(after.get(i).content());
+            assertEquals(DiaryMarkup.strip(ScreenMarkup.stripScreen(text)), text,
+                    "прежние сообщения остались зачищенными и после отката, индекс " + i);
+        }
+    }
+
     @Test
     void theMissedStepHandsItsIntentionToTheNextStep() {
         // 23:57:55: на шаге 0 модель задумала реакцию, шаг 1 под required поставил

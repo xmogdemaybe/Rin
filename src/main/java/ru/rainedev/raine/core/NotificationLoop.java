@@ -119,6 +119,18 @@ public final class NotificationLoop {
         return List.of(BE_TOOL_CENTRIC, NEXT_ACTION_PREFIX, PARTIAL_NOTE_PREFIX);
     }
 
+    /**
+     * История без отработанных пинков и черновика шага, который они напоминали
+     * исполнить. Тем, кто пересказывает разговор позже (дневник, трёхдневная
+     * сводка памяти), напоминание цикла и её замысел — не реплики разговора:
+     * без этого пара жила бы в сводке дословно. Исходный список не правится.
+     */
+    public static List<Message> withoutServedPings(List<Message> history) {
+        List<Message> kept = new ArrayList<>(history);
+        dropServedPings(kept);
+        return kept;
+    }
+
     private final LinkedBlockingDeque<Notification> queue = new LinkedBlockingDeque<>();
     private final List<Message> context = new ArrayList<>();
 
@@ -1035,8 +1047,9 @@ public final class NotificationLoop {
      * знаков) и пять копий пояснений в одном запросе, а в 00:07 19.11 снятие
      * вклейки оставляло в истории страницы, подмешанные тремя ходами раньше, —
      * и строка журнала про «страниц не осталось» была неправдой. Сюда же идут
-     * отработанные пинки «твой ответ был просто текстом»: они относятся к шагу,
-     * который модель уже исправила.
+     * отработанные пинки «твой ответ был просто текстом» — вместе с черновиком
+     * прямо перед каждым из них: пинк относится к шагу, который модель уже
+     * исправила, а черновик без него остался бы вторым ответом модели подряд.
      *
      * <p>
      * Отпечатки прочитанных страниц здесь НЕ сбрасываются: на прошлых успешных
@@ -1076,14 +1089,10 @@ public final class NotificationLoop {
         if (!turnStart) {
             return;
         }
-        int kept = sizeWithoutPings(context);
-        if (kept == context.size()) {
-            return;
-        }
-        dropPings(context);
+        dropServedPings(context);
         if (turn != null && turn.contextBefore != null) {
             List<Message> before = new ArrayList<>(turn.contextBefore);
-            dropPings(before);
+            dropServedPings(before);
             turn.contextBefore = List.copyOf(before);
         }
     }
@@ -1104,18 +1113,27 @@ public final class NotificationLoop {
         return text != null && text.startsWith(BE_TOOL_CENTRIC);
     }
 
-    private static int sizeWithoutPings(List<Message> history) {
-        int kept = 0;
-        for (Message message : history) {
-            if (!isPing(message)) {
-                kept++;
-            }
-        }
-        return kept;
+    /** Её реплика без вызовов — замысел шага, который пинк и просил исполнить. */
+    private static boolean isDraft(Message message) {
+        return message.role() == Message.Role.ASSISTANT && message.toolCallsOrEmpty().isEmpty();
     }
 
-    private static void dropPings(List<Message> history) {
-        history.removeIf(NotificationLoop::isPing);
+    /**
+     * Убирает отработанные пинки вместе с черновиком прямо перед каждым из них.
+     * Раздельно они разъезжаются в двусмысленное: без черновика два ответа модели
+     * подряд (шаг 0 с мыслями и шаг 1 с вызовами), а сам черновик — единственное,
+     * где она ещё видела своё намерение.
+     */
+    private static void dropServedPings(List<Message> history) {
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if (!isPing(history.get(i))) {
+                continue;
+            }
+            history.remove(i);
+            if (i > 0 && isDraft(history.get(i - 1))) {
+                history.remove(i - 1);
+            }
+        }
     }
 
     /**

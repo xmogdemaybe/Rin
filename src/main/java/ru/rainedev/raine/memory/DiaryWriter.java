@@ -164,7 +164,10 @@ public final class DiaryWriter {
     private static List<Message> conversationOnly(List<Message> context) {
         List<Message> kept = new ArrayList<>();
         List<String> actions = new ArrayList<>();
-        for (Message message : context) {
+        // отработанный пинк и её черновик под него — не слова разговора; ниже они
+        // всё равно вырезались бы по serviceInsertions и по заметкам о намерениях,
+        // но по отдельности: от черновика оставалась бы незакрытая мысль
+        for (Message message : NotificationLoop.withoutServedPings(context)) {
             if (message.role() == Message.Role.TOOL && !isChatScreen(message.content())) {
                 // «Success», «message_id=…», выдачи #ask — протокол шага, а не
                 // слова разговора. Снимок чата — исключение: реплики человека

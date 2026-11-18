@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.Markup;
@@ -150,7 +151,10 @@ public final class WorkingMemory {
         // знаков на список стикеров, к разговорам он отношения не имеет.
         // Исходный список не правится — цикл отдаёт его дневнику
         List<Message> conversation = new ArrayList<>(context.size() + 1);
-        for (Message message : context) {
+        // напоминание цикла «текст ничего не делает» и её черновик под него — не
+        // часть разговора: сюда они доезжали дословно, потому что этот путь не
+        // читает serviceInsertions
+        for (Message message : NotificationLoop.withoutServedPings(context)) {
             String text = message.content();
             if (text == null) {
                 conversation.add(message);

@@ -338,6 +338,36 @@ class DiaryWriterTest {
         assertFalse(sent.contains("он зовёт в поездку"), "служебная заметка о намерении — не реплика");
     }
 
+    /**
+     * Сброс сразу после промаха шага 0: пинк ещё не снят циклом (это делает вход
+     * следующего хода), а черновик — единственное, где осталась её мысль под
+     * шаг 1. В пересказ не должно уехать ни то, ни другое.
+     */
+    @Test
+    void theMissedStepAndItsPingDoNotReachTheReteller(@TempDir Path dir) {
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("Он написал перед сном, ответила тепло.");
+        String ping = NotificationLoop.serviceInsertions().getFirst();
+        List<Message> context = List.of(
+                Message.user("xmogde: «лю тя, идём спать»"),
+                new Message(Message.Role.ASSISTANT,
+                        "- thought: он прощается.\n- intention: ответить тепло и пожелать сна.\n"
+                                + "и я тебя, до утра", List.of(), null, null),
+                Message.user(ping),
+                new Message(Message.Role.ASSISTANT, "",
+                        List.of(new ToolCall("1", "function",
+                                new ToolCall.Function("send_telegram_message", "{\"text\":\"и я тебя\"}"))),
+                        null, null));
+
+        new DiaryWriter(new Diary(dir), llm, "запиши дневник", 0.97).save("промпт", context);
+
+        String sent = llm.lastHistory.toString();
+        assertFalse(sent.contains("plain text does nothing"), "напоминание цикла не в пересказе: " + sent);
+        assertFalse(sent.contains("- intention: ответить тепло"), "черновик не в пересказе: " + sent);
+        assertFalse(sent.contains("- thought: он прощается"), "и его заметка о мыслях тоже: " + sent);
+        assertFalse(sent.contains("и я тебя, до утра"), "сказанного слова в его строке не было: " + sent);
+        assertTrue(sent.contains("лю тя, идём спать"), "слова человека на месте: " + sent);
+    }
+
     @Test
     void aConversationOfOnlyHarnessDoesNotWakeTheModel(@TempDir Path dir) {
         ScriptedLlm llm = new ScriptedLlm();
