@@ -21,8 +21,6 @@ public final class DiaryMemory implements Memory {
 
     private static final Logger log = LoggerFactory.getLogger(DiaryMemory.class);
 
-    private static final String TAG = "your_diary_page additional_context just_for_reasoning no_plagiarism no_copy";
-
     /** Сколько последних сообщений описывают «о чём сейчас речь». */
     private static final int CONTEXT_DEPTH = 3;
 
@@ -140,12 +138,7 @@ public final class DiaryMemory implements Memory {
             DiaryEntry entry = diary.use(match);
             injected.add(Fingerprint.of(entry.body()));
             String from = audience.attributionOf(origin.source(), origin.chatId());
-            recalled.append("<").append(TAG).append(">\n");
-            if (!from.isEmpty()) {
-                recalled.append(from).append('\n');
-            }
-            recalled.append(Markup.body(entry.body())).append("\n")
-                    .append("</").append(TAG).append(">\n");
+            recalled.append(DiaryMarkup.page(from, Markup.body(entry.body())));
             remembered.add("%s (%.3f)".formatted(digest(entry.body()), match.relatedness()));
         }
         if (!remembered.isEmpty()) {
@@ -217,28 +210,11 @@ public final class DiaryMemory implements Memory {
         if (text == null) {
             return;
         }
-        String own = withoutRecalled(text);
+        String own = DiaryMarkup.strip(text);
         if (own.isBlank()) {
             return;
         }
         topic.append(own).append("\n\n---\n\n");
-    }
-
-    /** Убирает из сообщения блоки воспоминаний — вместе с их разметкой. */
-    private static String withoutRecalled(String text) {
-        String open = "<" + TAG + ">";
-        String close = "</" + TAG + ">";
-        StringBuilder own = new StringBuilder();
-        int from = 0;
-        for (int start = text.indexOf(open); start >= 0; start = text.indexOf(open, from)) {
-            own.append(text, from, start);
-            int end = text.indexOf(close, start);
-            if (end < 0) {
-                return own.toString();   // блок не закрыт — дальше одна разметка
-            }
-            from = end + close.length();
-        }
-        return own.append(text, from, text.length()).toString();
     }
 
     /** Разговор начался заново — прежние воспоминания снова можно вспомнить. */

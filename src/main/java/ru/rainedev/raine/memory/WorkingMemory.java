@@ -142,7 +142,16 @@ public final class WorkingMemory {
         if (context.isEmpty()) {
             return;
         }
-        List<Message> conversation = new ArrayList<>(context);
+        // вклейки дневника в этот вызов не едут: трёхдневная сводка не должна
+        // пересказывать чужие страницы, а 15 КБ памяти на сообщение удваивают
+        // цену запроса. Исходный список не правится — цикл отдаёт его дневнику
+        List<Message> conversation = new ArrayList<>(context.size() + 1);
+        for (Message message : context) {
+            String text = message.content();
+            conversation.add(DiaryMarkup.hasPage(text)
+                    ? message.withContent(DiaryMarkup.strip(text))
+                    : message);
+        }
         conversation.add(Message.user(buildPrompt()));
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {

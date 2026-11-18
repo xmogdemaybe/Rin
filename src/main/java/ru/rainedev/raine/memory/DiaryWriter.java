@@ -36,10 +36,6 @@ public final class DiaryWriter {
 
     private static final int MAX_ATTEMPTS = 3;
 
-    /** Блоками памяти размечен и ответ воспоминаний, и повод порыва. */
-    private static final String RECALL_OPEN = "<your_diary_page";
-    private static final String RECALL_CLOSE = "</your_diary_page>";
-
     /** Пояснение к разметке, которое снимок чата ставит под своими сообщениями. */
     private static final String NOTE_OPEN = "<instructions>";
     private static final String NOTE_CLOSE = "</instructions>";
@@ -182,8 +178,7 @@ public final class DiaryWriter {
                 // живут только в нём, пока не стали уведомлением
                 continue;
             }
-            String text = cutBlocks(message.content() == null ? "" : message.content(),
-                    RECALL_OPEN, RECALL_CLOSE);
+            String text = DiaryMarkup.strip(message.content() == null ? "" : message.content());
             text = cutBlocks(text, NOTE_OPEN, NOTE_CLOSE);
             text = cutBlocks(text, SHELF_OPEN, SHELF_CLOSE);
             for (String insertion : NotificationLoop.serviceInsertions()) {

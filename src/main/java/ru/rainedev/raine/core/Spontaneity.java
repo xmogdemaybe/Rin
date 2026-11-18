@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.memory.Diary;
 import ru.rainedev.raine.memory.DiaryEntry;
+import ru.rainedev.raine.memory.DiaryMarkup;
 import ru.rainedev.raine.memory.Source;
 import ru.rainedev.raine.phone.Markup;
 
@@ -196,9 +197,7 @@ public final class Spontaneity implements AutoCloseable {
         // блока без воспоминания в промпте не бывает: пустая пара тегов — это
         // разметка вместо повода, и модель отвечает на неё подтверждением, что
         // сказать нечего
-        reason.ifPresent(entry -> prompt.append("<your_diary_page just_for_reasoning no_plagiarism no_copy>\n")
-                .append(Markup.body(entry.body())).append('\n')
-                .append("</your_diary_page>\n\n"));
+        reason.ifPresent(entry -> prompt.append(DiaryMarkup.reason(Markup.body(entry.body()))));
         // без этого порыв слеп к тому, что было совсем недавно: она писала бы
         // снова через минуту после разговора или будила бы человека ночью
         String status = loop.lastTalkStatus();

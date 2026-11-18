@@ -24,6 +24,7 @@ import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.memory.Diary;
+import ru.rainedev.raine.memory.DiaryMarkup;
 import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
 
@@ -239,8 +240,15 @@ class SpontaneityTest {
             }
 
             assertTrue(loop.queued() > 0, "личка владельца — законный повод написать владельцу");
-            assertTrue(spontaneity.buildPrompt().contains("поверил только мне"),
+            String prompt = spontaneity.buildPrompt();
+            assertTrue(prompt.contains("поверил только мне"),
                     "и повод этот доезжает до промпта, а не вычёркивается молча");
+            assertTrue(prompt.contains("</your_diary_page>\n\n"),
+                    "повод размечен тем же контрактом, что и вклейки памяти: " + prompt);
+            assertFalse(DiaryMarkup.strip(prompt).contains("your_diary_page"),
+                    "и вырезается этим же контрактом целиком: " + DiaryMarkup.strip(prompt));
+            assertTrue(DiaryMarkup.strip(prompt).contains("maybe write to someone"),
+                    "остальной промпт порыва при вырезании не теряется");
         }
     }
 
