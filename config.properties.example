@@ -72,6 +72,13 @@ diary_consolidation_length=8000
 # видит ли она картинки и видео
 vision_enabled=true
 
+# адрес зрения; пусто — наследовать основной llm_base_url
+vision_base_url=
+
+# ключ зрения; пусто — наследовать основной llm_api_key.
+# Обе настройки читаются при создании клиента, то есть меняются перезапуском.
+vision_api_key=
+
 # модель зрения для важного; пусто — та же, что говорит
 vision_model=
 
@@ -186,6 +193,13 @@ llm_proxy=
 
 # модель для векторов памяти
 embedding_model=openai/text-embedding-3-large
+
+# адрес эмбеддингов; пусто — наследовать основной llm_base_url
+embedding_base_url=
+
+# ключ эмбеддингов; пусто — наследовать основной llm_api_key.
+# Читаются при создании клиента, то есть меняются перезапуском.
+embedding_api_key=
 
 # имя
 character_name=Rin

@@ -182,7 +182,7 @@ public final class RaineApp implements AutoCloseable {
 
         ru.rainedev.raine.llm.Transcript.enabled(config.llmTranscript());
         Prompts prompts = new Prompts(config.promptsDir(), config.character());
-        LlmClient llm = new OpenAiCompatibleClient(config.llm(), config.embeddingModel());
+        LlmClient llm = new OpenAiCompatibleClient(config);
 
         // слух — не зрение: голосовое и кружок слушают ушами, и без картинок они
         // остаются слышимыми. Telegram распознаёт речь только за премиум, остальное

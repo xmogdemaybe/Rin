@@ -29,7 +29,7 @@ public final class RecallCommand {
         }
 
         Diary diary = new Diary(config.diaryDir());
-        LlmClient llm = new OpenAiCompatibleClient(config.llm(), config.embeddingModel());
+        LlmClient llm = new OpenAiCompatibleClient(config);
         diary.embedder(llm::embedding);
 
         System.out.printf("Дневник: %s, записей %d%n", config.diaryDir(), diary.size());

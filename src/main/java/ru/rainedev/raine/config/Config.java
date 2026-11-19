@@ -30,6 +30,8 @@ public record Config(
         String webSearchKey,
         Llm llm,
         String embeddingModel,
+        String embeddingBaseUrl,
+        String embeddingApiKey,
         Character character,
         long contextTokenLimit,
         String lockdown,
@@ -91,8 +93,8 @@ public record Config(
      *                    разбор десятка картинок стоит минуты молчания, а разговор
      *                    идёт про последние из них
      */
-    public record Vision(boolean enabled, String model, String cheapModel, Path cacheDir, int recentDepth,
-                         boolean videoInChannels) {}
+    public record Vision(boolean enabled, String baseUrl, String apiKey, String model, String cheapModel,
+                         Path cacheDir, int recentDepth, boolean videoInChannels) {}
 
     /**
      * Ночной сон. Время выбирается заново каждую ночь в пределах окна:
@@ -273,6 +275,10 @@ public record Config(
                                 + "больше — сильнее сжимается память, меньше — бережнее"),
                 new Vision(
                         s.flag("vision_enabled", true, "видит ли она картинки и видео"),
+                        s.inherit("vision_base_url", s.require("llm_base_url", "адрес модели"),
+                                "адрес зрения; пусто — основной адрес"),
+                        s.inherit("vision_api_key", s.require("llm_api_key", "ключ модели"),
+                                "ключ зрения; пусто — основной ключ"),
                         // глаза живут на том же адресе, что и разговор: та же
                         // модель умеет и смотреть. Своё имя оставляют только тогда,
                         // когда для картинок хотят другую модель — чужое имя адрес
@@ -337,6 +343,10 @@ public record Config(
                         s.inherit("fallback_api_key", s.require("llm_api_key", "ключ модели"),
                                 "ключ резервной модели; пусто — основной ключ")),
                 s.get("embedding_model", "openai/text-embedding-3-large", "модель для векторов памяти"),
+                s.inherit("embedding_base_url", s.require("llm_base_url", "адрес модели"),
+                        "адрес эмбеддингов; пусто — основной адрес"),
+                s.inherit("embedding_api_key", s.require("llm_api_key", "ключ модели"),
+                        "ключ эмбеддингов; пусто — основной ключ"),
                 new Character(
                         s.get("character_name", "Rin", "имя"),
                         s.get("character_nickname", "@rin", "ник в Telegram"),

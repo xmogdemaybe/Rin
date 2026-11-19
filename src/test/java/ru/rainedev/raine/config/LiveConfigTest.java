@@ -114,4 +114,20 @@ class LiveConfigTest {
             assertEquals(before, live.current().llm().model());
         }
     }
+
+    @Test
+    void endpointAddressesRequireRestart(@TempDir Path dir) throws IOException {
+        Path file = configIn(dir, "");
+        try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
+            Files.writeString(file, Files.readString(file)
+                    + "embedding_base_url=http://embedding.example/v1\n"
+                    + "vision_base_url=http://vision.example/v1\n");
+            Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(
+                    System.currentTimeMillis() + 2000));
+
+            assertTrue(live.checkOnce());
+            assertTrue(live.restartRequired().containsAll(List.of("vision", "embeddingBaseUrl")),
+                    "адреса сервисов читаются при создании клиента: " + live.restartRequired());
+        }
+    }
 }

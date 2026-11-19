@@ -75,7 +75,16 @@ public final class OpenAiCompatibleClient implements LlmClient {
     private final java.util.function.Consumer<Duration> pause;
 
     private final Config.Llm config;
+    private final String visionBaseUrl;
+    private final String visionApiKey;
+    private final String embeddingBaseUrl;
+    private final String embeddingApiKey;
     private volatile LlmFailure blocked;
+    private volatile LlmFailure visionBlocked;
+    private volatile LlmFailure embeddingBlocked;
+
+    /** Назначение запроса: у зрения и эмбеддингов свои адрес, ключ и запрет повторов. */
+    private enum Purpose { CHAT, VISION, EMBEDDING }
 
     /**
      * Шлюз однажды отверг «обязан вызвать инструмент» — значит, он его не
@@ -89,14 +98,36 @@ public final class OpenAiCompatibleClient implements LlmClient {
 
     private final String embeddingModel;
 
+    public OpenAiCompatibleClient(Config config) {
+        this(config, defaultSender(config.llm().proxy()), OpenAiCompatibleClient::sleep);
+    }
+
+    OpenAiCompatibleClient(Config config, Sender sender, java.util.function.Consumer<Duration> pause) {
+        this(config.llm(), config.embeddingModel(), config.vision().baseUrl(), config.vision().apiKey(),
+                config.embeddingBaseUrl(), config.embeddingApiKey(), sender, pause);
+    }
+
     public OpenAiCompatibleClient(Config.Llm config, String embeddingModel) {
-        this(config, embeddingModel, defaultSender(config.proxy()), OpenAiCompatibleClient::sleep);
+        this(config, embeddingModel, config.baseUrl(), config.apiKey(), config.baseUrl(), config.apiKey(),
+                defaultSender(config.proxy()), OpenAiCompatibleClient::sleep);
     }
 
     OpenAiCompatibleClient(Config.Llm config, String embeddingModel, Sender sender,
                            java.util.function.Consumer<Duration> pause) {
+        this(config, embeddingModel, config.baseUrl(), config.apiKey(), config.baseUrl(), config.apiKey(),
+                sender, pause);
+    }
+
+    private OpenAiCompatibleClient(Config.Llm config, String embeddingModel,
+                                   String visionBaseUrl, String visionApiKey,
+                                   String embeddingBaseUrl, String embeddingApiKey,
+                                   Sender sender, java.util.function.Consumer<Duration> pause) {
         this.config = config;
         this.embeddingModel = embeddingModel;
+        this.visionBaseUrl = visionBaseUrl;
+        this.visionApiKey = visionApiKey;
+        this.embeddingBaseUrl = embeddingBaseUrl;
+        this.embeddingApiKey = embeddingApiKey;
         this.sender = sender;
         this.pause = pause;
         if (config.fallbackModel().isBlank()) {
@@ -165,7 +196,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
 
     /** Отправляет собранное тело и разбирает ответ. */
     private ChatResponse complete(ObjectNode body, List<Message> messages) {
-        Response response = post("chat/completions", body, Duration.ofMinutes(5), messages);
+        Response response = post(Purpose.CHAT, "chat/completions", body, Duration.ofMinutes(5), messages);
         Transcript.save(body, response.text());
         try {
             // иногда вызов приходит текстом, а не в tool_calls: без этого он
@@ -205,7 +236,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
                 .put("url", "data:image/jpeg;base64," + java.util.Base64.getEncoder().encodeToString(image));
         parts.addObject().put("type", "text").put("text", "</attachments>");
 
-        String response = post("chat/completions", body, Duration.ofMinutes(3), null).text();
+        String response = post(Purpose.VISION, "chat/completions", body, Duration.ofMinutes(3), null).text();
         try {
             return mapper.readValue(response, ChatResponse.class).text();
         } catch (IOException e) {
@@ -239,7 +270,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
                 .put("data", java.util.Base64.getEncoder().encodeToString(audio))
                 .put("format", format);
 
-        String response = post("chat/completions", body, Duration.ofMinutes(3), null).text();
+        String response = post(Purpose.CHAT, "chat/completions", body, Duration.ofMinutes(3), null).text();
         try {
             return mapper.readValue(response, ChatResponse.class).text();
         } catch (IOException e) {
@@ -254,7 +285,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
         // пустую строку эндпоинт не принимает, а пустой текст встречается
         body.put("input", input == null || input.isBlank() ? " " : trimmed(input));
 
-        String response = post("embeddings", body, Duration.ofMinutes(2), null).text();
+        String response = post(Purpose.EMBEDDING, "embeddings", body, Duration.ofMinutes(2), null).text();
         try {
             JsonNode vector = mapper.readTree(response).path("data").path(0).path("embedding");
             if (!vector.isArray()) {
@@ -334,8 +365,8 @@ public final class OpenAiCompatibleClient implements LlmClient {
         }
     }
 
-    private Response post(String path, ObjectNode body, Duration timeout, List<Message> messages) {
-        LlmFailure unavailable = blocked;
+    private Response post(Purpose purpose, String path, ObjectNode body, Duration timeout, List<Message> messages) {
+        LlmFailure unavailable = blockedFor(purpose);
         if (unavailable != null) throw unavailable;
         boolean conversation = messages != null;
         boolean fallback = false;
@@ -352,7 +383,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
                 }
                 applyThoughtSignatures(body, messages, fallback);
             }
-            HttpRequest request = request(path, body, timeout, fallback);
+            HttpRequest request = request(purpose, path, body, timeout, fallback);
             try {
                 HttpResponse<String> response = sender.send(request);
                 int status = response.statusCode();
@@ -393,17 +424,20 @@ public final class OpenAiCompatibleClient implements LlmClient {
                     log.warn("Шлюз отверг принудительный вызов инструментов — повторяю без tool_choice");
                     continue;
                 }
-                String note = ErrorNote.of(response.body().replace(config.apiKey(), "[скрыто]")
-                        .replace(config.fallbackApiKey(), "[скрыто]"));
+                String note = ErrorNote.of(maskedKeys(response.body()));
                 LlmFailure failure = new LlmFailure(status,
                         "Ошибка эндпоинта (%d): %s".formatted(status, note),
-                        !fallback && (conversation || config.fallbackModel().isBlank())
+                        purpose == Purpose.CHAT && !fallback
+                                && (conversation || config.fallbackModel().isBlank())
                                 && (status == 401 || status == 402 || status == 403));
                 if (!failure.retryable()) {
                     if (fallback && retryPrimary) {
                         throw new LlmFailure(status, failure.getMessage(), false, true);
                     }
-                    if (failure.requiresOperator()) blocked = failure;
+                    if (failure.requiresOperator()
+                            || (purpose != Purpose.CHAT && (status == 401 || status == 402 || status == 403))) {
+                        block(purpose, failure);
+                    }
                     throw failure;
                 }
                 lastFailure = failure;
@@ -438,17 +472,59 @@ public final class OpenAiCompatibleClient implements LlmClient {
         throw lastFailure;
     }
 
-    private HttpRequest request(String path, ObjectNode body, Duration timeout, boolean fallback) {
-        String url = fallback ? config.fallbackBaseUrl() : config.baseUrl();
+    private HttpRequest request(Purpose purpose, String path, ObjectNode body, Duration timeout, boolean fallback) {
+        String url;
+        String apiKey;
+        if (fallback) {
+            url = config.fallbackBaseUrl();
+            apiKey = config.fallbackApiKey();
+        } else if (purpose == Purpose.VISION) {
+            url = visionBaseUrl;
+            apiKey = visionApiKey;
+        } else if (purpose == Purpose.EMBEDDING) {
+            url = embeddingBaseUrl;
+            apiKey = embeddingApiKey;
+        } else {
+            url = config.baseUrl();
+            apiKey = config.apiKey();
+        }
         try {
             return HttpRequest.newBuilder(URI.create((url.endsWith("/") ? url : url + "/") + path))
                     .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + (fallback ? config.fallbackApiKey() : config.apiKey()))
+                    .header("Authorization", "Bearer " + apiKey)
                     .timeout(timeout)
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                     .build();
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось собрать запрос", e);
+        }
+    }
+
+    private LlmFailure blockedFor(Purpose purpose) {
+        return switch (purpose) {
+            case CHAT -> blocked;
+            case VISION -> visionBlocked;
+            case EMBEDDING -> embeddingBlocked;
+        };
+    }
+
+    private void block(Purpose purpose, LlmFailure failure) {
+        switch (purpose) {
+            case CHAT -> {
+                blocked = failure;
+                if (failure.requiresOperator()) {
+                    // общий адрес — общий ключ и общий платёжный счёт; свой
+                    // провайдер у зрения или эмбеддингов отказ чата не закрывает
+                    if (visionBaseUrl.equals(config.baseUrl())) {
+                        visionBlocked = failure;
+                    }
+                    if (embeddingBaseUrl.equals(config.baseUrl())) {
+                        embeddingBlocked = failure;
+                    }
+                }
+            }
+            case VISION -> visionBlocked = failure;
+            case EMBEDDING -> embeddingBlocked = failure;
         }
     }
 
@@ -501,9 +577,21 @@ public final class OpenAiCompatibleClient implements LlmClient {
 
     /** Тело ошибки для журнала: ключи вырезаны, разметка и управляющие символы тоже. */
     private String maskedBody(String body) {
-        return ErrorNote.of((body == null ? "" : body)
-                .replace(config.apiKey(), "[скрыто]")
-                .replace(config.fallbackApiKey(), "[скрыто]"));
+        return ErrorNote.of(maskedKeys(body));
+    }
+
+    /** Все настроенные ключи, длинные первыми: короткий не должен испортить длинный. */
+    private String maskedKeys(String text) {
+        String masked = text == null ? "" : text;
+        List<String> keys = new ArrayList<>();
+        for (String key : new String[]{config.apiKey(), config.fallbackApiKey(), visionApiKey, embeddingApiKey}) {
+            if (key != null && !key.isBlank()) keys.add(key);
+        }
+        keys.sort(java.util.Comparator.comparingInt(String::length).reversed());
+        for (String key : keys) {
+            masked = masked.replace(key, "[скрыто]");
+        }
+        return masked;
     }
 
     /**
