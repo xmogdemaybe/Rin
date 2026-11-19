@@ -270,11 +270,11 @@ class NotificationLoopTest {
     /** Снимок чата с полкой и пояснением — как его собирают TelegramTools и ChatScreen. */
     private static Toolbox screenWithShelf(String marker) {
         return new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
-                You switched to the chat "xmogde" in Telegram. You see last messages:
+                You switched to the chat "papik" in Telegram. You see last messages:
                 <message message_id="1">привет, %s</message>
 
                 <instructions>
-                You are in private chat with xmogde. Answer as yourself.
+                You are in private chat with papik. Answer as yourself.
                 </instructions>
 
                 <favourite_stickers>
@@ -674,10 +674,10 @@ class NotificationLoopTest {
         String ping = NotificationLoop.serviceInsertions().getFirst();
         Toolbox choice = new Toolbox(
                 Tool.simple("open", "Открывает чат", arguments -> """
-                        You switched to the chat "xmogde" in Telegram.
+                        You switched to the chat "papik" in Telegram.
                         <message message_id="9">привет, свежая</message>
                         <instructions>
-                        You are in private chat with xmogde. Answer as yourself.
+                        You are in private chat with papik. Answer as yourself.
                         </instructions>
                         <favourite_stickers>
                           - sticker_id="1" emoji="❤️": Chibi anime character with white hair.
@@ -712,16 +712,16 @@ class NotificationLoopTest {
     @Test
     void notesWithoutShelfStillTidyTheHistory() {
         Toolbox screen = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
-                You switched to the chat "xmogde" in Telegram.
+                You switched to the chat "papik" in Telegram.
                 <message message_id="1">привет, прежняя</message>
                 <instructions>
-                You are in private chat with xmogde. Answer as yourself.
+                You are in private chat with papik. Answer as yourself.
                 </instructions>"""));
         Toolbox fresh = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
-                You switched to the chat "xmogde" in Telegram.
+                You switched to the chat "papik" in Telegram.
                 <message message_id="2">привет, свежая</message>
                 <instructions>
-                You are in private chat with xmogde. Answer as yourself.
+                You are in private chat with papik. Answer as yourself.
                 </instructions>"""));
 
         ScriptedLlm llm = new ScriptedLlm();

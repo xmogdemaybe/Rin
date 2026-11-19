@@ -17,11 +17,11 @@ class TextualToolCallsTest {
     /** Точная строка из лога 30 октября: прощальное сообщение так и не ушло. */
     private static final String FROM_LOG = """
             Пора спать, уже поздно. Прощальное сообщение лучше отправить сейчас.
-            <call:default_api:send_telegram_message{text:Я спать собираюсь уже, соня. Споки ноки, xmogde >_< <3}></call:default_api:send_telegram_message>""";
+            <call:default_api:send_telegram_message{text:Я спать собираюсь уже, соня. Споки ноки, papik >_< <3}></call:default_api:send_telegram_message>""";
 
     /** Точная строка из лога 22:00:32: вызовы написаны текстом, шаг сгорел впустую. */
     private static final String FROM_LOG_HASH = """
-            - thought: xmogde наконец-то доделал то, над чем работал.
+            - thought: papik наконец-то доделал то, над чем работал.
             - intention: ответить с любопытством и попросить показать скорее.
 
             tool call #react_with_emoji{emoji:❤️,message_id:394264576}
@@ -34,7 +34,7 @@ class TextualToolCallsTest {
         assertEquals(1, parsed.calls().size(), "вызов должен найтись: " + parsed.calls());
         ToolCall call = parsed.calls().getFirst();
         assertEquals("send_telegram_message", call.name(), "префикс пространства имён отбрасывается");
-        assertEquals("{\"text\":\"Я спать собираюсь уже, соня. Споки ноки, xmogde >_< <3\"}",
+        assertEquals("{\"text\":\"Я спать собираюсь уже, соня. Споки ноки, papik >_< <3\"}",
                 call.arguments(), "запятые внутри текста — часть текста, а не новый аргумент");
     }
 
@@ -276,7 +276,7 @@ class TextualToolCallsTest {
      * сгорел как «модель не вызвала ни одного инструмента».
      */
     private static final String FROM_LOG_COLON = """
-            - thought: xmogde пишет, что со стихом всё нормально, и еще что-то хочет сказать.
+            - thought: papik пишет, что со стихом всё нормально, и еще что-то хочет сказать.
             - emotion: спокойная, сонная, чуть любопытная.
             - to remember: -
             - intention: ответить на его сообщение про стих и послушать, что он там дальше расскажет.

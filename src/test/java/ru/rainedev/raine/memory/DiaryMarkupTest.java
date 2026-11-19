@@ -39,7 +39,7 @@ class DiaryMarkupTest {
         public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
             lastHistory.clear();
             lastHistory.addAll(history);
-            String text = answers.isEmpty() ? "память: жду ответа от xmogde" : answers.removeFirst();
+            String text = answers.isEmpty() ? "память: жду ответа от papik" : answers.removeFirst();
             Message message = new Message(Message.Role.ASSISTANT, text, List.of(), null, null);
             return new ChatResponse("id", "test", List.of(new ChatResponse.Choice(0, message, "stop")),
                     ChatResponse.Usage.EMPTY);
@@ -106,7 +106,7 @@ class DiaryMarkupTest {
     /** Повод порыва собирается тем же контрактом и вырезается им же. */
     @Test
     void impulseReasonIsStrippableWhole() {
-        String reason = DiaryMarkup.reason("xmogde вчера возился с сервером");
+        String reason = DiaryMarkup.reason("papik вчера возился с сервером");
 
         assertTrue(reason.startsWith("<your_diary_page just_for_reasoning"), reason);
         assertTrue(reason.contains("</your_diary_page>\n\n"), reason);
@@ -120,7 +120,7 @@ class DiaryMarkupTest {
      */
     @Test
     void realMemoryOutputLeavesNoMarkupAnywhere(@TempDir Path dir) {
-        String said = "xmogde: «ты где пропала»";
+        String said = "papik: «ты где пропала»";
         DiaryMemory memory = new DiaryMemory(diaryWith(dir, "мы ездили на Байкал"), new Scripted(), 4000);
         String recalled = memory.recall(List.of(Message.user(said)), Audience.STRANGER);
         assertFalse(recalled.isEmpty(), "дневник с подходящей записью обязан вспомниться");

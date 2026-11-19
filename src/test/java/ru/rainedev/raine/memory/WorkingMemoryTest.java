@@ -205,7 +205,7 @@ class WorkingMemoryTest {
         Path file = dir.resolve("working_memory.md");
         ScriptedLlm llm = new ScriptedLlm().willAnswer("- Нормальный пункт — последнее обновление: Jul 21");
         String screen = """
-                You switched to the chat "xmogde" in Telegram.
+                You switched to the chat "papik" in Telegram.
                 <message message_id="1">мы ездили на Байкал</message>
                 <instructions>
                 Answer as yourself.

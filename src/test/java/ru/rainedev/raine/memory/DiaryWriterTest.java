@@ -174,13 +174,13 @@ class DiaryWriterTest {
         diary.save("""
                 - timestamps: 16:14 UTC
                 - key messages:
-                  - xmogde: "Хэй, я нашел тебя"
+                  - papik: "Хэй, я нашел тебя"
                 - retrieval cues: переписка после перерыва""", new double[] {1, 0, 0});
 
         String newerWindow = """
                 - timestamps: 16:14 - 16:58 UTC
                 - key messages:
-                  - xmogde: "Хэй, я нашел тебя"
+                  - papik: "Хэй, я нашел тебя"
                   - Rin: "привет, объявился наконец"
                 - retrieval cues: переписка после перерыва""";
 
@@ -348,7 +348,7 @@ class DiaryWriterTest {
         ScriptedLlm llm = new ScriptedLlm().willAnswer("Он написал перед сном, ответила тепло.");
         String ping = NotificationLoop.serviceInsertions().getFirst();
         List<Message> context = List.of(
-                Message.user("xmogde: «лю тя, идём спать»"),
+                Message.user("papik: «лю тя, идём спать»"),
                 new Message(Message.Role.ASSISTANT,
                         "- thought: он прощается.\n- intention: ответить тепло и пожелать сна.\n"
                                 + "и я тебя, до утра", List.of(), null, null),

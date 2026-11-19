@@ -89,7 +89,7 @@ class StickerMarkupTest {
 
     /** Разметка спрашивает имя пака тем же путём, что и описание вложения. */
     private static MessageFormatter withPacks(java.util.function.LongFunction<String> packs) {
-        return new MessageFormatter(id -> "xmogde", MessageFormatter.ReplyLookup.NONE,
+        return new MessageFormatter(id -> "papik", MessageFormatter.ReplyLookup.NONE,
                 new MediaDescriber() {
                     @Override
                     public String describe(TdApi.Message message) {
@@ -131,7 +131,7 @@ class StickerMarkupTest {
         TdApi.MessageReplyToMessage reply = new TdApi.MessageReplyToMessage();
         reply.messageId = 300L;
         answer.replyTo = reply;
-        MessageFormatter asking = new MessageFormatter(id -> "xmogde",
+        MessageFormatter asking = new MessageFormatter(id -> "papik",
                 (chatId, messageId) -> Optional.of(quoted),
                 new MediaDescriber() {
                     @Override

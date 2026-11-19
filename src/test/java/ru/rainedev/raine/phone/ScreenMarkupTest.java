@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 class ScreenMarkupTest {
 
     private static final String SCREEN = """
-            You switched to the chat "xmogde" in Telegram. You see last messages:
+            You switched to the chat "papik" in Telegram. You see last messages:
             <message message_id="1">мы ездили на Байкал</message>
 
             <instructions>
