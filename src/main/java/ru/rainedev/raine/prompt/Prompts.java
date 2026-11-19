@@ -23,6 +23,13 @@ public final class Prompts {
     /** Заголовок файла между строками "---" — комментарий для людей, модели он не нужен. */
     private static final Pattern HEADER = Pattern.compile("\\A---\\s*\\n.*?\\n---\\s*\\n", Pattern.DOTALL);
 
+    /** Секция внешности, которую видят глаза: только опознавательные приметы. */
+    private static final Pattern IDENTITY_START =
+            Pattern.compile("(?im)^DistinctiveFeatures:[ \\t]*(?:\\R|$)");
+
+    /** Следующий заголовок секции: строка без отступа и дефиса, с двоеточием. */
+    private static final Pattern SECTION_START = Pattern.compile("(?m)^(?![\\s-])[^:\\r\\n]+:");
+
     private final Path dir;
     private final Map<String, String> variables;
 
@@ -85,6 +92,24 @@ public final class Prompts {
     /** Промпт, читаемый в тот момент, когда он понадобится, а не при запуске. */
     public java.util.function.Supplier<String> lazy(String fileName) {
         return () -> load(fileName);
+    }
+
+    /**
+     * Только опознавательные приметы из файла внешности: глазам для узнавания
+     * не нужны ни стиль рисовки, ни гардероб, ни настроение. Нет секции —
+     * отдаётся весь текст, как раньше.
+     */
+    public String characterIdentity() {
+        String appearance = load("character_appearance.md");
+        Matcher start = IDENTITY_START.matcher(appearance);
+        if (!start.find()) {
+            return appearance;
+        }
+        Matcher next = SECTION_START.matcher(appearance);
+        next.region(start.end(), appearance.length());
+        int end = next.find() ? next.start() : appearance.length();
+        String identity = appearance.substring(start.start(), end).strip();
+        return identity.isEmpty() ? appearance : identity;
     }
 
     /**

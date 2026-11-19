@@ -146,6 +146,62 @@ class PromptsTest {
         assertTrue(system.contains("<your_growth>\n- стала терпеливее — Mar 3\n</your_growth>"), system);
     }
 
+    @Test
+    void characterIdentityKeepsOnlyDistinctiveFeatures(@TempDir Path dir) throws IOException {
+        Files.writeString(dir.resolve("character_appearance.md"), """
+                ---
+                Служебная шапка для людей.
+                ---
+
+                Papik is an adult man (anime illustration style), about 172 cm tall.
+
+                DistinctiveFeatures:
+                - short dark hair
+                - a flower on the left
+
+                Outfits (one character, several looks):
+                MAIN: a coat
+                HOME: bedroom, bed and pillow
+
+                Palette: black, white
+                Mood: calm
+                Facts:
+                - likes tea
+                """);
+        Prompts prompts = new Prompts(dir, new Config.Character("Papik", "@papik", "Papik"));
+
+        String identity = prompts.characterIdentity();
+
+        assertTrue(identity.contains("DistinctiveFeatures:"), identity);
+        assertTrue(identity.contains("short dark hair"), identity);
+        assertFalse(identity.contains("anime illustration style"), identity);
+        assertFalse(identity.contains("HOME"), identity);
+        assertFalse(identity.contains("Palette"), identity);
+        assertFalse(identity.contains("Facts"), identity);
+    }
+
+    @Test
+    void characterIdentityFallsBackToTheWholeText(@TempDir Path dir) throws IOException {
+        Files.writeString(dir.resolve("character_appearance.md"), "Внешность без знакомой секции.\n\nFacts:\n- likes tea");
+
+        String identity = new Prompts(dir, new Config.Character("Papik", "@papik", "Papik")).characterIdentity();
+
+        assertTrue(identity.contains("без знакомой секции"), identity);
+        assertTrue(identity.contains("likes tea"), identity);
+    }
+
+    @Test
+    void characterIdentityReadsTheShippedExample() {
+        String identity = new Prompts(Path.of("prompts-example"),
+                new Config.Character("Papik", "@papik", "Papik")).characterIdentity();
+
+        assertTrue(identity.startsWith("DistinctiveFeatures:"), identity);
+        assertTrue(identity.contains("ahoge"), identity);
+        assertFalse(identity.contains("anime illustration style"), identity);
+        assertFalse(identity.contains("HOME"), identity);
+        assertFalse(identity.contains("Facts"), identity);
+    }
+
     private static void layOutBase(Path dir) throws IOException {
         Files.writeString(dir.resolve("system.md"), "Правила работы.");
         Files.writeString(dir.resolve("character_base.md"), "Характер.");

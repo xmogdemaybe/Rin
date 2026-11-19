@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
@@ -64,6 +65,18 @@ public final class Vision {
             this.cheap = cheap;
         }
     }
+
+    /** Строка вердикта: в кэше и в разговоре ей делать нечего. */
+    private static final java.util.regex.Pattern NSFW_LINE =
+            java.util.regex.Pattern.compile("(?im)^[\\t ]*(?:[-*][\\t ]*)?NSFW[\\t ]*:.*(?:\\R|$)");
+
+    /** Заголовок описания: единственное поле, где чистим слова манеры рисовки. */
+    private static final java.util.regex.Pattern TITLE_LINE = java.util.regex.Pattern.compile(
+            "(?im)^([\\t ]*[-*][\\t ]*(?:\\*\\*)?Title(?:\\*\\*)?[\\t ]*:[\\t ]*)([^\\r\\n]*)");
+
+    private static final java.util.regex.Pattern STYLE_WORD = java.util.regex.Pattern.compile(
+            "(?i)(?<![\\p{L}\\p{N}])(?:anime-style|chibi-style|anime|chibi|manga|illustration|cartoon)"
+                    + "(?![\\p{L}\\p{N}])");
 
     private final LlmClient llm;
     private final Prompts prompts;
@@ -239,7 +252,10 @@ public final class Vision {
                     continue;
                 }
                 if (caption != null && !caption.isBlank()) {
-                    return caption.strip();
+                    String cleaned = sanitize(caption);
+                    if (!cleaned.isBlank()) {
+                        return cleaned;
+                    }
                 }
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустая подпись к кадру на {} с, попытка {}", frame.from(), attempt);
@@ -357,11 +373,16 @@ public final class Vision {
                     continue;
                 }
                 if (description != null && !description.isBlank()) {
-                    if (allowCache) {
-                        toCache(file, description.strip(), kind);
+                    String cleaned = sanitize(description);
+                    if (cleaned.isBlank()) {
+                        log.debug("После чистки не осталось описания, попытка {} из {}", attempt, MAX_ATTEMPTS);
+                        continue;
                     }
-                    log.info("Разглядела {}: {}", kind.tag, description.strip().lines().findFirst().orElse(""));
-                    return Markup.body(description.strip()).strip();
+                    if (allowCache) {
+                        toCache(file, cleaned, kind);
+                    }
+                    log.info("Разглядела {}: {}", kind.tag, cleaned.lines().findFirst().orElse(""));
+                    return Markup.body(cleaned).strip();
                 }
                 // пустой ответ обычно значит, что модель захлебнулась рассуждениями
                 log.debug("Пустое описание, попытка {} из {}", attempt, MAX_ATTEMPTS);
@@ -403,7 +424,7 @@ public final class Vision {
     private String buildContext(List<Message> context) {
         StringBuilder out = new StringBuilder("<context>\n<character name=\"")
                 .append(characterName).append("\">\n")
-                .append(prompts.load("character_appearance.md"))
+                .append(prompts.characterIdentity())
                 .append("\n</character>\n");
         if (context != null) {
             for (Message message : context) {
@@ -423,6 +444,45 @@ public final class Vision {
     private static String wrap(Kind kind, String description, boolean preview) {
         return "<%s description%s>\n%s\n</%s>\n".formatted(kind.tag, preview ? " preview=\"true\"" : "",
                 Markup.body(description), kind.tag);
+    }
+
+    /**
+     * Убирает вердикт и слова манеры рисовки: вердикт — внутренняя пометка,
+     * а не часть описания, и в кэше ему не место. Пустая строка после чистки
+     * означает, что описания не осталось.
+     */
+    static String sanitize(String description) {
+        if (description == null) {
+            return "";
+        }
+        return cleanTitles(withoutVerdict(description));
+    }
+
+    /** Вырезает строку вердикта целиком: с дефисом или без, в любом регистре. */
+    static String withoutVerdict(String text) {
+        return text == null ? "" : NSFW_LINE.matcher(text).replaceAll("");
+    }
+
+    private static String cleanTitles(String text) {
+        var matcher = TITLE_LINE.matcher(text);
+        if (!matcher.find()) {
+            return text;
+        }
+        StringBuilder result = new StringBuilder();
+        do {
+            matcher.appendReplacement(result,
+                    Matcher.quoteReplacement(matcher.group(1) + cleanTitle(matcher.group(2))));
+        } while (matcher.find());
+        matcher.appendTail(result);
+        return result.toString();
+    }
+
+    private static String cleanTitle(String title) {
+        String cleaned = STYLE_WORD.matcher(title).replaceAll(" ");
+        cleaned = cleaned.replaceAll("\\s+", " ").strip();
+        cleaned = cleaned.replaceAll("^[,;:.\\-–—|]+\\s*", "");
+        cleaned = cleaned.replaceAll("\\s*[,;:\\-–—|]+$", "");
+        return cleaned.isBlank() ? "Untitled" : cleaned;
     }
 
     /**
@@ -455,8 +515,22 @@ public final class Vision {
 
     private static String readCache(Path cache) {
         try {
-            String description = Files.readString(cache);
-            return description.isBlank() ? null : description;
+            String raw = Files.readString(cache);
+            String cleaned = sanitize(raw);
+            if (!cleaned.equals(raw)) {
+                // старый кэш переписываем на месте, чтобы вердикт не вернулся
+                // при следующем чтении; пустой файл — просто промах
+                try {
+                    if (cleaned.isEmpty()) {
+                        Files.deleteIfExists(cache);
+                    } else {
+                        AtomicFiles.writeString(cache, cleaned);
+                    }
+                } catch (IOException e) {
+                    log.debug("Кэш {} не переписался: {}", cache.getFileName(), e.getMessage());
+                }
+            }
+            return cleaned.isBlank() ? null : cleaned;
         } catch (IOException e) {
             return null;   // файла нет или он не прочитался — смотрят заново
         }
@@ -480,8 +554,13 @@ public final class Vision {
      * уступает место целому новому — но никогда не оборванному на середине.
      */
     private void toCache(Path file, String description, Kind kind) {
+        String cleaned = sanitize(description);
+        if (cleaned.isBlank()) {
+            // пустое описание не должно заслонять картинку навсегда
+            return;
+        }
         try {
-            AtomicFiles.writeString(cacheFor(file, kind), description);
+            AtomicFiles.writeString(cacheFor(file, kind), cleaned);
             // раз описание есть, память о неудаче больше не о чём: её маркер
             // лежит в папке под сроком и без ухода накопился бы за все годы
             Files.deleteIfExists(failureFor(file));

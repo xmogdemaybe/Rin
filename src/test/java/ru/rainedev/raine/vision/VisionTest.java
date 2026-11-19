@@ -387,6 +387,87 @@ class VisionTest {
         assertTrue(seen.contains("Человек с котом"), seen);
     }
 
+    @Test
+    void cacheDropsVerdictAndStyleWordsFromTitle(@TempDir Path dir) throws IOException {
+        Path cache = dir.resolve("cache");
+        ScriptedLlm llm = new ScriptedLlm().willSee("""
+                - Title: Anime Girl in Shopping Cart
+                - NSFW: no
+                - VisibleContent: a person sits in a cart
+                """);
+
+        String result = visionWith(llm, cache)
+                .describe(imageFile(dir, "photo.jpg"), Vision.Kind.PHOTO, List.of());
+
+        assertFalse(result.contains("NSFW"), result);
+        assertFalse(result.toLowerCase().contains("anime"), result);
+        assertTrue(result.contains("- Title: Girl in Shopping Cart"), result);
+        String saved = Files.readString(cache.resolve("photo.jpg.md"));
+        assertFalse(saved.contains("NSFW"), saved);
+        assertFalse(saved.toLowerCase().contains("anime"), saved);
+        assertTrue(saved.contains("- Title: Girl in Shopping Cart"), saved);
+    }
+
+    @Test
+    void oldCacheIsRewrittenWithoutVerdictAndStyleWords(@TempDir Path dir) throws IOException {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Files.writeString(cache.resolve("photo.jpg.md"), """
+                - Title: Chibi Student Neutral
+                - NSFW: yes
+                - VisibleContent: a person stands
+                """);
+        ScriptedLlm llm = new ScriptedLlm();
+
+        String result = visionWith(llm, cache)
+                .describe(imageFile(dir, "photo.jpg"), Vision.Kind.PHOTO, List.of());
+
+        assertEquals(0, llm.seen.get(), "готовое описание читается с диска");
+        assertTrue(result.contains("- Title: Student Neutral"), result);
+        assertFalse(result.contains("NSFW"), result);
+        String saved = Files.readString(cache.resolve("photo.jpg.md"));
+        assertFalse(saved.contains("NSFW"), saved);
+        assertFalse(saved.toLowerCase().contains("chibi"), saved);
+        assertTrue(saved.contains("- Title: Student Neutral"), saved);
+    }
+
+    @Test
+    void cacheWithOnlyVerdictIsAMiss(@TempDir Path dir) throws IOException {
+        Path cache = dir.resolve("cache");
+        Files.createDirectories(cache);
+        Files.writeString(cache.resolve("photo.jpg.md"), "- NSFW: unclear");
+        ScriptedLlm llm = new ScriptedLlm().willSee("человек у окна");
+
+        String result = visionWith(llm, cache)
+                .describe(imageFile(dir, "photo.jpg"), Vision.Kind.PHOTO, List.of());
+
+        assertEquals(1, llm.seen.get(), "пустой после чистки кэш не считается описанием");
+        assertTrue(result.contains("человек у окна"), result);
+        assertEquals("человек у окна", Files.readString(cache.resolve("photo.jpg.md")));
+    }
+
+    @Test
+    void titleOfOnlyStyleWordsBecomesUntitled(@TempDir Path dir) throws IOException {
+        ScriptedLlm llm = new ScriptedLlm()
+                .willSee("- Title: Anime\n- VisibleContent: a person")
+                .willSee("- Title: Baseball Cheerleader Anime Sticker\n- VisibleContent: a sticker");
+        Vision vision = visionWith(llm, dir.resolve("cache"));
+
+        String photo = vision.describe(imageFile(dir, "photo.jpg"), Vision.Kind.PHOTO, List.of());
+        String sticker = vision.describe(imageFile(dir, "sticker.webp"), Vision.Kind.STICKER, List.of());
+
+        assertTrue(photo.contains("- Title: Untitled"), photo);
+        assertTrue(sticker.contains("- Title: Baseball Cheerleader Sticker"), sticker);
+    }
+
+    @Test
+    void withoutVerdictRemovesTheLineWithOrWithoutDash() {
+        assertEquals("описание\n", Vision.withoutVerdict("описание\n- NSFW: yes\n"));
+        assertEquals("описание\n", Vision.withoutVerdict("описание\nNSFW: unclear\n"));
+        assertEquals("описание\n", Vision.withoutVerdict("описание\n- nsfw: no\n"));
+        assertEquals("описание\n\n", Vision.withoutVerdict("описание\n\nNSFW: yes"));
+    }
+
     /**
      * Пустой файл нужно перезаписать целиком: новый пересказ ложится поверх него
      * через временный файл и атомарную замену, поэтому читатель видит либо прежний
