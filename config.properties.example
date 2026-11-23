@@ -191,6 +191,25 @@ llm_temperature=0.2
 # выше. Читается при создании клиента, то есть меняется перезапуском.
 llm_proxy=
 
+# Провайдер-роутинг Polza.ai / OpenRouter. Все семь ключей необязательны:
+# пустые значения не добавляют поле provider в запрос. Слаги — через запятую.
+# На Polza.ai нельзя одновременно задавать @provider=... в llm_model и эти
+# ключи: API вернёт 400.
+# белый список провайдеров; пусто — любой
+llm_provider_only=
+# чёрный список провайдеров
+llm_provider_ignore=
+# приоритетный порядок провайдеров
+llm_provider_order=
+# сортировка: пусто, price, throughput или latency
+llm_provider_sort=
+# разрешать ли переход к другому провайдеру: true или false
+llm_provider_allow_fallbacks=
+# потолок цены входа за миллион токенов; пусто — без потолка
+llm_provider_max_price_prompt=
+# потолок цены выхода за миллион токенов; пусто — без потолка
+llm_provider_max_price_completion=
+
 # модель для векторов памяти
 embedding_model=openai/text-embedding-3-large
 

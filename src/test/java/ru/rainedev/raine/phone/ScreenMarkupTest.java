@@ -28,6 +28,10 @@ class ScreenMarkupTest {
             Your own stickers. Send one with #sticker_send(sticker_id) — no need to look them up.
               - sticker_id="1" emoji="❤️": Chibi anime character with white hair and cat ears.
             </favourite_stickers>
+
+            <around_you>
+            Сейчас вечер, 21:40.
+            </around_you>
             """;
 
     @Test
@@ -39,6 +43,8 @@ class ScreenMarkupTest {
         assertEquals("</favourite_stickers>", ScreenMarkup.SHELF_CLOSE);
         assertEquals("<instructions>", ScreenMarkup.NOTES_OPEN);
         assertEquals("</instructions>", ScreenMarkup.NOTES_CLOSE);
+        assertEquals("<around_you>", ScreenMarkup.AROUND_OPEN);
+        assertEquals("</around_you>", ScreenMarkup.AROUND_CLOSE);
     }
 
     @Test
@@ -49,6 +55,8 @@ class ScreenMarkupTest {
         assertFalse(clean.contains("chibi anime character"), clean);
         assertFalse(clean.contains("<instructions>"), clean);
         assertFalse(clean.contains("Answer as yourself"), clean);
+        assertFalse(clean.contains("<around_you>"), clean);
+        assertFalse(clean.contains("Сейчас вечер"), clean);
         assertTrue(clean.contains("мы ездили на Байкал"), "реплика человека остаётся: " + clean);
     }
 
@@ -60,7 +68,29 @@ class ScreenMarkupTest {
 
         assertFalse(shelfless.contains("favourite_stickers"), shelfless);
         assertTrue(shelfless.contains("<instructions>"), "пояснение на месте: " + shelfless);
+        assertTrue(shelfless.contains("<around_you>"), "окружение на месте: " + shelfless);
         assertTrue(shelfless.contains("мы ездили на Байкал"), shelfless);
+    }
+
+    @Test
+    void theShelfAndNotesCanBeRetiredWithoutTheSurroundings() {
+        // снимок, открытый посреди хода, приносит свежую полку, но не приносит
+        // окружения: его нельзя стирать из текущего сообщения
+        String clean = ScreenMarkup.stripShelfAndNotes(SCREEN);
+
+        assertFalse(clean.contains("favourite_stickers"), clean);
+        assertFalse(clean.contains("<instructions>"), clean);
+        assertTrue(clean.contains("<around_you>"), clean);
+        assertTrue(clean.contains("Сейчас вечер"), clean);
+    }
+
+    @Test
+    void theSurroundingsAloneCanBeRetired() {
+        String clean = ScreenMarkup.stripAround(SCREEN);
+
+        assertFalse(clean.contains("<around_you>"), clean);
+        assertTrue(clean.contains("<favourite_stickers>"), clean);
+        assertTrue(clean.contains("<instructions>"), clean);
     }
 
     @Test
@@ -85,8 +115,8 @@ class ScreenMarkupTest {
         String once = ScreenMarkup.stripScreen(SCREEN);
 
         assertEquals(once, ScreenMarkup.stripScreen(once));
-        assertEquals(once, ScreenMarkup.cut(ScreenMarkup.stripShelf(SCREEN),
-                ScreenMarkup.NOTES_OPEN, ScreenMarkup.NOTES_CLOSE));
+        assertEquals(once, ScreenMarkup.stripAround(ScreenMarkup.cut(ScreenMarkup.stripShelf(SCREEN),
+                ScreenMarkup.NOTES_OPEN, ScreenMarkup.NOTES_CLOSE)));
     }
 
     /**
@@ -116,10 +146,13 @@ class ScreenMarkupTest {
     void theDetectorAgreesWithTheCutter() {
         assertTrue(ScreenMarkup.hasShelf(SCREEN));
         assertTrue(ScreenMarkup.hasNotes(SCREEN), "пояснение тоже должно находиться по тегу");
+        assertTrue(ScreenMarkup.hasAround(SCREEN), "окружение тоже должно находиться по тегу");
         assertFalse(ScreenMarkup.hasShelf("просто текст без разметки"), "");
         assertFalse(ScreenMarkup.hasNotes("просто текст без разметки"), "");
+        assertFalse(ScreenMarkup.hasAround("просто текст без разметки"), "");
         assertFalse(ScreenMarkup.hasShelf(null), "пустого сообщения это тоже касается");
         assertFalse(ScreenMarkup.hasNotes(null), "и здесь тоже");
+        assertFalse(ScreenMarkup.hasAround(null), "и тут тоже");
         assertFalse(ScreenMarkup.hasShelf(ScreenMarkup.stripShelf(SCREEN)), "после снятия — чисто");
         String notesGone = ScreenMarkup.cut(SCREEN, ScreenMarkup.NOTES_OPEN, ScreenMarkup.NOTES_CLOSE);
         assertFalse(ScreenMarkup.hasNotes(notesGone), notesGone);

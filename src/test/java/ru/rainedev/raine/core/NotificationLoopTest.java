@@ -740,6 +740,77 @@ class NotificationLoopTest {
                 "и страница памяти тоже одна: " + loop.context());
     }
 
+    @Test
+    void theSystemPromptStaysStableAndTheSurroundingsRideTheUserMessage() {
+        // системный промпт — префикс запроса: меняющееся окружение в нём ломало
+        // бы кэш посредника на каждом шаге
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.surroundings(() -> "<around_you>\nСейчас вечер, 21:40.\n</around_you>\n");
+
+        loop.process(new Notification("тебе написали"));
+
+        assertFalse(llm.seenPrompts.getFirst().contains("around_you"),
+                "окружения в системном промпте нет: " + llm.seenPrompts.getFirst());
+        String first = llm.seenContexts.getFirst().getFirst().content();
+        assertTrue(first.contains("Current time:"), first);
+        assertTrue(first.endsWith("<around_you>\nСейчас вечер, 21:40.\n</around_you>"), first);
+        assertFalse(first.contains("\n\n<around_you>"), "без лишней пустой строки: " + first);
+    }
+
+    @Test
+    void aMidTurnScreenshotDoesNotEraseTheCurrentSurroundings() {
+        // открытие чата посреди хода приносит свежую полку, но не окружение:
+        // снимать его из текущего сообщения нельзя, иначе префикс хода поедет
+        Toolbox tools = new Toolbox(
+                Tool.simple("open", "Открывает чат", arguments -> """
+                        You switched to the chat "papik" in Telegram.
+                        <message message_id="9">привет, свежая</message>
+                        <favourite_stickers>
+                          - sticker_id="1" emoji="❤️": Chibi anime character with white hair.
+                        </favourite_stickers>"""),
+                Tool.simple("ignore", "Игнорирует", arguments -> "ok"));
+
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("open")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, tools);
+        loop.surroundings(() -> "<around_you>\nСейчас вечер, 21:40.\n</around_you>\n");
+
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(1, withText(loop.context(), "<around_you>"),
+                "окружение текущего хода осталось одно: " + loop.context());
+        assertTrue(loop.context().getFirst().content().contains("<around_you>"),
+                "и именно в сообщении хода: " + loop.context().getFirst().content());
+        assertEquals(1, withText(loop.context(), "</favourite_stickers>"),
+                "свежая полка осталась одна: " + loop.context());
+    }
+
+    @Test
+    void aNewTurnRetiresOldSurroundingsEvenWithoutAFreshShelf() {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.surroundings(() -> "<around_you>\nСейчас вечер, 21:40.\n</around_you>\n");
+
+        loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        loop.process(new Notification("второй ход"));
+
+        assertEquals(1, withText(loop.context(), "<around_you>"),
+                "окружение остаётся только у нового хода: " + loop.context());
+        List<String> users = loop.context().stream()
+                .filter(message -> message.role() == Message.Role.USER)
+                .map(Message::content)
+                .toList();
+        assertFalse(users.getFirst().contains("<around_you>"),
+                "прежнее окружение снято: " + users.getFirst());
+        assertTrue(users.getLast().contains("<around_you>"),
+                "новое окружение на месте: " + users.getLast());
+    }
+
     /** Память, которая на каждый ход поднимает свою страницу. */
     private static final class RotatingMemory implements Memory {
         final Set<Long> injected = new java.util.HashSet<>();

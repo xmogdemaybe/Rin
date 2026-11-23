@@ -27,6 +27,12 @@ public final class ScreenMarkup {
     /** Закрытие пояснения. */
     public static final String NOTES_CLOSE = "</instructions>";
 
+    /** Что сейчас вокруг неё: время суток и погода. */
+    public static final String AROUND_OPEN = "<around_you>";
+
+    /** Закрытие окружения. */
+    public static final String AROUND_CLOSE = "</around_you>";
+
     private ScreenMarkup() {}
 
     /** Есть ли в тексте полка — по открывающему тегу, до полного разбора. */
@@ -39,14 +45,29 @@ public final class ScreenMarkup {
         return text != null && text.contains(NOTES_OPEN);
     }
 
+    /** Есть ли в тексте окружение: время суток и погода. */
+    public static boolean hasAround(String text) {
+        return text != null && text.contains(AROUND_OPEN);
+    }
+
     /** Вырезает полку вместе с разметкой. */
     public static String stripShelf(String text) {
         return cut(text, SHELF_OPEN, SHELF_CLOSE);
     }
 
-    /** Вырезает полку и пояснения: этим вызовам нужен только сам разговор. */
-    public static String stripScreen(String text) {
+    /** Вырезает полку и пояснения, но оставляет окружение. */
+    public static String stripShelfAndNotes(String text) {
         return cut(cut(text, SHELF_OPEN, SHELF_CLOSE), NOTES_OPEN, NOTES_CLOSE);
+    }
+
+    /** Вырезает окружение вместе с разметкой. */
+    public static String stripAround(String text) {
+        return cut(text, AROUND_OPEN, AROUND_CLOSE);
+    }
+
+    /** Вырезает всю обвязку снимка: этим вызовам нужен только сам разговор. */
+    public static String stripScreen(String text) {
+        return stripAround(stripShelfAndNotes(text));
     }
 
     /**

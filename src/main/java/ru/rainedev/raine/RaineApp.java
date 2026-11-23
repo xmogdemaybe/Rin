@@ -337,10 +337,13 @@ public final class RaineApp implements AutoCloseable {
 
         loop = new NotificationLoop(
                 llm,
-                () -> prompts.system(around.asPromptSuffix() + workingMemory.asPromptSuffix(loop.audience())
+                () -> prompts.system(workingMemory.asPromptSuffix(loop.audience())
                         + (settings.current().trustLedgerEnabled() ? trust.asPromptSuffix() : "")
                         + ownChannel.asPromptSuffix(config.channelsPostingEnabled())),
                 always, config.contextTokenLimit());
+        // окружение меняется каждый час, а системный промпт обязан оставаться
+        // неизменным префиксом запроса: оно едет в хвосте нового сообщения хода
+        loop.surroundings(around::asPromptSuffix);
         // доверие смягчает поведение: на ходу разговора она знает, кому отвечает,
         // и строка об этом человеке стоит в промпте, а не в контексте
         loop.aboutPerson(id -> settings.current().trustLedgerEnabled() ? trust.aboutPerson(id) : "");

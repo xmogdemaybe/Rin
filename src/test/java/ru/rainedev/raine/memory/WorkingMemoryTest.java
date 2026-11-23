@@ -212,7 +212,10 @@ class WorkingMemoryTest {
                 </instructions>
                 <favourite_stickers>
                   - sticker_id="1" emoji="❤️": Chibi anime character with white hair.
-                </favourite_stickers>""";
+                </favourite_stickers>
+                <around_you>
+                Сейчас вечер, 21:40.
+                </around_you>""";
         List<Message> context = new ArrayList<>(List.of(
                 Message.user(screen),
                 Message.user(DiaryMarkup.page("[from: your private chat with your person]", "ездили на Байкал")
@@ -226,6 +229,7 @@ class WorkingMemoryTest {
                 .reduce("", (a, b) -> a + "\n" + b);
         assertFalse(sent.contains("favourite_stickers"), "полка не едет в сводку: " + sent);
         assertFalse(sent.contains("<instructions>"), "пояснение чата не едет в сводку: " + sent);
+        assertFalse(sent.contains("<around_you>"), "окружение не едет в сводку: " + sent);
         assertFalse(sent.contains("your_diary_page"), "страницы дневника не едут в сводку: " + sent);
         assertTrue(sent.contains("мы ездили на Байкал"), "слова человека остаются: " + sent);
         assertTrue(context.getFirst().content().contains("favourite_stickers"),

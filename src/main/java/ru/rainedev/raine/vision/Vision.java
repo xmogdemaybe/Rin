@@ -47,22 +47,26 @@ public final class Vision {
     /** Что смотрим. От этого зависит и промпт, и какой моделью. */
     public enum Kind {
         /** Присланное фото — важно разглядеть, берём основную модель. */
-        PHOTO("photo", "photo_to_text.md", false),
+        PHOTO("photo", "photo_to_text.md", false, 1280),
         /** Стикер — достаточно понять смысл, хватит дешёвой. */
-        STICKER("sticker", "sticker_to_text.md", true),
+        STICKER("sticker", "sticker_to_text.md", true, 672),
         /** Аватарка — понять, с кем говоришь. */
-        AVATAR("chat_photo", "photo_to_text.md", true),
+        AVATAR("chat_photo", "photo_to_text.md", true, 672),
         /** Один кадр видео: подпись короткая, кадров много. */
-        VIDEO("video", "video_frame_to_text.md", true);
+        VIDEO("video", "video_frame_to_text.md", true, 672);
 
         private final String tag;
         private final String prompt;
         private final boolean cheap;
 
-        Kind(String tag, String prompt, boolean cheap) {
+        /** До какой стороны ужимать перед отправкой: фото важнее, дешёвым хватит 672. */
+        final int maxSide;
+
+        Kind(String tag, String prompt, boolean cheap, int maxSide) {
             this.tag = tag;
             this.prompt = prompt;
             this.cheap = cheap;
+            this.maxSide = maxSide;
         }
     }
 
@@ -244,7 +248,8 @@ public final class Vision {
     private String captionOf(VideoFrames.Frame frame, String prompt, String situation) {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                String caption = llm.describeImage(cheapModel, prompt, situation, Downscale.toFit(frame.jpeg()));
+                String caption = llm.describeImage(cheapModel, prompt, situation,
+                        Downscale.toFit(frame.jpeg(), Kind.VIDEO.maxSide));
                 if (Refusal.detected(caption)) {
                     // кадр без подписи выпадет из ленты времени, и это честнее
                     // извинения, выданного за увиденное
@@ -365,7 +370,7 @@ public final class Vision {
             String model = kind.cheap && attempt < MAX_ATTEMPTS ? cheapModel : mainModel;
             try {
                 String description = llm.describeImage(model, prompts.load(kind.prompt), buildContext(context),
-                        Downscale.toFit(image));
+                        Downscale.toFit(image, kind.maxSide));
                 if (Refusal.detected(description)) {
                     // в кэш не кладём: иначе отказ станет вечным описанием картинки
                     log.info("Смотреть отказались ({}), попытка {} из {}: {}", model, attempt, MAX_ATTEMPTS,

@@ -227,6 +227,13 @@ public final class NotificationLoop {
     private volatile java.util.function.LongFunction<String> aboutPerson = id -> "";
 
     /**
+     * Что сейчас вокруг неё: время суток и погода. Дописывается к новому
+     * сообщению хода, а не к системному промпту: неизменный префикс запроса
+     * должен оставаться байт в байт, иначе кэш посредника не срабатывает.
+     */
+    private volatile java.util.function.Supplier<String> surroundings = () -> "";
+
+    /**
      * Откуда чат уведомления и насколько он закрыт. Спрашивается в тот момент,
      * когда текст чата ложится в контекст, а не когда уведомление создано: событие
      * из очереди иначе приписало бы свой чат чужому разговору, который ещё не
@@ -293,6 +300,11 @@ public final class NotificationLoop {
 
     public void aboutPerson(java.util.function.LongFunction<String> suffix) {
         this.aboutPerson = suffix;
+    }
+
+    /** Откуда брать окружение хода: время суток и погоду. */
+    public void surroundings(java.util.function.Supplier<String> suffix) {
+        this.surroundings = suffix;
     }
 
     /**
@@ -662,7 +674,9 @@ public final class NotificationLoop {
             } else {
                 text = opened;
             }
-            Message screen = Message.user(text + "\nCurrent time: " + Instant.now() + " UTC");
+            String suffix = surroundings.get();
+            String around = suffix == null || suffix.isBlank() ? "" : "\n" + suffix.strip();
+            Message screen = Message.user(text + "\nCurrent time: " + Instant.now() + " UTC" + around);
             retireStaleScreens(List.of(screen), true);
             context.add(screen);
             // метка снимается здесь, а не когда уведомление создано: событие из
@@ -1056,6 +1070,12 @@ public final class NotificationLoop {
      * ходах эти страницы были прочитаны по-настоящему, и откатывает их только
      * {@link #undoRecall(Turn)} — когда отказал текущий ход.
      *
+     * <p>
+     * Полка с пояснением и окружение снимаются порознь: снимок, открытый самой
+     * моделью посреди хода, приносит свежую полку, но не приносит окружения —
+     * и стирать его из текущего сообщения нельзя, иначе кэш префикса ломается
+     * прямо посреди хода.
+     *
      * @param incoming  то, что сейчас ложится в историю: снимок — сообщением
      *                  пользователя, а вызов {@code #open} — ответом инструмента
      * @param turnStart был ли это вход в новый ход. Только там из истории
@@ -1064,17 +1084,19 @@ public final class NotificationLoop {
      *                  все индексы за собой
      */
     private void retireStaleScreens(Iterable<Message> incoming, boolean turnStart) {
-        boolean fresh = false;
+        boolean freshScreen = false;
+        boolean freshAround = false;
         for (Message message : incoming) {
             String text = message.content();
-            fresh |= ScreenMarkup.hasShelf(text) || ScreenMarkup.hasNotes(text);
+            freshScreen |= ScreenMarkup.hasShelf(text) || ScreenMarkup.hasNotes(text);
+            freshAround |= ScreenMarkup.hasAround(text);
         }
-        if (!fresh) {
+        if (!freshScreen && !freshAround) {
             return;
         }
         Turn turn = active;
         for (int i = 0; i < context.size(); i++) {
-            context.set(i, served(context.get(i)));
+            context.set(i, served(context.get(i), freshScreen, freshAround));
         }
         if (turn != null && turn.contextBefore != null) {
             // откат холостого порыва сверяет начало истории дословно: правку
@@ -1082,11 +1104,11 @@ public final class NotificationLoop {
             // перестанет узнавать прежние сообщения и порыв не откатится
             List<Message> before = new ArrayList<>(turn.contextBefore.size());
             for (Message message : turn.contextBefore) {
-                before.add(served(message));
+                before.add(served(message, freshScreen, freshAround));
             }
             turn.contextBefore = List.copyOf(before);
         }
-        if (!turnStart) {
+        if (!turnStart || !freshScreen) {
             return;
         }
         dropServedPings(context);
@@ -1097,13 +1119,19 @@ public final class NotificationLoop {
         }
     }
 
-    /** Сообщение прошлого хода: без обвязки снимка и без прочитанных страниц памяти. */
-    private static Message served(Message message) {
+    /**
+     * Сообщение прошлого хода: без той обвязки снимка, которая пришла свежей,
+     * и без прочитанных страниц памяти.
+     */
+    private static Message served(Message message, boolean screen, boolean around) {
         String text = message.content();
         if (text == null) {
             return message;
         }
-        String clean = DiaryMarkup.strip(ScreenMarkup.stripScreen(text));
+        String clean = screen ? DiaryMarkup.strip(ScreenMarkup.stripShelfAndNotes(text)) : text;
+        if (around) {
+            clean = ScreenMarkup.stripAround(clean);
+        }
         return clean.equals(text) ? message : message.withContent(clean);
     }
 

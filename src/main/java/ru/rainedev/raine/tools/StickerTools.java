@@ -40,6 +40,9 @@ public final class StickerTools {
     /** Сколько имён паков влезает в строку: дальше она перестаёт читаться. */
     static final int PACK_NAMES = 12;
 
+    /** Сколько последних отправленных не возвращать на полку. */
+    static final int RECENT_SENT = 8;
+
     private final Telegram telegram;
     private final TelegramActions actions;
     private final ChatScreen screen;
@@ -57,12 +60,32 @@ public final class StickerTools {
     /** Сколько стикеров встало на полку: об этом докладывает прогрев. */
     private volatile int shelfSize;
 
-    /** Сдвиг окна ротации: следующий заход берёт других стикеров паков. */
-    private final java.util.concurrent.atomic.AtomicLong rotationMark =
-            new java.util.concurrent.atomic.AtomicLong();
+    /**
+     * Всё, из чего собирается полка, живёт под одним замком. Сеть и зрение
+     * сюда не ходят: TDLib зовут до замка, а рендер читает только кэш.
+     */
+    private final Object shelfLock = new Object();
+
+    /** Последний список своих стикеров; переживает отправку и фоновую пересборку. */
+    private List<TdApi.Sticker> saved = List.of();
+
+    /** Готовые описания: свежие снимаются до замка, слияние идёт под ним. */
+    private volatile java.util.Map<Long, String> descriptions = java.util.Map.of();
+
+    /** Последние отправленные: их полка не показывает, пока они не вытеснятся. */
+    private final java.util.ArrayDeque<Long> recentSent = new java.util.ArrayDeque<>();
+
+    /** С какого места показывать своё избранное. */
+    private long headOffset;
+
+    /** С какого места показывать стикеры паков. */
+    private long packOffset;
+
+    /** Была ли уже хотя бы одна сборка: первая оставляет packOffset нулевым. */
+    private boolean shelfBuilt;
 
     /** Отправлять стикер можно ровно туда же, куда и обычное сообщение. */
-    private java.util.function.LongPredicate allowed = chatId -> true;
+    private volatile java.util.function.LongPredicate allowed = chatId -> true;
 
     public StickerTools(Telegram telegram, TelegramActions actions, ChatScreen screen) {
         this.telegram = telegram;
@@ -204,28 +227,171 @@ public final class StickerTools {
      * @param withPacks перебирать ли установленные паки заново
      */
     private void build(boolean look, boolean withPacks) {
-        if (withPacks) {
-            List<TdApi.StickerSetInfo> sets = telegram.stickerSets();
-            packNames = namesOf(sets);
-            pool = poolOf(sets);
+        // сеть и зрение — до замка: под ним остаётся только сборка строки
+        List<TdApi.StickerSetInfo> sets = withPacks ? telegram.stickerSets() : List.of();
+        String names = withPacks ? namesOf(sets) : "";
+        List<TdApi.Sticker> freshPool = withPacks ? poolOf(sets) : List.of();
+        List<TdApi.Sticker> freshSaved = telegram.savedStickers(LIMIT);
+        if (look) {
+            warmSaved(freshSaved);
         }
-        List<TdApi.Sticker> head = telegram.savedStickers(LIMIT);
-        List<TdApi.Sticker> mine = head.size() > SHELF_HEAD ? head.subList(0, SHELF_HEAD) : head;
-        List<TdApi.Sticker> shown = mergeFresh(mine, rotated(pool)).stream().limit(FAVOURITES).toList();
-        shelfSize = shown.size();
-        // платный взгляд положен только тому, что встанет на полку, и только на
-        // старте: перебирать зрением весь пак заранее незачем
-        Glimpses budget = new Glimpses(look ? GLIMPSES : 0);
-        favourites = favouritesBlock(shown, FAVOURITES, sticker -> {
+        java.util.Map<Long, String> delta = descriptions(freshSaved, freshPool, withPacks);
+        install(delta, freshSaved, freshPool, names, withPacks);
+    }
+
+    /** Ставит на полку уже собранные данные: сеть и зрение остаются снаружи. */
+    void install(java.util.Map<Long, String> delta, List<TdApi.Sticker> freshSaved,
+                 List<TdApi.Sticker> freshPool, String names, boolean withPacks) {
+        synchronized (shelfLock) {
+            if (withPacks) {
+                packNames = names;
+                pool = freshPool;
+            }
+            saved = List.copyOf(freshSaved);
             if (media == null) {
-                return "";
+                descriptions = java.util.Map.of();
+            } else {
+                java.util.Map<Long, String> merged = new java.util.HashMap<>(descriptions);
+                merged.putAll(delta);
+                if (withPacks) {
+                    java.util.Set<Long> actual = new java.util.HashSet<>();
+                    for (TdApi.Sticker sticker : freshSaved) {
+                        actual.add(sticker.id);
+                    }
+                    for (TdApi.Sticker sticker : freshPool) {
+                        actual.add(sticker.id);
+                    }
+                    merged.keySet().retainAll(actual);
+                }
+                descriptions = java.util.Map.copyOf(merged);
             }
-            String ready = media.shelfWords(sticker);
-            if (!ready.isBlank() || !look) {
-                return ready;   // на ходу — что есть на диске, то и полка
+            if (shelfBuilt) {
+                packOffset++;
             }
-            return budget.allows(false) ? media.stickerWords(sticker, budget) : "";
-        }, packNames);
+            shelfBuilt = true;
+            renderShelfLocked();
+        }
+    }
+
+    /**
+     * Доглядывает до предела старта неописанные свои стикеры. Кэш зрения —
+     * тот же, из которого потом собираются описания полки.
+     */
+    private void warmSaved(List<TdApi.Sticker> stickers) {
+        if (media == null) {
+            return;
+        }
+        Glimpses budget = new Glimpses(GLIMPSES);
+        for (TdApi.Sticker sticker : stickers) {
+            if (!budget.allows(false)) {
+                return;
+            }
+            if (!media.shelfWords(sticker).isBlank()) {
+                continue;
+            }
+            media.stickerWords(sticker, budget);
+        }
+    }
+
+    /**
+     * Собирает только свежие описания до замка: путь к файлу и кэш зрения
+     * спрашиваются здесь, а слияние с уже готовыми строками идёт под замком.
+     */
+    private java.util.Map<Long, String> descriptions(List<TdApi.Sticker> freshSaved,
+                                                     List<TdApi.Sticker> freshPool, boolean withPacks) {
+        if (media == null) {
+            return java.util.Map.of();
+        }
+        java.util.Map<Long, String> delta = new java.util.HashMap<>();
+        for (TdApi.Sticker sticker : freshSaved) {
+            delta.put(sticker.id, media.shelfWords(sticker));
+        }
+        if (withPacks) {
+            for (TdApi.Sticker sticker : freshPool) {
+                delta.put(sticker.id, media.shelfWords(sticker));
+            }
+        }
+        return delta;
+    }
+
+    /**
+     * Собирает полку из того, что уже в памяти: ни TDLib, ни зрения. Окно
+     * своего избранного и окно паков двигаются независимо, а недавно
+     * отправленное не возвращается ни головой, ни хвостом.
+     */
+    private void renderShelfLocked() {
+        List<TdApi.Sticker> candidates = shelfCandidates(saved, pool, recentSent, headOffset, packOffset);
+        shelfSize = Math.min(candidates.size(), FAVOURITES);
+        favourites = favouritesBlock(candidates, FAVOURITES,
+                sticker -> descriptions.getOrDefault(sticker.id, ""), packNames);
+    }
+
+    /**
+     * Отправленный стикер уходит с полки, окна сдвигаются, и полка собирается
+     * заново только из памяти. Ни TDLib, ни зрения здесь быть не может.
+     */
+    void noteSent(long stickerId) {
+        synchronized (shelfLock) {
+            recentSent.remove(stickerId);
+            recentSent.addLast(stickerId);
+            while (recentSent.size() > RECENT_SENT) {
+                recentSent.removeFirst();
+            }
+            headOffset += SHELF_HEAD / 2;
+            packOffset += ROTATION / 2;
+            renderShelfLocked();
+        }
+    }
+
+    /**
+     * Кандидаты полки: окно головы своих, окно ротации паков и остаток своих.
+     * Недавно отправленное не возвращается ни головой, ни хвостом, а если
+     * фильтр опустошил список — показываем всё: пустая полка хуже повтора.
+     */
+    static List<TdApi.Sticker> shelfCandidates(List<TdApi.Sticker> saved, List<TdApi.Sticker> pool,
+                                               java.util.Collection<Long> recentSent,
+                                               long headOffset, long packOffset) {
+        List<TdApi.Sticker> eligibleSaved = withoutRecent(saved, recentSent);
+        if (eligibleSaved.isEmpty()) {
+            eligibleSaved = saved;
+        }
+        int start = eligibleSaved.isEmpty()
+                ? 0
+                : (int) Math.floorMod(headOffset, eligibleSaved.size());
+        List<TdApi.Sticker> head = new java.util.ArrayList<>();
+        for (int taken = 0; taken < SHELF_HEAD && taken < eligibleSaved.size(); taken++) {
+            head.add(eligibleSaved.get((start + taken) % eligibleSaved.size()));
+        }
+
+        List<TdApi.Sticker> eligiblePool = withoutRecent(pool, recentSent);
+        if (eligiblePool.isEmpty()) {
+            eligiblePool = pool;
+        }
+
+        List<TdApi.Sticker> candidates = new java.util.ArrayList<>();
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        addUnique(candidates, ids, head);
+        addUnique(candidates, ids, rotated(eligiblePool, packOffset));
+        for (int taken = SHELF_HEAD; taken < eligibleSaved.size(); taken++) {
+            addUnique(candidates, ids,
+                    List.of(eligibleSaved.get((start + taken) % eligibleSaved.size())));
+        }
+        return candidates;
+    }
+
+    /** Стикеры без недавно отправленных; пустой результат — забота вызывающего. */
+    private static List<TdApi.Sticker> withoutRecent(List<TdApi.Sticker> stickers,
+                                                     java.util.Collection<Long> recentSent) {
+        return stickers.stream().filter(sticker -> !recentSent.contains(sticker.id)).toList();
+    }
+
+    private static void addUnique(List<TdApi.Sticker> into, java.util.Set<Long> ids,
+                                  List<TdApi.Sticker> from) {
+        for (TdApi.Sticker sticker : from) {
+            if (ids.add(sticker.id)) {
+                into.add(sticker);
+            }
+        }
     }
 
     /**
@@ -251,10 +417,6 @@ public final class StickerTools {
             }
         }
         return List.copyOf(ready);
-    }
-
-    private List<TdApi.Sticker> rotated(List<TdApi.Sticker> ready) {
-        return rotated(ready, rotationMark.getAndIncrement());
     }
 
     /**
@@ -305,7 +467,8 @@ public final class StickerTools {
             return "";
         }
         StringBuilder out = new StringBuilder("\n\n" + ScreenMarkup.SHELF_OPEN + "\n")
-                .append("Your own stickers. Send one with #sticker_send(sticker_id) — no need to look them up.\n");
+                .append("Your own stickers. Send one with #sticker_send(sticker_id) — no need to look them up. "
+                        + "Do not repeat a sticker you sent recently.\n");
         for (TdApi.Sticker sticker : shown) {
             out.append("  - sticker_id=\"").append(sticker.id)
                     .append("\" emoji=\"").append(Markup.attribute(sticker.emoji)).append('"');
@@ -597,6 +760,7 @@ public final class StickerTools {
                     // снимок чата не узнал бы своё же и напечатал стикер заново
                     long sent = telegram.confirmedId(temporary);
                     log.info("Стикер {} отправлен в чат {}", stickerId, chatId);
+                    noteSent(stickerId);
                     if (screen != null && sent != 0) {
                         screen.markSent(chatId, sent);
                     }

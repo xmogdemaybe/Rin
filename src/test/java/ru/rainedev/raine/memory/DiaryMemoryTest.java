@@ -299,6 +299,34 @@ class DiaryMemoryTest {
         assertTrue(topic.contains("помнишь Серёжу?"), topic);
     }
 
+    @Test
+    void theEmbeddingQueryKeepsOnlyTheConversation() {
+        // полка, пояснение и окружение — обвязка снимка, а не слова разговора:
+        // в запросе к эмбеддингам им делать нечего
+        String screen = """
+                You switched to the chat "papik" in Telegram.
+                <message message_id="1">мы ездили на Байкал</message>
+                <instructions>
+                Answer as yourself.
+                </instructions>
+                <favourite_stickers>
+                  - sticker_id="1" emoji="❤️": Chibi anime character with white hair.
+                </favourite_stickers>
+                <around_you>
+                Сейчас вечер, 21:40.
+                </around_you>
+                помнишь Байкал?""";
+
+        String topic = DiaryMemory.topicOf(List.of(Message.user(screen)));
+
+        assertFalse(topic.contains("favourite_stickers"), topic);
+        assertFalse(topic.contains("<instructions>"), topic);
+        assertFalse(topic.contains("<around_you>"), topic);
+        assertFalse(topic.contains("Chibi anime character"), topic);
+        assertTrue(topic.contains("мы ездили на Байкал"), topic);
+        assertTrue(topic.contains("помнишь Байкал?"), topic);
+    }
+
     /** Служебные поля записи — не суть: в журнал должен ехать смысл. */
     @Test
     void theDigestSkipsBookkeepingLines() {

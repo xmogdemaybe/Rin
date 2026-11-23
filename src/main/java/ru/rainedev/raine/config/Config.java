@@ -1,6 +1,7 @@
 package ru.rainedev.raine.config;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Настройки бота. Читаются из config.properties рядом с проектом,
@@ -82,7 +83,25 @@ public record Config(
      * @param proxy HTTP-прокси для запросов к ИИ: host:port; пусто — напрямую
      */
     public record Llm(String baseUrl, String model, String apiKey, double temperature, String proxy,
-                      String fallbackModel, String fallbackBaseUrl, String fallbackApiKey) {}
+                      String fallbackModel, String fallbackBaseUrl, String fallbackApiKey,
+                      List<String> providerOnly, List<String> providerIgnore, List<String> providerOrder,
+                      String providerSort, Boolean providerAllowFallbacks,
+                      Double providerMaxPricePrompt, Double providerMaxPriceCompletion) {
+
+        public Llm {
+            providerOnly = providerOnly == null ? List.of() : List.copyOf(providerOnly);
+            providerIgnore = providerIgnore == null ? List.of() : List.copyOf(providerIgnore);
+            providerOrder = providerOrder == null ? List.of() : List.copyOf(providerOrder);
+            providerSort = providerSort == null ? "" : providerSort;
+        }
+
+        /** Старый набор без провайдер-роутинга: остальные места создают его так. */
+        public Llm(String baseUrl, String model, String apiKey, double temperature, String proxy,
+                   String fallbackModel, String fallbackBaseUrl, String fallbackApiKey) {
+            this(baseUrl, model, apiKey, temperature, proxy, fallbackModel, fallbackBaseUrl, fallbackApiKey,
+                    List.of(), List.of(), List.of(), "", null, null, null);
+        }
+    }
 
     /**
      * Модели зрения. Дешёвая для потокового — стикеры и аватарки, основная
@@ -341,7 +360,21 @@ public record Config(
                         s.inherit("fallback_base_url", s.require("llm_base_url", "адрес модели"),
                                 "адрес резервной модели; пусто — основной адрес"),
                         s.inherit("fallback_api_key", s.require("llm_api_key", "ключ модели"),
-                                "ключ резервной модели; пусто — основной ключ")),
+                                "ключ резервной модели; пусто — основной ключ"),
+                        providerSlugs(s.get("llm_provider_only", "",
+                                "белый список провайдеров через запятую; пусто — любой")),
+                        providerSlugs(s.get("llm_provider_ignore", "",
+                                "чёрный список провайдеров через запятую")),
+                        providerSlugs(s.get("llm_provider_order", "",
+                                "приоритетный порядок провайдеров через запятую")),
+                        providerSort(s.get("llm_provider_sort", "",
+                                "сортировка провайдеров: price, throughput или latency")),
+                        providerAllowFallbacks(s.get("llm_provider_allow_fallbacks", "",
+                                "разрешать ли переход к другому провайдеру: true или false")),
+                        providerMaxPrice(s.get("llm_provider_max_price_prompt", "",
+                                "потолок цены входа за миллион токенов"), "llm_provider_max_price_prompt"),
+                        providerMaxPrice(s.get("llm_provider_max_price_completion", "",
+                                "потолок цены выхода за миллион токенов"), "llm_provider_max_price_completion")),
                 s.get("embedding_model", "openai/text-embedding-3-large", "модель для векторов памяти"),
                 s.inherit("embedding_base_url", s.require("llm_base_url", "адрес модели"),
                         "адрес эмбеддингов; пусто — основной адрес"),
@@ -436,5 +469,57 @@ public record Config(
                                 "сколько своих реплик держать для сравнения")));
         s.sync();
         return config;
+    }
+
+    /** Слаги провайдеров: пробелы и пустые элементы по краям списка не считаются. */
+    private static List<String> providerSlugs(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        return List.copyOf(java.util.Arrays.stream(raw.split(","))
+                .map(String::trim)
+                .filter(slug -> !slug.isEmpty())
+                .toList());
+    }
+
+    private static String providerSort(String raw) {
+        String sort = raw == null ? "" : raw.trim().toLowerCase(java.util.Locale.ROOT);
+        if (sort.isEmpty() || sort.equals("price") || sort.equals("throughput") || sort.equals("latency")) {
+            return sort;
+        }
+        throw new IllegalArgumentException(
+                "llm_provider_sort: \"" + raw + "\" — допустимо price, throughput или latency");
+    }
+
+    private static Boolean providerAllowFallbacks(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.isEmpty()) {
+            return null;
+        }
+        if (value.equalsIgnoreCase("true")) {
+            return true;
+        }
+        if (value.equalsIgnoreCase("false")) {
+            return false;
+        }
+        throw new IllegalArgumentException(
+                "llm_provider_allow_fallbacks: \"" + raw + "\" — допустимо true или false");
+    }
+
+    private static Double providerMaxPrice(String raw, String key) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.isEmpty()) {
+            return null;
+        }
+        double price;
+        try {
+            price = Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + ": \"" + raw + "\" — не число", e);
+        }
+        if (!Double.isFinite(price) || price <= 0) {
+            throw new IllegalArgumentException(key + ": \"" + raw + "\" — цена должна быть положительной");
+        }
+        return price;
     }
 }

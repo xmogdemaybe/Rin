@@ -92,6 +92,20 @@ class LiveConfigTest {
     }
 
     @Test
+    void providerRoutingRequiresRestart(@TempDir Path dir) throws IOException {
+        Path file = configIn(dir, "");
+        try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
+            Files.writeString(file, Files.readString(file) + "llm_provider_only=polza\n");
+            Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(
+                    System.currentTimeMillis() + 2000));
+
+            assertTrue(live.checkOnce());
+            assertTrue(live.restartRequired().contains("llm"),
+                    "роутинг читается при создании клиента: " + live.restartRequired());
+        }
+    }
+
+    @Test
     void untouchedFileChangesNothing(@TempDir Path dir) throws IOException {
         Path file = configIn(dir, "");
         try (LiveConfig live = new LiveConfig(file, Config.load(file))) {

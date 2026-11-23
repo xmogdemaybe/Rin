@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.Markup;
+import ru.rainedev.raine.phone.ScreenMarkup;
 
 /**
  * Достаёт из дневника то, что относится к текущему разговору.
@@ -210,7 +211,7 @@ public final class DiaryMemory implements Memory {
         if (text == null) {
             return;
         }
-        String own = DiaryMarkup.strip(text);
+        String own = DiaryMarkup.strip(ScreenMarkup.stripScreen(text));
         if (own.isBlank()) {
             return;
         }

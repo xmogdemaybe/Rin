@@ -786,7 +786,7 @@ public final class TelegramTools {
                         log.info("Отправлено в чат {}: {}", chatId, slip.text());
 
                         if (slip.happened()) {
-                            fixTypo(chatId, sent, slip, piece);
+                            fixTypo(chatId, sent, piece);
                         }
                         lastSent = sent;
                         if (screen != null) {
@@ -2051,29 +2051,33 @@ public final class TelegramTools {
     }
 
     /**
-     * Человек замечает свою опечатку. Дальше он либо правит сообщение, либо
-     * дописывает следом «*слово» — делают и так, и так, поэтому выбираем случайно.
+     * Человек замечает свою опечатку и тихо правит сообщение. Досыл «*слово»
+     * следом — уже другая привычка, и вторая реплика в чате только мешает.
      */
-    private void fixTypo(long chatId, long sentMessageId, Typos.Slip slip, String correct) {
+    private void fixTypo(long chatId, long sentMessageId, String correct) {
+        fixTypo(chatId, sentMessageId, correct, random, delay -> {
+            try {
+                Thread.sleep(delay);
+                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        });
+    }
+
+    /** Та же правка с явным случаем и паузой: так её проверяют без сна. */
+    void fixTypo(long chatId, long sentMessageId, String correct,
+                 java.util.random.RandomGenerator random, java.util.function.LongPredicate pause) {
         // иногда опечатка так и остаётся незамеченной — это тоже по-человечески
         if (random.nextDouble() >= TYPO_NOTICED) {
             return;
         }
-        try {
-            Thread.sleep(java.time.Duration.ofMillis(1500 + random.nextInt(3500)));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        if (!pause.test(1500L + random.nextInt(3500))) {
             return;
         }
-
-        if (random.nextBoolean()) {
-            actions.editText(chatId, sentMessageId, correct, false);
-            log.info("Опечатка исправлена правкой сообщения");
-            return;
-        }
-        actions.typing(chatId);
-        actions.sendMessage(chatId, "*" + slip.original(), null);
-        log.info("Опечатка исправлена следом: *{}", slip.original());
+        actions.editText(chatId, sentMessageId, correct, false);
+        log.info("Опечатка исправлена правкой сообщения");
     }
 
     /**

@@ -191,7 +191,52 @@ public final class OpenAiCompatibleClient implements LlmClient {
             body.set("tools", tools);
             body.put("tool_choice", toolChoice);
         }
+        ObjectNode provider = providerBody();
+        if (provider != null) {
+            body.set("provider", provider);
+        }
         return complete(body, messages);
+    }
+
+    /**
+     * Провайдер-роутинг для Polza.ai и OpenRouter. Пустые настройки не шлют
+     * ничего: ключ {@code provider} появляется только тогда, когда есть что
+     * сказать, иначе посредник получает незнакомое поле на ровном месте.
+     */
+    private ObjectNode providerBody() {
+        ObjectNode provider = mapper.createObjectNode();
+        boolean any = false;
+        if (!config.providerOnly().isEmpty()) {
+            provider.set("only", mapper.valueToTree(config.providerOnly()));
+            any = true;
+        }
+        if (!config.providerIgnore().isEmpty()) {
+            provider.set("ignore", mapper.valueToTree(config.providerIgnore()));
+            any = true;
+        }
+        if (!config.providerOrder().isEmpty()) {
+            provider.set("order", mapper.valueToTree(config.providerOrder()));
+            any = true;
+        }
+        if (!config.providerSort().isBlank()) {
+            provider.put("sort", config.providerSort());
+            any = true;
+        }
+        if (config.providerAllowFallbacks() != null) {
+            provider.put("allow_fallbacks", config.providerAllowFallbacks());
+            any = true;
+        }
+        if (config.providerMaxPricePrompt() != null || config.providerMaxPriceCompletion() != null) {
+            ObjectNode maxPrice = provider.putObject("max_price");
+            if (config.providerMaxPricePrompt() != null) {
+                maxPrice.put("prompt", config.providerMaxPricePrompt());
+            }
+            if (config.providerMaxPriceCompletion() != null) {
+                maxPrice.put("completion", config.providerMaxPriceCompletion());
+            }
+            any = true;
+        }
+        return any ? provider : null;
     }
 
     /** Отправляет собранное тело и разбирает ответ. */
@@ -382,6 +427,11 @@ public final class OpenAiCompatibleClient implements LlmClient {
                     body.remove("tool_choice");
                 }
                 applyThoughtSignatures(body, messages, fallback);
+            }
+            if (fallback) {
+                // резервный канал может быть совсем другим провайдером: чужие
+                // правила роутинга ему не указ
+                body.remove("provider");
             }
             HttpRequest request = request(purpose, path, body, timeout, fallback);
             try {
