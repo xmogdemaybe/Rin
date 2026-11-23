@@ -1,5 +1,6 @@
 package ru.rainedev.raine.llm;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -17,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -98,6 +100,28 @@ class EndpointRoutingTest {
         assertEquals("/v1/chat/completions", requests.get(1).uri().getPath());
         assertEquals("Bearer test-vision-key",
                 requests.get(1).headers().firstValue("Authorization").orElseThrow());
+    }
+
+    @Test
+    void imageDataUrlUsesMagicBytes() throws Exception {
+        var client = client("");
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G', 1};
+        byte[] webp = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P', 1};
+        byte[] jpeg = {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9};
+
+        client.describeImage("vision", "system", "context", png);
+        client.describeImage("vision", "system", "context", webp);
+        client.describeImage("vision", "system", "context", jpeg);
+
+        for (int i = 0; i < bodies.size(); i++) {
+            String url = bodies.get(i).path("messages").get(1).path("content").get(2)
+                    .path("image_url").path("url").asText();
+            byte[] expected = i == 0 ? png : i == 1 ? webp : jpeg;
+            String mime = i == 0 ? "image/png" : i == 1 ? "image/webp" : "image/jpeg";
+            assertTrue(url.startsWith("data:" + mime + ";base64,"), url);
+            assertArrayEquals(expected, Base64.getDecoder().decode(url.substring(url.indexOf(',') + 1)),
+                    "байты картинки не перекодируются");
+        }
     }
 
     @Test

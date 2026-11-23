@@ -69,6 +69,14 @@ public final class StickerTools {
     /** Последний список своих стикеров; переживает отправку и фоновую пересборку. */
     private List<TdApi.Sticker> saved = List.of();
 
+    /** Номера снапшотов: старый build не имеет права затереть свежий refresh. */
+    private final java.util.concurrent.atomic.AtomicLong nextSavedGeneration =
+            new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong nextPackGeneration =
+            new java.util.concurrent.atomic.AtomicLong();
+    private long installedSavedGeneration;
+    private long installedPackGeneration;
+
     /** Готовые описания: свежие снимаются до замка, слияние идёт под ним. */
     private volatile java.util.Map<Long, String> descriptions = java.util.Map.of();
 
@@ -227,6 +235,8 @@ public final class StickerTools {
      * @param withPacks перебирать ли установленные паки заново
      */
     private void build(boolean look, boolean withPacks) {
+        long savedGeneration = nextSavedGeneration.incrementAndGet();
+        long packGeneration = withPacks ? nextPackGeneration.incrementAndGet() : 0;
         // сеть и зрение — до замка: под ним остаётся только сборка строки
         List<TdApi.StickerSetInfo> sets = withPacks ? telegram.stickerSets() : List.of();
         String names = withPacks ? namesOf(sets) : "";
@@ -236,29 +246,50 @@ public final class StickerTools {
             warmSaved(freshSaved);
         }
         java.util.Map<Long, String> delta = descriptions(freshSaved, freshPool, withPacks);
-        install(delta, freshSaved, freshPool, names, withPacks);
+        install(delta, freshSaved, freshPool, names, withPacks, savedGeneration, packGeneration);
     }
 
     /** Ставит на полку уже собранные данные: сеть и зрение остаются снаружи. */
     void install(java.util.Map<Long, String> delta, List<TdApi.Sticker> freshSaved,
-                 List<TdApi.Sticker> freshPool, String names, boolean withPacks) {
+                 List<TdApi.Sticker> freshPool, String names, boolean withPacks,
+                 long savedGeneration, long packGeneration) {
         synchronized (shelfLock) {
-            if (withPacks) {
+            boolean takeSaved = savedGeneration >= installedSavedGeneration;
+            boolean takePacks = withPacks && packGeneration >= installedPackGeneration;
+            if (!takeSaved && !takePacks) {
+                return;
+            }
+            if (takeSaved) {
+                saved = List.copyOf(freshSaved);
+                installedSavedGeneration = savedGeneration;
+            }
+            if (takePacks) {
                 packNames = names;
                 pool = freshPool;
+                installedPackGeneration = packGeneration;
             }
-            saved = List.copyOf(freshSaved);
             if (media == null) {
                 descriptions = java.util.Map.of();
             } else {
-                java.util.Map<Long, String> merged = new java.util.HashMap<>(descriptions);
-                merged.putAll(delta);
-                if (withPacks) {
-                    java.util.Set<Long> actual = new java.util.HashSet<>();
+                java.util.Map<Long, String> accepted = new java.util.HashMap<>();
+                if (takeSaved) {
                     for (TdApi.Sticker sticker : freshSaved) {
+                        accepted.put(sticker.id, delta.getOrDefault(sticker.id, ""));
+                    }
+                }
+                if (takePacks) {
+                    for (TdApi.Sticker sticker : freshPool) {
+                        accepted.put(sticker.id, delta.getOrDefault(sticker.id, ""));
+                    }
+                }
+                java.util.Map<Long, String> merged = new java.util.HashMap<>(descriptions);
+                merged.putAll(accepted);
+                if (takePacks) {
+                    java.util.Set<Long> actual = new java.util.HashSet<>();
+                    for (TdApi.Sticker sticker : saved) {
                         actual.add(sticker.id);
                     }
-                    for (TdApi.Sticker sticker : freshPool) {
+                    for (TdApi.Sticker sticker : pool) {
                         actual.add(sticker.id);
                     }
                     merged.keySet().retainAll(actual);

@@ -35,6 +35,7 @@ class ModelHearingTest {
         final List<byte[]> sounds = new ArrayList<>();
         final List<String> formats = new ArrayList<>();
         final List<String> hints = new ArrayList<>();
+        final List<String> models = new ArrayList<>();
         private final Deque<String> answers = new ArrayDeque<>();
         private boolean canHear = true;
 
@@ -70,6 +71,7 @@ class ModelHearingTest {
 
         @Override
         public String hear(String model, String systemPrompt, String context, byte[] audio, String format) {
+            models.add(model);
             sounds.add(audio);
             hints.add(context);
             formats.add(format);
@@ -83,9 +85,13 @@ class ModelHearingTest {
     }
 
     private static ModelHearing with(Ears ears, Path cache, boolean voiceNotes, boolean videoNotes) {
+        return with(ears, cache, voiceNotes, videoNotes, "модель");
+    }
+
+    private static ModelHearing with(Ears ears, Path cache, boolean voiceNotes, boolean videoNotes, String model) {
         return new ModelHearing(ears, new Prompts(Path.of("prompts"),
                 new Config.Character("Raine", "@raine_tyan", "RaineDev")),
-                "модель", cache, hearing(voiceNotes, videoNotes, cache));
+                model, cache, hearing(voiceNotes, videoNotes, cache));
     }
 
     @Test
@@ -106,6 +112,18 @@ class ModelHearingTest {
         // дорожка ролика идёт тем же ухом, что голосовое: отдельного адреса под
         // распознавание больше нет, и без него бот делал бы вид, что слушает
         assertTrue(with(new Ears(), Path.of("cache"), true, true).hearsVideoAudio());
+    }
+
+    @Test
+    void aSeparateHearingModelReachesTheEndpoint(@TempDir Path dir) throws Exception {
+        Path cache = dir.resolve("cache");
+        Ears ears = new Ears().willHear("привет");
+        Path voice = voiceNote(dir);
+
+        assertEquals(Optional.of("привет"),
+                with(ears, cache, true, true, "hearing-model").listen(voice, Track.VOICE));
+        assertEquals(List.of("hearing-model"), ears.models,
+                "ModelHearing обязан передать отдельную модель, а не llm_model");
     }
 
     /**

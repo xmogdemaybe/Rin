@@ -278,7 +278,8 @@ public final class OpenAiCompatibleClient implements LlmClient {
         parts.addObject()
                 .put("type", "image_url")
                 .putObject("image_url")
-                .put("url", "data:image/jpeg;base64," + java.util.Base64.getEncoder().encodeToString(image));
+                .put("url", "data:" + imageMime(image) + ";base64,"
+                        + java.util.Base64.getEncoder().encodeToString(image));
         parts.addObject().put("type", "text").put("text", "</attachments>");
 
         String response = post(Purpose.VISION, "chat/completions", body, Duration.ofMinutes(3), null).text();
@@ -287,6 +288,25 @@ public final class OpenAiCompatibleClient implements LlmClient {
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось разобрать описание картинки", e);
         }
+    }
+
+    private static String imageMime(byte[] image) {
+        if (image != null && image.length >= 4
+                && (image[0] & 0xff) == 0x89 && image[1] == 'P' && image[2] == 'N' && image[3] == 'G') {
+            return "image/png";
+        }
+        if (image != null && image.length >= 12
+                && image[0] == 'R' && image[1] == 'I' && image[2] == 'F' && image[3] == 'F'
+                && image[8] == 'W' && image[9] == 'E' && image[10] == 'B' && image[11] == 'P') {
+            return "image/webp";
+        }
+        if (image != null && image.length >= 6
+                && image[0] == 'G' && image[1] == 'I' && image[2] == 'F'
+                && ((image[3] == '8' && image[4] == '7' && image[5] == 'a')
+                || (image[3] == '8' && image[4] == '9' && image[5] == 'a'))) {
+            return "image/gif";
+        }
+        return "image/jpeg";
     }
 
     /** Модели этого ряда слушают звук сами — отдельный распознаватель не нужен. */

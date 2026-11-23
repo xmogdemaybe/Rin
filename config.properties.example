@@ -130,6 +130,10 @@ voice_dir=data/voice_messages
 # расшифровывать ли звук из присланных видео: роль слушает та же модель, что говорит
 hearing_enabled=true
 
+# модель слуха; пусто — основная llm_model.
+# Нужна chat-модель с аудио-входом через input_audio, а не Whisper /audio/transcriptions.
+hearing_model=
+
 # слушать ли голосовые самой модели: без премиума это единственный способ узнать, что в них сказали
 hearing_voice_notes=true
 

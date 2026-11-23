@@ -180,7 +180,17 @@ public record Config(
      *                              её не слушали вовсе
      */
     public record Hearing(boolean enabled, boolean voiceNotes, boolean videoNotes,
-                          boolean markListened, int markHeardDelaySeconds, Path cacheDir) {}
+                          boolean markListened, int markHeardDelaySeconds, Path cacheDir, String model) {
+
+        public Hearing {
+            model = model == null ? "" : model.trim();
+        }
+
+        public Hearing(boolean enabled, boolean voiceNotes, boolean videoNotes,
+                       boolean markListened, int markHeardDelaySeconds, Path cacheDir) {
+            this(enabled, voiceNotes, videoNotes, markListened, markHeardDelaySeconds, cacheDir, "");
+        }
+    }
 
     /** Генерация снимков. */
     /**
@@ -335,7 +345,8 @@ public record Config(
                                 "помечать ли услышанное прослушанным: автор сообщения увидит галочку"),
                         s.integer("mark_heard_delay_seconds", 4,
                                 "до скольких секунд дотягивать отметку о прослушивании: ноль — отмечать сразу"),
-                        s.path("hearing_cache_dir", "cache/hearing", "кэш услышанного")),
+                        s.path("hearing_cache_dir", "cache/hearing", "кэш услышанного"),
+                        s.get("hearing_model", "", "модель слуха; пусто — основная llm_model")),
                 new Camera(
                         s.flag("camera_enabled", true, "может ли делать снимки"),
                         s.get("camera_base_url", "https://aihorde.net/api/v2/", "адрес очереди рисования"),

@@ -190,7 +190,9 @@ public final class RaineApp implements AutoCloseable {
         // Дорожка обычного ролика идёт тем же путём: картинку смотрит зрение, а
         // слова берёт та же модель, что говорит
         ru.rainedev.raine.speech.ModelHearing hearing = new ru.rainedev.raine.speech.ModelHearing(
-                llm, prompts, config.llm().model(), config.hearing().cacheDir(), config.hearing());
+                llm, prompts,
+                config.hearing().model().isBlank() ? config.llm().model() : config.hearing().model(),
+                config.hearing().cacheDir(), config.hearing());
 
         // зрение подключается к разметке: описание встаёт прямо под вложением
         if (config.vision().enabled()) {

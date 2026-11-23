@@ -45,6 +45,12 @@ class StickerShelfRotationTest {
         return (Map<Long, String>) target.get(tools);
     }
 
+    private static List<TdApi.Sticker> saved(StickerTools tools) throws Exception {
+        Field target = StickerTools.class.getDeclaredField("saved");
+        target.setAccessible(true);
+        return (List<TdApi.Sticker>) target.get(tools);
+    }
+
     private static Telegram telegram() throws Exception {
         var constructor = Telegram.class.getDeclaredConstructor(
                 SimpleTelegramClient.class, String.class, long.class);
@@ -141,6 +147,18 @@ class StickerShelfRotationTest {
     }
 
     @Test
+    void anOlderSavedSnapshotCannotOverwriteANewerOne() throws Exception {
+        StickerTools tools = new StickerTools(null, null, null);
+
+        tools.install(Map.of(), stickers(10, 3), List.of(), "", false, 2, 0);
+        tools.install(Map.of(), stickers(1, 3), List.of(), "", false, 1, 0);
+
+        assertEquals(List.of(100L, 110L, 120L),
+                saved(tools).stream().map(sticker -> sticker.id).toList(),
+                "свежий список своих стикеров не затирается старым build");
+    }
+
+    @Test
     void refreshKeepsPoolDescriptions() throws Exception {
         StickerTools tools = new StickerTools(telegram(), null, null);
         tools.media(new TelegramMedia(null, null, () -> List.of()));
@@ -160,7 +178,7 @@ class StickerShelfRotationTest {
         TdApi.Sticker poolSticker = sticker(1);
         seed(tools, "descriptions", Map.of(1L, ""));
 
-        tools.install(Map.of(1L, "fresh words"), List.of(), List.of(poolSticker), "", true);
+        tools.install(Map.of(1L, "fresh words"), List.of(), List.of(poolSticker), "", true, 1, 1);
 
         assertEquals("fresh words", descriptions(tools).get(1L),
                 "пустое описание стикера из pool заменяется свежим при пересборке паков");

@@ -106,6 +106,15 @@ class LiveConfigTest {
     }
 
     @Test
+    void hearingModelDefaultsBlankAndTrimsOverride(@TempDir Path dir) throws IOException {
+        assertEquals("", Config.load(configIn(dir, "")).hearing().model(),
+                "пустой ключ означает основную llm_model");
+        assertEquals("audio-model",
+                Config.load(configIn(dir, "hearing_model= audio-model \n")).hearing().model(),
+                "пробелы вокруг модели снимаются");
+    }
+
+    @Test
     void untouchedFileChangesNothing(@TempDir Path dir) throws IOException {
         Path file = configIn(dir, "");
         try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
