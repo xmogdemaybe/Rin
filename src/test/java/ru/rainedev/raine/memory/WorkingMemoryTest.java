@@ -273,6 +273,30 @@ class WorkingMemoryTest {
                 + context);
     }
 
+    @Test
+    void theSummaryStripsServiceTailsAndKeepsToolCallId(@TempDir Path dir) {
+        Path file = dir.resolve("working_memory.md");
+        ScriptedLlm llm = new ScriptedLlm().willAnswer("- Нормальный пункт — последнее обновление: Jul 21");
+        String next = NotificationLoop.serviceInsertions().stream()
+                .filter(note -> note.contains("What's your next action?"))
+                .findFirst()
+                .orElseThrow();
+        Message result = Message.toolResult("c1",
+                "Success\n" + next + "send_telegram_message, wait");
+
+        new WorkingMemory(file, llm, "Raine").update("промпт",
+                List.of(Message.user("ты написала привет"), result));
+
+        Message sent = llm.lastHistory.stream()
+                .filter(message -> message.role() == Message.Role.TOOL)
+                .findFirst()
+                .orElseThrow();
+        assertEquals("Success", sent.content());
+        assertEquals("c1", sent.toolCallId());
+        assertFalse(String.valueOf(sent.content()).contains("What's your next action?"), sent.content());
+        assertFalse(String.valueOf(sent.content()).contains("send_telegram_message"), sent.content());
+    }
+
     /** Строки по ~20 символов: 400 штук заведомо больше предела. */
     private static String overlong(int items) {
         StringBuilder text = new StringBuilder();

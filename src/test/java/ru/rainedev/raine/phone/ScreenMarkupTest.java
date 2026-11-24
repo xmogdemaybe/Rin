@@ -2,6 +2,7 @@ package ru.rainedev.raine.phone;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -70,6 +71,43 @@ class ScreenMarkupTest {
         assertTrue(shelfless.contains("<instructions>"), "пояснение на месте: " + shelfless);
         assertTrue(shelfless.contains("<around_you>"), "окружение на месте: " + shelfless);
         assertTrue(shelfless.contains("мы ездили на Байкал"), shelfless);
+    }
+
+    @Test
+    void theShelfCanBeExtractedWithoutTheRestOfTheScreen() {
+        String shelf = ScreenMarkup.extractShelf(SCREEN);
+
+        assertTrue(shelf.startsWith("<favourite_stickers>"), shelf);
+        assertTrue(shelf.endsWith("</favourite_stickers>"), shelf);
+        assertTrue(shelf.contains("Chibi anime character"), shelf);
+        assertFalse(shelf.contains("<instructions>"), shelf);
+        assertFalse(shelf.contains("<around_you>"), shelf);
+    }
+
+    @Test
+    void onlyTheLastCompleteShelfIsExtracted() {
+        String text = "<favourite_stickers>старая</favourite_stickers>\n"
+                + "<favourite_stickers>новая</favourite_stickers>";
+
+        assertEquals("<favourite_stickers>новая</favourite_stickers>", ScreenMarkup.extractShelf(text));
+        assertNull(ScreenMarkup.extractShelf("<favourite_stickers>незакрытая"));
+        assertNull(ScreenMarkup.extractShelf("просто текст"));
+    }
+
+    @Test
+    void onlyTheLastShelfIsStripped() {
+        String text = "до\n"
+                + "<favourite_stickers>старая</favourite_stickers>\n"
+                + "середина\n"
+                + "<favourite_stickers>новая</favourite_stickers>\n"
+                + "после";
+
+        String clean = ScreenMarkup.stripShelf(text);
+
+        assertTrue(clean.contains("<favourite_stickers>старая</favourite_stickers>"), clean);
+        assertFalse(clean.contains("новая"), clean);
+        assertTrue(clean.contains("середина"), clean);
+        assertTrue(clean.contains("после"), clean);
     }
 
     @Test

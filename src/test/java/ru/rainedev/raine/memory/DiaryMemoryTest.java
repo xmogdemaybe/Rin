@@ -14,6 +14,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.llm.ChatResponse;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
@@ -325,6 +326,47 @@ class DiaryMemoryTest {
         assertFalse(topic.contains("Chibi anime character"), topic);
         assertTrue(topic.contains("мы ездили на Байкал"), topic);
         assertTrue(topic.contains("помнишь Байкал?"), topic);
+    }
+
+    @Test
+    void theEmbeddingQuerySkipsTheLoopPingAndItsDraft() {
+        String ping = NotificationLoop.serviceInsertions().getFirst();
+        List<Message> history = List.of(
+                Message.user("разговор про поездку"),
+                Message.assistant("- intention: ответить человеку"),
+                Message.user(ping));
+
+        String topic = DiaryMemory.topicOf(history);
+
+        assertFalse(topic.contains("plain text does nothing"), topic);
+        assertFalse(topic.contains("intention"), topic);
+        assertTrue(topic.contains("разговор про поездку"), topic);
+        assertEquals(3, history.size(), "исходный контекст не меняется");
+    }
+
+    @Test
+    void theEmbeddingQueryStripsServiceTailsFromToolResults() {
+        String next = NotificationLoop.serviceInsertions().stream()
+                .filter(note -> note.contains("What's your next action?"))
+                .findFirst()
+                .orElseThrow();
+        String partial = NotificationLoop.serviceInsertions().stream()
+                .filter(note -> note.contains("Earlier successful actions"))
+                .findFirst()
+                .orElseThrow();
+        List<Message> history = List.of(
+                Message.user("разговор про поездку"),
+                Message.toolResult("c1", "Success\n" + next + "send_telegram_message, wait"),
+                Message.toolResult("c2", "ok\n" + partial + "не повторять\nвторая строка"));
+
+        String topic = DiaryMemory.topicOf(history);
+
+        assertFalse(topic.contains("What's your next action?"), topic);
+        assertFalse(topic.contains("send_telegram_message"), topic);
+        assertFalse(topic.contains("wait"), topic);
+        assertFalse(topic.contains("Earlier successful actions"), topic);
+        assertTrue(topic.contains("Success"), topic);
+        assertTrue(topic.contains("ok"), topic);
     }
 
     /** Служебные поля записи — не суть: в журнал должен ехать смысл. */

@@ -40,6 +40,19 @@ public final class ScreenMarkup {
         return text != null && text.contains(SHELF_OPEN);
     }
 
+    /** Последняя полная полка: при нескольких блоках актуален только хвост. */
+    public static String extractShelf(String text) {
+        if (text == null) {
+            return null;
+        }
+        int start = text.lastIndexOf(SHELF_OPEN);
+        if (start < 0) {
+            return null;
+        }
+        int end = text.indexOf(SHELF_CLOSE, start);
+        return end < 0 ? null : text.substring(start, end + SHELF_CLOSE.length());
+    }
+
     /** Есть ли в тексте пояснение снимка чата. */
     public static boolean hasNotes(String text) {
         return text != null && text.contains(NOTES_OPEN);
@@ -50,9 +63,20 @@ public final class ScreenMarkup {
         return text != null && text.contains(AROUND_OPEN);
     }
 
-    /** Вырезает полку вместе с разметкой. */
+    /** Вырезает последнюю полку вместе с разметкой. */
     public static String stripShelf(String text) {
-        return cut(text, SHELF_OPEN, SHELF_CLOSE);
+        if (text == null) {
+            return null;
+        }
+        int start = text.lastIndexOf(SHELF_OPEN);
+        if (start < 0) {
+            return text;
+        }
+        int end = text.indexOf(SHELF_CLOSE, start);
+        if (end < 0) {
+            return text;
+        }
+        return text.substring(0, start) + text.substring(end + SHELF_CLOSE.length());
     }
 
     /** Вырезает полку и пояснения, но оставляет окружение. */

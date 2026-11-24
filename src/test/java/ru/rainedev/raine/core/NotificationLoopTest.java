@@ -29,6 +29,7 @@ class NotificationLoopTest {
     private static final class ScriptedLlm implements LlmClient {
         private final Deque<ChatResponse> scripted = new ArrayDeque<>();
         private final List<List<Message>> seenContexts = new ArrayList<>();
+        private final List<JsonNode> seenTools = new ArrayList<>();
         private final List<String> seenPrompts = new ArrayList<>();
         private final List<String> toolChoices = new ArrayList<>();
         private int calls;
@@ -54,6 +55,7 @@ class NotificationLoopTest {
         public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
             calls++;
             seenContexts.add(List.copyOf(history));
+            seenTools.add(tools);
             seenPrompts.add(systemPrompt);
             if (!scripted.isEmpty()) {
                 return scripted.removeFirst();
@@ -285,28 +287,107 @@ class NotificationLoopTest {
     }
 
     @Test
-    void onlyTheFreshestScreenshotKeepsTheShelf() {
-        // полка приклеена к каждому снимку чата, а смысл у неё один на весь
-        // разговор: вечер 18.11 дал три побайтово одинаковые копии по 4 719 знаков
-        // в одном запросе — 20% текста и три порции той же лексики
+    void onlyOneCopyOfAnUnchangedShelfEntersTheContext() {
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(finishing());
         llm.willRespond(finishing());
         NotificationLoop loop = loopWith(llm, new Toolbox());
 
         loop.process(new Notification("первое уведомление", screenWithShelf("прежняя")));
+        List<Message> before = loop.context();
         loop.process(new Notification("второе уведомление", screenWithShelf("свежая")));
 
-        List<String> shelves = loop.context().stream()
+        List<Message> after = loop.context();
+        assertEquals(before, after.subList(0, before.size()), "префикс между ходами не переписывается");
+        List<String> shelves = after.stream()
                 .map(Message::content)
                 .filter(ScreenMarkup::hasShelf)
                 .toList();
-        assertEquals(1, shelves.size(), "полка остаётся одна: " + loop.context());
-        assertTrue(shelves.getFirst().contains("свежая"), "и самая свежая: " + shelves);
-        assertFalse(shelves.getFirst().contains("прежняя"), "прежний снимок должен остаться без полки: " + shelves);
-        assertEquals(1, withText(loop.context(), "<instructions>"),
-                "пояснение к чату тоже остаётся в одном экземпляре: " + loop.context());
-        assertEquals(1, withText(loop.context(), "</instructions>"), loop.context().toString());
+        assertEquals(1, shelves.size(), "одинаковая полка не дублируется: " + after);
+        assertTrue(shelves.getFirst().contains("прежняя"), "остаётся первая копия: " + shelves);
+        Message secondScreen = after.stream()
+                .filter(message -> message.role() == Message.Role.USER)
+                .filter(message -> String.valueOf(message.content()).contains("свежая"))
+                .findFirst().orElseThrow();
+        assertFalse(ScreenMarkup.hasShelf(secondScreen.content()), "из свежего снимка одинаковая полка вырезана");
+    }
+
+    @Test
+    void aChangedShelfIsKeptWithoutRewritingThePrefix() {
+        Toolbox first = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> screen("1")));
+        Toolbox second = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> screen("2")));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("первый ход", first));
+        List<Message> before = loop.context();
+        loop.process(new Notification("второй ход", second));
+
+        List<Message> after = loop.context();
+        assertEquals(before, after.subList(0, before.size()), "старый снимок остаётся байт-в-байт");
+        assertEquals(2, after.stream().filter(message -> ScreenMarkup.hasShelf(message.content())).count(),
+                "изменившаяся полка сохраняется рядом с прежней: " + after);
+        assertTrue(after.stream().anyMatch(message -> String.valueOf(message.content()).contains("sticker_id=\"2\"")),
+                "новая полка не потеряна: " + after);
+    }
+
+    @Test
+    void aRepeatedShelfInAToolResultIsCutOnlyFromTheIncomingMessage() {
+        String shelf = "<favourite_stickers>\n  - sticker_id=\"1\" emoji=\"❤️\": Chibi anime character.\n</favourite_stickers>";
+        Toolbox tools = new Toolbox(Tool.simple("screen", "Показывает снимок", arguments -> shelf));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("screen")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, tools);
+
+        loop.process(new Notification("тебе написали\n" + shelf));
+
+        List<Message> first = llm.seenContexts.getFirst();
+        List<Message> second = llm.seenContexts.get(1);
+        assertEquals(first, second.subList(0, first.size()), "префикс внутри хода не переписывается");
+        assertTrue(ScreenMarkup.hasShelf(first.getFirst().content()), "полка в отправленном сообщении остаётся");
+        Message result = loop.context().stream()
+                .filter(message -> message.role() == Message.Role.TOOL)
+                .filter(message -> "call_screen".equals(message.toolCallId()))
+                .findFirst().orElseThrow();
+        assertFalse(ScreenMarkup.hasShelf(result.content()), "одинаковая полка вырезана только из результата тулзы");
+    }
+
+    @Test
+    void aRepeatedShelfInAPartialResultDoesNotRewriteTheSentPrefix() {
+        String shelf = "<favourite_stickers>\n  - sticker_id=\"1\" emoji=\"❤️\": Chibi anime character.\n</favourite_stickers>";
+        Toolbox tools = new Toolbox(
+                Tool.simple("screen", "Показывает снимок", arguments -> shelf),
+                Tool.simple("bad", "Ломается", arguments -> {
+                    throw new LowQualityException("слишком длинно");
+                }));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("screen"), call("bad")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, tools);
+
+        loop.process(new Notification("тебе написали\n" + shelf));
+
+        List<Message> first = llm.seenContexts.getFirst();
+        List<Message> second = llm.seenContexts.get(1);
+        assertEquals(first, second.subList(0, first.size()), "частичный отказ не трогает отправленный префикс");
+        Message result = loop.context().stream()
+                .filter(message -> message.role() == Message.Role.TOOL)
+                .filter(message -> "call_screen".equals(message.toolCallId()))
+                .findFirst().orElseThrow();
+        assertFalse(ScreenMarkup.hasShelf(result.content()), "полка вырезана из успешного частичного результата");
+    }
+
+    private static String screen(String sticker) {
+        return """
+                You switched to a chat in Telegram.
+                <message message_id="1">привет</message>
+                <favourite_stickers>
+                  - sticker_id="%s" emoji="❤️": Chibi anime character.
+                </favourite_stickers>
+                """.formatted(sticker);
     }
 
     /** Сколько сообщений в истории содержат метку. */
@@ -322,10 +403,7 @@ class NotificationLoopTest {
     }
 
     @Test
-    void anIdleImpulseRollsBackEvenThoughTheShelfWasRetired() {
-        // откат холостого порыва сверяет начало истории дословно; снятие старой
-        // полки правит те же сообщения, поэтому проверка должна увидеть
-        // отредактированный снимок истории, а не прежний
+    void anIdleImpulseRollsBackOntoUntouchedHistory() {
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(finishing());
         llm.willRespond(finishing());
@@ -333,21 +411,11 @@ class NotificationLoopTest {
         loop.process(new Notification("тебе написали", screenWithShelf("прежняя")));
         loop.windBackLastTalk(Duration.ofMinutes(31));
         List<Message> before = loop.context();
-        assertTrue(before.stream().anyMatch(m -> ScreenMarkup.hasShelf(m.content())),
-                "полка в истории до порыва есть: " + before);
 
         loop.process(new Notification("порыв, который ни к чему не привёл", screenWithShelf("свежая"))
                 .onOwnInitiative());
 
-        List<Message> after = loop.context();
-        assertEquals(before.size(), after.size(), "порыв убран целиком");
-        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("свежая")),
-                "его снимка не осталось: " + after);
-        for (int i = 0; i < before.size(); i++) {
-            String was = before.get(i).content();
-            assertEquals(was == null ? null : ScreenMarkup.stripScreen(was), after.get(i).content(),
-                    "от прежнего сообщения осталась одна обвязка снимка, индекс " + i);
-        }
+        assertEquals(before, loop.context(), "холостой порыв возвращает префикс целиком, вместе с полкой");
     }
 
     @Test
@@ -401,10 +469,9 @@ class NotificationLoopTest {
     }
 
     @Test
-    void pagesReadOnAPreviousTurnLeaveTheHistory() {
-        // страница, которую модель прочитала и по которой ответила, больше не
-        // нужна в запросе: в 00:07 19.11 такие страницы ездили в контексте по
-        // три хода, а строка журнала про «страниц не осталось» была неправдой
+    void pagesReadOnPreviousTurnsStayInHistory() {
+        // префикс запроса append-only: прочитанная страница остаётся в истории,
+        // пока контекст не сбросит планировщик переполнения
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(finishing());
         llm.willRespond(finishing());
@@ -419,19 +486,16 @@ class NotificationLoopTest {
                 .map(m -> String.valueOf(m.content()))
                 .filter(t -> t.contains("your_diary_page"))
                 .toList();
-        assertEquals(1, pages.size(), "страницы остаются только у текущего хода: " + loop.context());
-        assertEquals(1, withText(loop.context(), "</your_diary_page>"),
-                "закрывающий тег остался только у самой свежей вклейки: " + loop.context());
-        assertTrue(pages.getFirst().contains("страница номер 2"), "и самые свежие: " + pages);
-        assertFalse(pages.getFirst().contains("страница номер 1"), pages.getFirst());
+        assertEquals(2, pages.size(), "страницы обоих ходов остаются в префиксе: " + loop.context());
+        assertEquals(2, withText(loop.context(), "</your_diary_page>"), loop.context().toString());
+        assertTrue(pages.getFirst().contains("страница номер 1"), pages.getFirst());
+        assertTrue(pages.getLast().contains("страница номер 2"), pages.getLast());
         assertEquals(0, memory.restores, "прочитанное не возвращается в выборку: " + memory.injected);
         assertEquals(Set.of(1L, 2L), memory.injected);
     }
 
     @Test
-    void aRefusedTurnLeavesNoPagesFromEarlierTurnsEither() {
-        // откат текущего хода плюс зачистка прошлых: после отказа в истории не
-        // должно остаться ни одной страницы дневника
+    void aRefusedTurnKeepsPagesFromEarlierTurns() {
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(finishing());
         llm.alwaysRespond(refused());
@@ -441,16 +505,19 @@ class NotificationLoopTest {
         loop.memory(memory);
 
         loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        List<Message> before = loop.context();
         loop.process(new Notification("второй ход", screenWithShelf("свежая")));
 
-        assertTrue(loop.context().stream().noneMatch(m -> String.valueOf(m.content()).contains("your_diary_page")),
-                "ни прочитанных, ни отменённых страниц не осталось: " + loop.context());
+        List<Message> after = loop.context();
+        assertEquals(before, after.subList(0, before.size()), "отказ не переписывает прежний префикс");
+        assertEquals(1, withText(after, "</your_diary_page>"),
+                "страница первого хода остаётся, страница отказа снята: " + after);
         assertEquals(1, memory.restores, "откатился только текущий ход: " + memory.restores);
         assertEquals(Set.of(1L), memory.injected, "страница первого хода считает себя прочитанной: " + memory.injected);
     }
 
     @Test
-    void servedPingsDoNotRideAlong() {
+    void servedPingsStayInHistoryWithoutChangingItsPrefix() {
         String ping = NotificationLoop.serviceInsertions().getFirst();
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(plainText("- thought: надо ответить.\n- intention: послать привет."));
@@ -459,12 +526,15 @@ class NotificationLoopTest {
         NotificationLoop loop = loopWith(llm, new Toolbox());
 
         loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
-        assertTrue(loop.context().stream().anyMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+        List<Message> before = loop.context();
+        assertTrue(before.stream().anyMatch(m -> String.valueOf(m.content()).startsWith(ping)),
                 "промах шага 0 оставил пинк: " + loop.context());
 
         loop.process(new Notification("второй ход", screenWithShelf("свежая")));
-        assertTrue(loop.context().stream().noneMatch(m -> String.valueOf(m.content()).startsWith(ping)),
-                "отработанный пинк убран из истории: " + loop.context());
+        List<Message> after = loop.context();
+        assertEquals(before, after.subList(0, before.size()), "пинг не удаляется и не сдвигает префикс");
+        assertEquals(1, after.stream().filter(m -> String.valueOf(m.content()).startsWith(ping)).count(),
+                "пинг остаётся в истории: " + after);
     }
 
     /**
@@ -473,7 +543,7 @@ class NotificationLoopTest {
      * в два ответа модели подряд — не то, что модель видела шаг назад.
      */
     @Test
-    void aDraftAndItsPingLeaveTheHistoryTogether() {
+    void aDraftAndItsPingStayInHistoryWithoutChangingPositions() {
         String draft = "- thought: надо ответить.\n- intention: поставить реакцию на его арт.";
         String ping = NotificationLoop.serviceInsertions().getFirst();
         ScriptedLlm llm = new ScriptedLlm();
@@ -492,26 +562,23 @@ class NotificationLoopTest {
 
         loop.process(new Notification("второй ход", screenWithShelf("свежая")));
         List<Message> after = loop.context();
-        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).startsWith(ping)),
-                "пинк убран: " + after);
-        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("- intention: поставить реакцию")),
-                "черновик уехал вместе с ним, а не остался сиротой: " + after);
+        assertEquals(during, after.subList(0, during.size()), "пара не удаляется и не сдвигает позиции");
+        assertTrue(after.stream().anyMatch(m -> String.valueOf(m.content()).startsWith(ping)),
+                "пинг на месте: " + after);
+        assertTrue(after.stream().anyMatch(m -> String.valueOf(m.content()).contains("- intention: поставить реакцию")),
+                "черновик остаётся рядом с пингом: " + after);
         for (int i = 1; i < after.size(); i++) {
             assertFalse(after.get(i - 1).role() == Message.Role.ASSISTANT
                             && after.get(i).role() == Message.Role.ASSISTANT,
                     "двух ответов модели подряд не осталось, индексы " + (i - 1) + " и " + i + ": " + after);
         }
         assertTrue(after.stream().anyMatch(m -> !m.toolCallsOrEmpty().isEmpty()),
-                "исполненный шаг 1 с вызовами обязан пережить зачистку: " + after);
+                "исполненный шаг 1 с вызовами остаётся в истории: " + after);
     }
 
-    /**
-     * Снимок истории порыва правится вместе с живой историей: сверка в
-     * rollbackIdleImpulse дословная, и без зеркала откат перестал бы узнавать
-     * прежнее начало.
-     */
+    /** Откат холостого порыва возвращает снимок истории целиком, вместе с парой. */
     @Test
-    void anIdleImpulseRollsBackOntoHistoryWithoutTheServedPair() {
+    void anIdleImpulseRollsBackOntoHistoryWithTheServedPair() {
         String draft = "- thought: надо ответить.\n- intention: послать привет.";
         String ping = NotificationLoop.serviceInsertions().getFirst();
         ScriptedLlm llm = new ScriptedLlm();
@@ -530,19 +597,9 @@ class NotificationLoopTest {
                 .onOwnInitiative());
 
         List<Message> after = loop.context();
+        assertEquals(before, after, "откат возвращает историю целиком, вместе с парой и полкой");
         assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("свежая")),
                 "порыв откатился, его снимка нет: " + after);
-        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).startsWith(ping)),
-                "пинк не вернулся из снимка истории: " + after);
-        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content()).contains("- intention: послать привет")),
-                "черновик не вернулся из снимка истории: " + after);
-        assertEquals(before.size() - 2, after.size(),
-                "из истории ушла ровно пара — откат сверился с зеркалом: " + after);
-        for (int i = 0; i < after.size(); i++) {
-            String text = String.valueOf(after.get(i).content());
-            assertEquals(DiaryMarkup.strip(ScreenMarkup.stripScreen(text)), text,
-                    "прежние сообщения остались зачищенными и после отката, индекс " + i);
-        }
     }
 
     /** Её реплика без вызовов — черновик промавшего шага. */
@@ -561,14 +618,10 @@ class NotificationLoopTest {
     }
 
     /**
-     * Отказ фильтр-политики на шаге 1 выходит из хода до добавления своей пары,
-     * и в истории [черновик, пинк] остаются последними сообщениями. На входе
-     * следующего хода зачистка спотыкалась об них индексом: после двух вычитаний
-     * курсор выходил за конец списка, уведомление терялось с ERROR, а человек
-     * оставался без ответа.
+     * Пара в хвосте остаётся на прежних позициях и не ломает следующий ход.
      */
     @Test
-    void aPairLeftAtTheEndOfHistoryDoesNotBreakTheNextTurn() {
+    void aPairLeftAtTheEndDoesNotChangeTheNextTurnPrefix() {
         String draft = "- thought: он прощается.\n- intention: пожелать спокойной ночи.";
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(plainText(draft));    // ход 1, шаг 0 — промах: черновик + пинк
@@ -590,12 +643,13 @@ class NotificationLoopTest {
 
         assertEquals(3, llm.calls, "второй ход дошёл до модели: " + llm.calls);
         List<Message> after = loop.context();
-        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content())
+        assertEquals(tail, after.subList(0, tail.size()), "хвостовая пара остаётся на прежних позициях");
+        assertTrue(after.stream().anyMatch(m -> String.valueOf(m.content())
                         .startsWith(NotificationLoop.serviceInsertions().getFirst())),
-                "пинк убран: " + after);
-        assertTrue(after.stream().noneMatch(m -> String.valueOf(m.content())
+                "пинг остаётся: " + after);
+        assertTrue(after.stream().anyMatch(m -> String.valueOf(m.content())
                         .contains("- intention: пожелать спокойной ночи")),
-                "черновик ушёл вместе с ним: " + after);
+                "черновик тоже остаётся: " + after);
     }
 
     /** Все формы подряд идущих пар убираются за один проход, без сирот. */
@@ -664,11 +718,7 @@ class NotificationLoopTest {
                 "до промаха черновика в истории не было");
     }
 
-    /**
-     * Снимок, открытый самой моделью в середине хода, чистит прежние сообщения,
-     * но не трогает их позиции: пинк прошлого хода остаётся на месте, иначе
-     * индекс, который помнит снимок вклейки, уедет и откат вернёт не то сообщение.
-     */
+    /** Снимок внутри хода добавляет новую полку, не переписывая отправленный префикс. */
     @Test
     void aSnapshotInsideTheTurnKeepsMessagePositions() {
         String ping = NotificationLoop.serviceInsertions().getFirst();
@@ -693,24 +743,24 @@ class NotificationLoopTest {
         NotificationLoop loop = loopWith(llm, new Toolbox());
 
         loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        List<Message> before = loop.context();
         loop.process(new Notification("второй ход", choice));
 
-        assertEquals(1, withText(loop.context(), ping.substring(0, 40)),
-                "пинк прошлого хода остался на своём месте: " + loop.context());
-        assertEquals(1, withText(loop.context(), "</favourite_stickers>"), loop.context().toString());
-        assertEquals(1, withText(loop.context(), "</instructions>"), loop.context().toString());
-        assertTrue(loop.context().stream().filter(m -> String.valueOf(m.content()).contains("</favourite_stickers>"))
-                .allMatch(m -> String.valueOf(m.content()).contains("свежая")),
-                "в истории осталась только свежая полка: " + loop.context());
+        List<Message> after = loop.context();
+        assertEquals(before, after.subList(0, before.size()), "прежний префикс не переписан");
+        assertEquals(before, llm.seenContexts.get(2).subList(0, before.size()),
+                "и модель на старте хода видит тот же префикс");
+        assertEquals(1, withText(after, ping.substring(0, 40)),
+                "пинг прошлого хода остался на своём месте: " + after);
+        assertEquals(2, withText(after, "</favourite_stickers>"), after.toString());
+        assertEquals(2, withText(after, "</instructions>"), after.toString());
+        assertTrue(after.stream().anyMatch(m -> String.valueOf(m.content()).contains("свежая")),
+                "изменившаяся полка сохранена: " + after);
     }
 
-    /**
-     * Стикеры могут быть выключены настройкой — тогда в снимке только пояснение.
-     * Триггер зачистки обязан срабатывать и в этом случае, иначе прошлые
-     * страницы и пинки переживают такой ход нетронутыми.
-     */
+    /** Снимок без полки не должен переписывать прежнюю историю. */
     @Test
-    void notesWithoutShelfStillTidyTheHistory() {
+    void notesWithoutShelfDoNotRewriteTheHistory() {
         Toolbox screen = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> """
                 You switched to the chat "papik" in Telegram.
                 <message message_id="1">привет, прежняя</message>
@@ -732,12 +782,13 @@ class NotificationLoopTest {
         loop.memory(memory);
 
         loop.process(new Notification("первый ход", screen));
+        List<Message> before = loop.context();
         loop.process(new Notification("второй ход", fresh));
 
-        assertEquals(1, withText(loop.context(), "</instructions>"),
-                "пояснение остаётся одно: " + loop.context());
-        assertEquals(1, withText(loop.context(), "</your_diary_page>"),
-                "и страница памяти тоже одна: " + loop.context());
+        List<Message> after = loop.context();
+        assertEquals(before, after.subList(0, before.size()), "старший префикс остаётся нетронутым");
+        assertEquals(2, withText(after, "</instructions>"), after.toString());
+        assertEquals(2, withText(after, "</your_diary_page>"), after.toString());
     }
 
     @Test
@@ -789,7 +840,7 @@ class NotificationLoopTest {
     }
 
     @Test
-    void aNewTurnRetiresOldSurroundingsEvenWithoutAFreshShelf() {
+    void aNewTurnKeepsTheOldPrefixAndAddsFreshSurroundings() {
         ScriptedLlm llm = new ScriptedLlm();
         llm.willRespond(finishing());
         llm.willRespond(finishing());
@@ -797,16 +848,18 @@ class NotificationLoopTest {
         loop.surroundings(() -> "<around_you>\nСейчас вечер, 21:40.\n</around_you>\n");
 
         loop.process(new Notification("первый ход", screenWithShelf("прежняя")));
+        List<Message> before = loop.context();
         loop.process(new Notification("второй ход"));
 
-        assertEquals(1, withText(loop.context(), "<around_you>"),
-                "окружение остаётся только у нового хода: " + loop.context());
-        List<String> users = loop.context().stream()
+        List<Message> after = loop.context();
+        assertEquals(before, after.subList(0, before.size()), "префикс с прежним окружением не тронут");
+        assertEquals(2, withText(after, "<around_you>"), after.toString());
+        List<String> users = after.stream()
                 .filter(message -> message.role() == Message.Role.USER)
                 .map(Message::content)
                 .toList();
-        assertFalse(users.getFirst().contains("<around_you>"),
-                "прежнее окружение снято: " + users.getFirst());
+        assertTrue(users.getFirst().contains("<around_you>"),
+                "прежнее окружение остаётся: " + users.getFirst());
         assertTrue(users.getLast().contains("<around_you>"),
                 "новое окружение на месте: " + users.getLast());
     }
@@ -1077,14 +1130,13 @@ class NotificationLoopTest {
         }));
 
         ScriptedLlm llm = new ScriptedLlm();
-        llm.willRespond(withToolCalls(List.of(call("open")), 10));
         llm.willRespond(withToolCalls(List.of(call("send")), 10));
         llm.willRespond(finishing());
 
         NotificationLoop loop = loopWith(llm, new Toolbox());
         loop.process(new Notification("тебе написали", available));
 
-        assertEquals(1, sent.size(), "инструмент, появившийся по ходу хода, должен работать");
+        assertEquals(1, sent.size(), "инструмент, появившийся при авто-открытии, должен работать");
         assertFalse(loop.context().stream()
                         .anyMatch(m -> m.content() != null && m.content().contains("недоступен")),
                 "модель не должна получить отказ по инструменту, который уже добавлен");
@@ -1148,6 +1200,85 @@ class NotificationLoopTest {
         assertEquals(1, llm.calls, "лишнего обращения к модели быть не должно");
         assertTrue(loop.context().getFirst().content().contains("Последние сообщения"),
                 "модель должна сразу увидеть переписку, а не уведомление");
+    }
+
+    @Test
+    void successfulAutomaticOpenRemovesItAndKeepsAppearedTools() {
+        List<String> sent = new ArrayList<>();
+        Toolbox available = new Toolbox(opening(mutating("send", sent)));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали", available));
+
+        assertFalse(available.names().contains("open"), "одноразовый open не висит до конца хода");
+        assertTrue(available.names().contains("send"), "инструменты открытого чата сохранены");
+    }
+
+    @Test
+    void failedAutomaticOpenLeavesOpenAndLeaksNoAppearedTools() {
+        Tool failed = Tool.named("open").describedAs("Открывает чат").buildContextual((arguments, addTool) -> {
+            addTool.accept(Tool.simple("send", "Отправляет", args -> "ок"));
+            throw new IllegalStateException("чат не открылся");
+        });
+        Toolbox available = new Toolbox(failed);
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали", available));
+
+        assertTrue(available.names().contains("open"), "при ошибке open остаётся доступен");
+        assertFalse(available.names().contains("send"), "частично добавленные инструменты не утекают");
+    }
+
+    @Test
+    void emptyAutomaticOpenLeavesTheToolboxUntouched() {
+        Toolbox available = new Toolbox(Tool.simple("open", "Открывает чат", arguments -> ""));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали", available));
+
+        assertTrue(available.names().contains("open"), "пустой результат не считается открытием");
+    }
+
+    @Test
+    void manualOpenIsRemovedBeforeTheNextStep() {
+        Toolbox available = new Toolbox(
+                Tool.simple("open", "Открывает чат", arguments -> "открыто"),
+                Tool.simple("ignore", "Игнорирует", arguments -> "ок"));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("open")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали", available));
+
+        assertFalse(available.names().contains("open"), "ручной open тоже одноразовый");
+        assertFalse(llm.seenTools.get(1).findValuesAsText("name").contains("open"),
+                "на следующем шаге open уже не предложен");
+    }
+
+    @Test
+    void partialFailureStillRetiresSuccessfulOpen() {
+        Toolbox available = new Toolbox(
+                Tool.simple("open", "Открывает чат", arguments -> "открыто"),
+                Tool.simple("bad", "Ломается", arguments -> {
+                    throw new LowQualityException("слишком длинно");
+                }));
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("open"), call("bad")), 10));
+        llm.willRespond(finishing());
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+
+        loop.process(new Notification("тебе написали", available));
+
+        assertFalse(available.names().contains("open"), "успешный open не повторяется после частичного сбоя");
+        assertFalse(llm.seenTools.get(1).findValuesAsText("name").contains("open"),
+                "на следующем шаге open уже не предложен");
     }
 
     @Test
@@ -1408,6 +1539,31 @@ class NotificationLoopTest {
                 "подсказка про следующий шаг приписана к чужому тексту: " + notes);
         assertTrue(notes.stream().anyMatch(note -> note.contains("Earlier successful actions")),
                 "записка о недосказанных действиях тоже: " + notes);
+    }
+
+    @Test
+    void serviceNotesStayOutOfDerivedHistory() {
+        Message screen = Message.user("снимок чата");
+        Message next = Message.toolResult("c1",
+                "Success\n" + NotificationLoop.NEXT_ACTION_PREFIX + "send_telegram_message, wait");
+        Message partial = Message.toolResult("c2",
+                "ok\n" + NotificationLoop.PARTIAL_NOTE_PREFIX + "не повторять\nвторая строка");
+        Message onlyTail = Message.toolResult("c3",
+                NotificationLoop.NEXT_ACTION_PREFIX + "wait");
+        Message snapshot = Message.toolResult("c4",
+                "chat1\n" + NotificationLoop.NEXT_ACTION_PREFIX + "quoted\nchat2");
+        Message human = Message.user(NotificationLoop.NEXT_ACTION_PREFIX + "не трогать");
+
+        List<Message> clean = NotificationLoop.withoutServedPings(
+                List.of(screen, next, partial, onlyTail, snapshot, human));
+
+        assertEquals(List.of(
+                screen,
+                Message.toolResult("c1", "Success"),
+                Message.toolResult("c2", "ok"),
+                Message.toolResult("c3", ""),
+                snapshot,
+                human), clean, "хвостовые подсказки срезаны, снимок и реплика человека целы");
     }
 
     @Test

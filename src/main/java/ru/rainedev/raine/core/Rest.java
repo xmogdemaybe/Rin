@@ -2,6 +2,8 @@ package ru.rainedev.raine.core;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.random.RandomGenerator;
 import org.slf4j.Logger;
@@ -19,10 +21,13 @@ public class Rest {
     private static final Logger log = LoggerFactory.getLogger(Rest.class);
 
     /** Насколько вероятно отойти перед очередным уведомлением. */
-    private static final double CHANCE = 0.01;
+    private static final double CHANCE = 0.0035;
 
     private static final int MIN_MINUTES = 15;
-    private static final int MAX_MINUTES = 120;
+    private static final int MAX_MINUTES = 45;
+    private static final Duration DAY_NAP_COOLDOWN = Duration.ofMinutes(180);
+    private static final int MAX_DAY_NAPS_PER_DAY = 2;
+    private static final Duration DAY_ROLL_INTERVAL = Duration.ofSeconds(45);
 
     /** Шаг проверки пробуждения — реагировать надо быстро, а не досыпать час. */
     private static final Duration TICK = Duration.ofSeconds(1);
@@ -52,9 +57,15 @@ public class Rest {
     private boolean farewellDone;
 
     private final Clock clock;
+    private final Sleeper sleeper;
 
     /** Дневные отлучки можно выключить: остаётся только ночной сон. */
     private volatile boolean dayNaps = true;
+
+    private Instant lastDayRoll;
+    private Instant lastDayNapEnded;
+    private LocalDate dayNapDate;
+    private int dayNapsToday;
 
     /**
      * Чем заняться ночью. Получает отведённое время и признак пробуждения.
@@ -81,8 +92,18 @@ public class Rest {
 
     /** Часы отдельно — в тестах видно, как кончается предел терпения. */
     Rest(RandomGenerator random, Clock clock) {
+        this(random, clock, Thread::sleep);
+    }
+
+    Rest(RandomGenerator random, Clock clock, Sleeper sleeper) {
         this.random = random;
         this.clock = clock;
+        this.sleeper = sleeper;
+    }
+
+    @FunctionalInterface
+    interface Sleeper {
+        void sleep(Duration duration) throws InterruptedException;
     }
 
     public void dayNaps(boolean allowed) {
@@ -102,7 +123,7 @@ public class Rest {
         this.onStateChange = action;
     }
 
-    /** Жив ли разговор — спрашивается перед каждым уходом в ночь. */
+    /** Жив ли разговор — спрашивается перед каждой отлучкой. */
     public void aliveTalk(java.util.function.BooleanSupplier alive) {
         this.aliveTalk = alive;
     }
@@ -150,7 +171,28 @@ public class Rest {
         deferSince = null;
         patienceOver = false;
         farewellDone = false;
-        if (!dayNaps || random.nextDouble() >= CHANCE) {
+        if (!dayNaps || aliveTalk.getAsBoolean()) {
+            return;
+        }
+        Instant now = Instant.now(clock);
+        LocalDate today = LocalDate.now(clock);
+        if (!today.equals(dayNapDate)) {
+            dayNapDate = today;
+            dayNapsToday = 0;
+        }
+        if (dayNapsToday >= MAX_DAY_NAPS_PER_DAY) {
+            return;
+        }
+        if (lastDayNapEnded != null
+                && Duration.between(lastDayNapEnded, now).compareTo(DAY_NAP_COOLDOWN) < 0) {
+            return;
+        }
+        if (lastDayRoll != null
+                && Duration.between(lastDayRoll, now).compareTo(DAY_ROLL_INTERVAL) < 0) {
+            return;
+        }
+        lastDayRoll = now;
+        if (random.nextDouble() >= CHANCE) {
             return;
         }
         sleep(Duration.ofMinutes(MIN_MINUTES + random.nextInt(MAX_MINUTES - MIN_MINUTES + 1)), "ненадолго", false);
@@ -207,20 +249,35 @@ public class Rest {
             // с непрочитанным
             return;
         }
+        if (!night) {
+            dayNapsToday++;
+        }
         log.info("Ухожу {} — на {} мин", reason, duration.toMinutes());
 
-        long deadline = System.nanoTime() + duration.toNanos();
         resting = true;
         onStateChange.accept(true);
         try {
+            Duration remaining = duration;
             // ночной сон — не простой: память в это время пересматривается.
             // Дневная передышка на это не годится, она слишком коротка и часта
             if (night && !java.util.Objects.equals(consolidatedNight, this.night.bedtime())) {
                 consolidatedNight = this.night.bedtime();
+                Instant before = Instant.now(clock);
                 duringNight.accept(duration, () -> awoken.get() || stopping);
+                Duration elapsed = Duration.between(before, Instant.now(clock));
+                if (elapsed.isNegative()) {
+                    elapsed = Duration.ZERO;
+                }
+                remaining = duration.minus(elapsed);
+                if (remaining.isNegative()) {
+                    remaining = Duration.ZERO;
+                }
             }
-            while (System.nanoTime() < deadline) {
+            while (!remaining.isZero() && !remaining.isNegative()) {
                 if (awoken.get()) {
+                    if (!night) {
+                        awoken.set(false);
+                    }
                     log.info("Вернулась раньше — меня позвали");
                     return;
                 }
@@ -228,8 +285,20 @@ public class Rest {
                     log.info("Просыпаюсь: пора закрываться");
                     return;
                 }
-                long remaining = deadline - System.nanoTime();
-                if (remaining > 0) Thread.sleep(Duration.ofNanos(Math.min(TICK.toNanos(), remaining)));
+                Duration step = remaining.compareTo(TICK) > 0 ? TICK : remaining;
+                sleeper.sleep(step);
+                remaining = remaining.minus(step);
+            }
+            if (awoken.get()) {
+                if (!night) {
+                    awoken.set(false);
+                }
+                log.info("Вернулась раньше — меня позвали");
+                return;
+            }
+            if (stopping) {
+                log.info("Просыпаюсь: пора закрываться");
+                return;
             }
             log.info("Вернулась");
             if (night) {
@@ -244,6 +313,9 @@ public class Rest {
             Thread.currentThread().interrupt();
         } finally {
             resting = false;
+            if (!night) {
+                lastDayNapEnded = Instant.now(clock);
+            }
             onStateChange.accept(false);
         }
     }

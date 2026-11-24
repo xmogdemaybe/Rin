@@ -5,8 +5,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.llm.ChatResponse;
@@ -14,7 +16,6 @@ import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.llm.ToolCall;
 import ru.rainedev.raine.memory.Audience;
-import ru.rainedev.raine.memory.DiaryMarkup;
 import ru.rainedev.raine.memory.Memory;
 import ru.rainedev.raine.memory.Origin;
 import ru.rainedev.raine.memory.Source;
@@ -110,25 +111,81 @@ public final class NotificationLoop {
     static final String PARTIAL_NOTE_PREFIX =
             "Earlier successful actions have already happened. Do not repeat them. ";
 
+    private record TailInsertion(String prefix, boolean singleLine) {}
+
     /**
-     * Всё, что цикл дописывает в чужой текст. Пересказ дневника вырезает это по
-     * списку: новая приписка, не попавшая сюда, однажды уедет в дневник как
-     * слова разговора.
+     * Хвосты, которые цикл дописывает к tool-результату. singleLine решает,
+     * можно ли срезать только последнюю строку: причина PartialFailure
+     * бывает многострочной.
+     */
+    private static final List<TailInsertion> TOOL_TAIL_INSERTIONS = List.of(
+            new TailInsertion(NEXT_ACTION_PREFIX, true),
+            new TailInsertion(PARTIAL_NOTE_PREFIX, false)
+    );
+
+    /**
+     * Служебные строки, которые цикл добавляет в историю. Пересказ дневника
+     * вырезает их по списку: новая приписка, не попавшая сюда, однажды уедет
+     * в дневник как слова разговора.
      */
     public static List<String> serviceInsertions() {
-        return List.of(BE_TOOL_CENTRIC, NEXT_ACTION_PREFIX, PARTIAL_NOTE_PREFIX);
+        return Stream.concat(
+                Stream.of(BE_TOOL_CENTRIC),
+                TOOL_TAIL_INSERTIONS.stream().map(TailInsertion::prefix))
+                .toList();
     }
 
     /**
-     * История без отработанных пинков и черновика шага, который они напоминали
-     * исполнить. Тем, кто пересказывает разговор позже (дневник, трёхдневная
-     * сводка памяти), напоминание цикла и её замысел — не реплики разговора:
-     * без этого пара жила бы в сводке дословно. Исходный список не правится.
+     * Копия истории без пингов, их черновиков и служебных подсказок следующего
+     * шага. Исходный контекст не правится: его читают пересказ дневника,
+     * трёхдневная сводка памяти и запрос эмбеддингов.
      */
     public static List<Message> withoutServedPings(List<Message> history) {
-        List<Message> kept = new ArrayList<>(history);
-        dropServedPings(kept);
+        List<Message> kept = new ArrayList<>();
+        for (Message message : history) {
+            String text = message.content();
+            if (text != null && text.startsWith(BE_TOOL_CENTRIC)) {
+                if (!kept.isEmpty()) {
+                    Message previous = kept.getLast();
+                    if (previous.role() == Message.Role.ASSISTANT && previous.toolCallsOrEmpty().isEmpty()) {
+                        kept.removeLast();
+                    }
+                }
+                continue;
+            }
+            if (message.role() == Message.Role.TOOL && text != null && !text.isEmpty()) {
+                message = stripToolServiceTail(message);
+            }
+            kept.add(message);
+        }
         return kept;
+    }
+
+    private static Message stripToolServiceTail(Message message) {
+        String text = message.content();
+        for (TailInsertion insertion : TOOL_TAIL_INSERTIONS) {
+            if (!insertion.singleLine()) {
+                continue;
+            }
+            int lastNl = text.lastIndexOf('\n');
+            int lineStart = lastNl + 1;
+            if (text.startsWith(insertion.prefix(), lineStart)) {
+                return message.withContent(lastNl < 0 ? "" : text.substring(0, lastNl));
+            }
+        }
+        for (TailInsertion insertion : TOOL_TAIL_INSERTIONS) {
+            if (insertion.singleLine()) {
+                continue;
+            }
+            int at = text.lastIndexOf("\n" + insertion.prefix());
+            if (at < 0 && text.startsWith(insertion.prefix())) {
+                at = 0;
+            }
+            if (at >= 0) {
+                return message.withContent(text.substring(0, at));
+            }
+        }
+        return message;
     }
 
     private final LinkedBlockingDeque<Notification> queue = new LinkedBlockingDeque<>();
@@ -677,8 +734,7 @@ public final class NotificationLoop {
             String suffix = surroundings.get();
             String around = suffix == null || suffix.isBlank() ? "" : "\n" + suffix.strip();
             Message screen = Message.user(text + "\nCurrent time: " + Instant.now() + " UTC" + around);
-            retireStaleScreens(List.of(screen), true);
-            context.add(screen);
+            appendContext(screen);
             // метка снимается здесь, а не когда уведомление создано: событие из
             // очереди иначе приписало бы свой чат чужому разговору, который ещё
             // не сохранён, а новый контекст остался бы без метки вовсе
@@ -787,7 +843,7 @@ public final class NotificationLoop {
                 }
                 // ответ текстом действием не является — напоминаем, и до конца
                 // хода текст запрещён: каждый следующий шаг обязан содержать вызов
-                context.add(Message.user(BE_TOOL_CENTRIC));
+                appendContext(Message.user(BE_TOOL_CENTRIC));
                 turn.forceToolCall = true;
                 continue;
             }
@@ -802,12 +858,15 @@ public final class NotificationLoop {
                     tools.add(appeared);
                     notification.tools().add(appeared);
                 });
+                removeSpentOpen(notification, calls, results);
             } catch (Toolbox.PartialFailure e) {
                 // Earlier actions are real: retain the complete tool protocol and do not replay them.
-                retireStaleScreens(e.results(), false);
+                removeSpentOpen(notification, calls, e.results());
                 context.add(response.firstMessage().orElseThrow());
-                context.addAll(e.results());
-                appendToLast("\n" + PARTIAL_NOTE_PREFIX + e.getMessage());
+                for (Message result : e.results()) {
+                    appendContext(result);
+                }
+                appendToLast(PARTIAL_NOTE_PREFIX + e.getMessage());
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
                     endTurn(turn);
@@ -818,7 +877,7 @@ public final class NotificationLoop {
             } catch (LowQualityException e) {
                 // откат: сообщение модели в контекст не попадает, вместо него — подсказка
                 log.info("Ответ низкого качества, пробуем иначе: {}", e.getMessage());
-                context.add(Message.user(e.getMessage()));
+                appendContext(Message.user(e.getMessage()));
                 if (response.totalTokens() > contextTokenLimit) {
                     log.warn("Контекст переполнен, а подходящий ответ не найден — сбрасываем");
                     onContextOverflow.run();
@@ -829,11 +888,10 @@ public final class NotificationLoop {
                 continue;
             }
 
-            // снимок открытого самим ходом чата приезжает ответом тулзы: обвязка
-            // в нём свежее той, что лежала в истории
-            retireStaleScreens(results, false);
             context.add(response.firstMessage().orElseThrow());
-            context.addAll(results);
+            for (Message result : results) {
+                appendContext(result);
+            }
 
             String visible = visibleAction(calls, tools);
             if (!visible.isEmpty()) {
@@ -852,7 +910,7 @@ public final class NotificationLoop {
             }
 
             if (!tools.isEmpty()) {
-                appendToLast("\n" + NEXT_ACTION_PREFIX + String.join(", ", tools.names()));
+                appendToLast(NEXT_ACTION_PREFIX + String.join(", ", tools.names()));
             }
         }
 
@@ -957,7 +1015,27 @@ public final class NotificationLoop {
 
     private void appendToLast(String addition) {
         Message last = context.getLast();
-        context.set(context.size() - 1, last.withContent(last.content() + "\n" + addition));
+        String base = Objects.requireNonNullElse(last.content(), "");
+        String updated = base.isEmpty() ? addition : base + "\n" + addition;
+        context.set(context.size() - 1, last.withContent(updated));
+    }
+
+    private void appendContext(Message message) {
+        String shelf = ScreenMarkup.extractShelf(message.content());
+        if (shelf != null && shelf.equals(lastShelf())) {
+            message = message.withContent(ScreenMarkup.stripShelf(message.content()));
+        }
+        context.add(message);
+    }
+
+    private String lastShelf() {
+        for (int i = context.size() - 1; i >= 0; i--) {
+            String shelf = ScreenMarkup.extractShelf(context.get(i).content());
+            if (shelf != null) {
+                return shelf;
+            }
+        }
+        return null;
     }
 
     /**
@@ -978,11 +1056,39 @@ public final class NotificationLoop {
             log.debug("Открываю чат сразу, не спрашивая модель");
             // инструменты, которые откроет чат, попадают в набор уведомления —
             // вместе с ним они и исчезнут
-            return java.util.Optional.of(
-                    only.handler().call(only.parameters().objectNode(), notification.tools()::add));
+            List<Tool> appeared = new ArrayList<>();
+            String opened = only.handler().call(only.parameters().objectNode(), appeared::add);
+            if (opened == null || opened.isBlank()) {
+                return java.util.Optional.empty();
+            }
+            notification.tools().remove("open");
+            appeared.forEach(notification.tools()::add);
+            return java.util.Optional.of(opened);
         } catch (RuntimeException e) {
             log.warn("Не удалось открыть чат сразу: {}", e.getMessage());
             return java.util.Optional.empty();
+        }
+    }
+
+    private static void removeSpentOpen(Notification notification, List<ToolCall> calls, List<Message> results) {
+        if (!notification.tools().names().contains("open")) {
+            return;
+        }
+        for (int i = 0; i < calls.size(); i++) {
+            ToolCall call = calls.get(i);
+            String arguments = call.arguments();
+            boolean zeroArgs = arguments == null || arguments.isBlank()
+                    || arguments.replaceAll("\\s", "").equals("{}");
+            if (!"open".equals(call.name()) || !zeroArgs) {
+                continue;
+            }
+            String result = results.get(i).content();
+            if (result == null || result.isBlank() || Toolbox.NOTHING_WORKED.equals(result)
+                    || result.startsWith("Инструмент 'open' сейчас недоступен")) {
+                continue;
+            }
+            notification.tools().remove("open");
+            return;
         }
     }
 
@@ -1052,122 +1158,6 @@ public final class NotificationLoop {
         memory.restoreInjected(was.injectedBefore());
         turn.recallSnapshot = null;
         log.info("Вклейку памяти снято: страниц дневника в истории не осталось");
-    }
-
-    /**
-     * Новый снимок чата приносит свою полку и своё пояснение, а память следом
-     * вклеивает страницы. В прежних сообщениях всё это — мёртвый груз прошлого
-     * хода: вечер 18.11 дал четыре побайтово одинаковые копии полки (по 4 719
-     * знаков) и пять копий пояснений в одном запросе, а в 00:07 19.11 снятие
-     * вклейки оставляло в истории страницы, подмешанные тремя ходами раньше, —
-     * и строка журнала про «страниц не осталось» была неправдой. Сюда же идут
-     * отработанные пинки «твой ответ был просто текстом» — вместе с черновиком
-     * прямо перед каждым из них: пинк относится к шагу, который модель уже
-     * исправила, а черновик без него остался бы вторым ответом модели подряд.
-     *
-     * <p>
-     * Отпечатки прочитанных страниц здесь НЕ сбрасываются: на прошлых успешных
-     * ходах эти страницы были прочитаны по-настоящему, и откатывает их только
-     * {@link #undoRecall(Turn)} — когда отказал текущий ход.
-     *
-     * <p>
-     * Полка с пояснением и окружение снимаются порознь: снимок, открытый самой
-     * моделью посреди хода, приносит свежую полку, но не приносит окружения —
-     * и стирать его из текущего сообщения нельзя, иначе кэш префикса ломается
-     * прямо посреди хода.
-     *
-     * @param incoming  то, что сейчас ложится в историю: снимок — сообщением
-     *                  пользователя, а вызов {@code #open} — ответом инструмента
-     * @param turnStart был ли это вход в новый ход. Только там из истории
-     *                  убираются и пинки: внутри хода позицию вклейки помнит
-     *                  {@code recallSnapshot}, а удаление сообщения сдвинуло бы
-     *                  все индексы за собой
-     */
-    private void retireStaleScreens(Iterable<Message> incoming, boolean turnStart) {
-        boolean freshScreen = false;
-        boolean freshAround = false;
-        for (Message message : incoming) {
-            String text = message.content();
-            freshScreen |= ScreenMarkup.hasShelf(text) || ScreenMarkup.hasNotes(text);
-            freshAround |= ScreenMarkup.hasAround(text);
-        }
-        if (!freshScreen && !freshAround) {
-            return;
-        }
-        Turn turn = active;
-        for (int i = 0; i < context.size(); i++) {
-            context.set(i, served(context.get(i), freshScreen, freshAround));
-        }
-        if (turn != null && turn.contextBefore != null) {
-            // откат холостого порыва сверяет начало истории дословно: правку
-            // надо провести и по её снимку, иначе проверка «история не тронута»
-            // перестанет узнавать прежние сообщения и порыв не откатится
-            List<Message> before = new ArrayList<>(turn.contextBefore.size());
-            for (Message message : turn.contextBefore) {
-                before.add(served(message, freshScreen, freshAround));
-            }
-            turn.contextBefore = List.copyOf(before);
-        }
-        if (!turnStart || !freshScreen) {
-            return;
-        }
-        dropServedPings(context);
-        if (turn != null && turn.contextBefore != null) {
-            List<Message> before = new ArrayList<>(turn.contextBefore);
-            dropServedPings(before);
-            turn.contextBefore = List.copyOf(before);
-        }
-    }
-
-    /**
-     * Сообщение прошлого хода: без той обвязки снимка, которая пришла свежей,
-     * и без прочитанных страниц памяти.
-     */
-    private static Message served(Message message, boolean screen, boolean around) {
-        String text = message.content();
-        if (text == null) {
-            return message;
-        }
-        String clean = screen ? DiaryMarkup.strip(ScreenMarkup.stripShelfAndNotes(text)) : text;
-        if (around) {
-            clean = ScreenMarkup.stripAround(clean);
-        }
-        return clean.equals(text) ? message : message.withContent(clean);
-    }
-
-    /** Пинк «ответ текстом ничего не делает»: после того как модель его исполнила, это шум. */
-    private static boolean isPing(Message message) {
-        String text = message.content();
-        return text != null && text.startsWith(BE_TOOL_CENTRIC);
-    }
-
-    /** Её реплика без вызовов — замысел шага, который пинк и просил исполнить. */
-    private static boolean isDraft(Message message) {
-        return message.role() == Message.Role.ASSISTANT && message.toolCallsOrEmpty().isEmpty();
-    }
-
-    /**
-     * Убирает отработанные пинки вместе с черновиком прямо перед каждым из них.
-     * Раздельно они разъезжаются в двусмысленное: без черновика два ответа модели
-     * подряд (шаг 0 с мыслями и шаг 1 с вызовами), а сам черновик — единственное,
-     * где она ещё видела своё намерение.
-     *
-     * <p>
-     * Обход сзади вперёд, и после обоих вычитаний курсор сдвигается ещё на шаг:
-     * иначе следующий за удалённой парой индекс оказывается за концом списка — на
-     * паре в хвосте истории это стоило потерянным уведомлением с ERROR.
-     */
-    private static void dropServedPings(List<Message> history) {
-        for (int i = history.size() - 1; i >= 0; i--) {
-            if (!isPing(history.get(i))) {
-                continue;
-            }
-            history.remove(i);
-            if (i > 0 && isDraft(history.get(i - 1))) {
-                history.remove(i - 1);
-                i--;
-            }
-        }
     }
 
     /**

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.rainedev.raine.core.NotificationLoop;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.llm.Message;
 import ru.rainedev.raine.phone.Markup;
@@ -198,7 +199,8 @@ public final class DiaryMemory implements Memory {
      */
     static String topicOf(List<Message> context) {
         StringBuilder topic = new StringBuilder();
-        for (Message message : context.subList(Math.max(0, context.size() - CONTEXT_DEPTH), context.size())) {
+        List<Message> recent = NotificationLoop.withoutServedPings(context);
+        for (Message message : recent.subList(Math.max(0, recent.size() - CONTEXT_DEPTH), recent.size())) {
             append(topic, message.reasoningContent());
             append(topic, message.content());
         }
