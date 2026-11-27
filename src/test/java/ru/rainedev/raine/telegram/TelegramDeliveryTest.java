@@ -61,4 +61,24 @@ class TelegramDeliveryTest {
         assertFalse(telegram.wasSentByMe(100L, 812L));
         assertTrue(telegram.wasSentByMe(300L, 512L));
     }
+
+    @Test
+    void sentRegistryIgnoresZeroIds() {
+        telegram.rememberSent(0L, 5L);
+        telegram.rememberSent(5L, 0L);
+        assertFalse(telegram.wasSentByMe(0L, 5L));
+        assertFalse(telegram.wasSentByMe(5L, 0L));
+    }
+
+    @Test
+    void rememberingAgainRefreshesEvictionOrder() {
+        telegram.rememberSent(100L, 1L);
+        telegram.rememberSent(100L, 2L);
+        telegram.rememberSent(100L, 1L);
+        for (long i = 1; i <= 511; i++) {
+            telegram.rememberSent(300L, i);
+        }
+        assertTrue(telegram.wasSentByMe(100L, 1L), "повторно записанное вытеснено как старое");
+        assertFalse(telegram.wasSentByMe(100L, 2L));
+    }
 }

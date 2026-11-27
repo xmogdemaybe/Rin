@@ -187,7 +187,7 @@ class LostNotificationTest {
         NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
         loop.idleCheck(Duration.ofMillis(10));
         loop.retryPause(Duration.ofMillis(1));
-        loop.strandedProbePause(Duration.ofSeconds(2));
+        loop.strandedProbePause(Duration.ofMillis(500));
         loop.strandedTtl(Duration.ofHours(2));
         CountDownLatch parked = new CountDownLatch(2);
         AtomicInteger failures = new AtomicInteger();
@@ -208,6 +208,51 @@ class LostNotificationTest {
         assertTrue(llm.secondProbe.await(4, TimeUnit.SECONDS), "вторая проба не началась");
         assertEquals(0, failures.get(), "неуспешные пробы снова вызвали onNotificationFailed");
         worker.interrupt();
+    }
+
+    @Test
+    void strandedProbesFollowFiveTenFifteenMinuteLadder() throws Exception {
+        MutableClock clock = new MutableClock();
+        Instant t0 = clock.instant();
+        LadderNetwork llm = new LadderNetwork();
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(10));
+        loop.retryPause(Duration.ofMillis(1));
+        loop.strandedProbePause(Duration.ofMinutes(5));
+        loop.strandedTtl(Duration.ofHours(2));
+        loop.clock(clock);
+        CountDownLatch parked = new CountDownLatch(1);
+        loop.onNotificationDone(ignored -> parked.countDown());
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("лестница проб"));
+        assertTrue(parked.await(5, TimeUnit.SECONDS), "уведомление не отложилось");
+        assertEquals(t0.plus(Duration.ofMinutes(5)), loop.nextStrandedProbeAt());
+
+        Duration[] probeAt = {Duration.ofMinutes(5), Duration.ofMinutes(15), Duration.ofMinutes(30)};
+        Duration[] nextAt = {Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(45)};
+        Duration elapsed = Duration.ZERO;
+        for (int i = 0; i < probeAt.length; i++) {
+            Duration almost = probeAt[i].minusSeconds(1);
+            clock.advance(almost.minus(elapsed));
+            assertFalse(llm.probes.tryAcquire(100, TimeUnit.MILLISECONDS),
+                    "проба " + (i + 1) + " раньше срока");
+            clock.advance(Duration.ofSeconds(1));
+            elapsed = probeAt[i];
+            assertTrue(llm.probes.tryAcquire(5, TimeUnit.SECONDS), "проба " + (i + 1) + " не началась");
+            awaitNextProbe(loop, t0.plus(nextAt[i]));
+        }
+        worker.interrupt();
+    }
+
+    /** Часы двигать можно только после того, как неуспешная проба назначила следующую. */
+    private static void awaitNextProbe(NotificationLoop loop, Instant expected) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!(expected.equals(loop.nextStrandedProbeAt()) && loop.strandedCount() == 1)) {
+            assertTrue(System.nanoTime() < deadline,
+                    "следующая проба не назначена на " + expected + ", а " + loop.nextStrandedProbeAt());
+            Thread.onSpinWait();
+        }
     }
 
     @Test
@@ -486,6 +531,24 @@ class LostNotificationTest {
             if (call > 12) {
                 if (call == 13) firstProbe.countDown();
                 if (call >= 13) secondProbe.countDown();
+            }
+            throw new UncheckedIOException("Сеть недоступна", new IOException("offline"));
+        }
+
+        @Override
+        public double[] embedding(String input) {
+            return new double[] {0};
+        }
+    }
+
+    private static final class LadderNetwork implements LlmClient {
+        final java.util.concurrent.Semaphore probes = new java.util.concurrent.Semaphore(0);
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
+            if (calls.incrementAndGet() > 6) {
+                probes.release();
             }
             throw new UncheckedIOException("Сеть недоступна", new IOException("offline"));
         }

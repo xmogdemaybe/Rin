@@ -188,6 +188,10 @@ public final class OpenAiCompatibleClient implements LlmClient {
     private static String normalizedEndpoint(String raw) {
         try {
             URI uri = URI.create(raw.trim());
+            if (uri.getScheme() == null || uri.getScheme().isBlank()
+                    || uri.getHost() == null || uri.getHost().isBlank()) {
+                return null;
+            }
             String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(java.util.Locale.ROOT);
             String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(java.util.Locale.ROOT);
             int port = uri.getPort();

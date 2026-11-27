@@ -276,6 +276,9 @@ class QuotaFallbackTest {
                 "http://Primary.Invalid:80/v1/?a=1", "http://primary.invalid/v1?a=1"));
         assertFalse(OpenAiCompatibleClient.sameEndpoint(
                 "https://primary.invalid/v1", "https://reserve.invalid/v1"));
+        assertFalse(OpenAiCompatibleClient.sameEndpoint("http://host_a/v1", "http://host_b/v1"));
+        assertFalse(OpenAiCompatibleClient.sameEndpoint("primary.invalid/v1", "reserve.invalid/v1"));
+        assertTrue(OpenAiCompatibleClient.sameEndpoint("http://host_a/v1/", "http://HOST_A/v1"));
     }
 
     @Test
