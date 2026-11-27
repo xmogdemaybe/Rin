@@ -14,6 +14,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.ErrorNote;
@@ -34,6 +35,7 @@ public final class OpenAiCompatibleClient implements LlmClient {
      * потому что спешка продлевает лимит, а не обходит его.
      */
     private static final int MAX_ATTEMPTS = 3;
+    private static final int PRIMARY_FAILOVER_ATTEMPTS = 2;
 
     /** Google просит подождать в RetryInfo: {"retryDelay":"17s"}. */
     private static final java.util.regex.Pattern GOOGLE_DELAY =
@@ -169,6 +171,96 @@ public final class OpenAiCompatibleClient implements LlmClient {
             throw new IllegalArgumentException("llm_proxy: \"" + proxy + "\" — нет такого адреса");
         }
         return ProxySelector.of(new InetSocketAddress(host, port));
+    }
+
+    static boolean sameEndpoint(String first, String second) {
+        if (first == null || second == null) {
+            return Objects.equals(first, second);
+        }
+        String left = normalizedEndpoint(first);
+        String right = normalizedEndpoint(second);
+        if (left != null && right != null) {
+            return left.equals(right);
+        }
+        return stripTrailingSlashes(first).equalsIgnoreCase(stripTrailingSlashes(second));
+    }
+
+    private static String normalizedEndpoint(String raw) {
+        try {
+            URI uri = URI.create(raw.trim());
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(java.util.Locale.ROOT);
+            String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(java.util.Locale.ROOT);
+            int port = uri.getPort();
+            if (port < 0) {
+                port = switch (scheme) {
+                    case "https" -> 443;
+                    case "http" -> 80;
+                    default -> -1;
+                };
+            }
+            String path = uri.getRawPath() == null ? "" : uri.getRawPath();
+            while (path.endsWith("/")) {
+                path = path.substring(0, path.length() - 1);
+            }
+            String query = uri.getRawQuery();
+            return scheme + "://" + host + ":" + port + path + (query == null ? "" : "?" + query);
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
+    }
+
+    private static String stripTrailingSlashes(String raw) {
+        String value = raw.trim();
+        while (value.endsWith("/")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        return value;
+    }
+
+    private boolean hasDifferentFallbackEndpoint() {
+        if (config.fallbackBaseUrl() == null || config.fallbackBaseUrl().isBlank()) {
+            return false;
+        }
+        return !sameEndpoint(config.baseUrl(), config.fallbackBaseUrl());
+    }
+
+    static boolean isTransportFallbackEligible(IOException error) {
+        java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(
+                new java.util.IdentityHashMap<>());
+        boolean readTimeout = false;
+        Throwable cause = error;
+        for (int depth = 0; cause != null && depth < 16; depth++, cause = cause.getCause()) {
+            if (!seen.add(cause)) {
+                break;
+            }
+            if (cause instanceof java.net.http.HttpConnectTimeoutException) {
+                return true;
+            }
+            if (cause instanceof java.net.http.HttpTimeoutException) {
+                readTimeout = true;
+            }
+        }
+        if (readTimeout) {
+            return false;
+        }
+        cause = error;
+        seen.clear();
+        for (int depth = 0; cause != null && depth < 16; depth++, cause = cause.getCause()) {
+            if (!seen.add(cause)) {
+                break;
+            }
+            if (cause instanceof java.net.ConnectException
+                    || cause instanceof java.net.UnknownHostException
+                    || cause instanceof java.net.NoRouteToHostException
+                    || cause instanceof java.nio.channels.UnresolvedAddressException
+                    || cause instanceof javax.net.ssl.SSLException
+                    || cause instanceof java.net.SocketException
+                    || cause instanceof java.io.EOFException
+                    || cause instanceof java.nio.channels.ClosedChannelException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -478,6 +570,17 @@ public final class OpenAiCompatibleClient implements LlmClient {
                     log.warn("Квота основной модели исчерпана — пробую резерв в текущем вызове");
                     continue;
                 }
+                if (conversation && !fallback && !config.fallbackModel().isBlank()
+                        && hasDifferentFallbackEndpoint() && status >= 500
+                        && attempt >= PRIMARY_FAILOVER_ATTEMPTS) {
+                    fallback = true;
+                    retryPrimary = true;
+                    body.put("model", config.fallbackModel());
+                    attempt = 0;
+                    log.warn("Основной эндпоинт отвечает {} — пробую резервный эндпоинт в текущем вызове",
+                            status);
+                    continue;
+                }
                 if (conversation && status == 400 && !(fallback ? fallbackUsesSignatures : primaryUsesSignatures)
                         && messages.stream().anyMatch(message -> !message.toolCallsOrEmpty().isEmpty())
                         && missingSignature(response.body())) {
@@ -529,6 +632,19 @@ public final class OpenAiCompatibleClient implements LlmClient {
                 }
             } catch (IOException e) {
                 lastFailure = new UncheckedIOException("Сеть недоступна", e);
+                if (conversation && !fallback && !config.fallbackModel().isBlank()
+                        && hasDifferentFallbackEndpoint() && isTransportFallbackEligible(e)
+                        && attempt >= PRIMARY_FAILOVER_ATTEMPTS) {
+                    fallback = true;
+                    retryPrimary = true;
+                    body.put("model", config.fallbackModel());
+                    attempt = 0;
+                    String detail = e.getClass().getSimpleName()
+                            + (e.getMessage() == null ? "" : ": " + e.getMessage());
+                    log.warn("Сетевой сбой основного эндпоинта ({}) — пробую резервный эндпоинт в текущем вызове",
+                            ErrorNote.of(maskedKeys(detail)));
+                    continue;
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Запрос прерван", e);

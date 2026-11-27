@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.ConnectException;
 import java.net.URI;
 import java.net.http.*;
 import java.nio.ByteBuffer;
@@ -15,10 +17,13 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
+import java.util.stream.Stream;
+import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLSession;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import ru.rainedev.raine.config.Config;
 
@@ -54,6 +59,19 @@ class QuotaFallbackTest {
             bodies.add(mapper.readTree(bodyOf(request)));
             int status = codes.isEmpty() ? 200 : codes.remove();
             return new Reply(status, status == 200 ? success : error, request, headers());
+        }, pauses::add);
+    }
+
+    private OpenAiCompatibleClient transportClient(String extra, IOException failure)
+            throws IOException {
+        Transcript.directory(dir.resolve("transcript"));
+        return new OpenAiCompatibleClient(config(extra).llm(), "embedding-test", request -> {
+            requests.add(request);
+            bodies.add(mapper.readTree(bodyOf(request)));
+            if (requests.size() <= 2) {
+                throw failure;
+            }
+            return new Reply(200, success, request, headers());
         }, pauses::add);
     }
 
@@ -199,6 +217,166 @@ class QuotaFallbackTest {
         assertThrows(LlmFailure.class, () -> client.chat("test", List.of(), null));
         assertEquals(status == 503 ? 3 : 1, requests.size());
         assertTrue(models().stream().allMatch("primary"::equals));
+    }
+
+    @Test
+    void serverErrorsFailOverAfterTwoPrimaryAttempts() throws Exception {
+        retryAfter = null;
+        codes.addAll(List.of(503, 503, 200));
+        var client = client("""
+                fallback_model=reserve
+                fallback_base_url=http://reserve.invalid/v1
+                llm_provider_only=polza
+                """);
+
+        assertEquals("ok", client.chat("test", List.of(), null).text());
+        assertEquals(List.of("primary", "primary", "reserve"), models());
+        assertEquals(List.of(Duration.ofSeconds(2)), pauses);
+        assertTrue(bodies.get(0).has("provider"));
+        assertFalse(bodies.get(2).has("provider"));
+    }
+
+    static Stream<IOException> transportFailures() {
+        return Stream.of(
+                new SSLHandshakeException("tls failed"),
+                new ConnectException("connect failed"),
+                new HttpConnectTimeoutException("connect timeout"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("transportFailures")
+    void transportFailuresFailOverAfterTwoPrimaryAttempts(IOException failure) throws Exception {
+        var client = transportClient("""
+                fallback_model=reserve
+                fallback_base_url=http://reserve.invalid/v1
+                """, failure);
+
+        assertEquals("ok", client.chat("test", List.of(), null).text());
+        assertEquals(List.of("primary", "primary", "reserve"), models());
+        assertEquals(List.of(Duration.ofSeconds(2)), pauses);
+    }
+
+    @Test
+    void readTimeoutDoesNotFailOver() throws Exception {
+        var client = transportClient("""
+                fallback_model=reserve
+                fallback_base_url=http://reserve.invalid/v1
+                """, new HttpTimeoutException("read timeout"));
+
+        assertEquals("ok", client.chat("test", List.of(), null).text());
+        assertEquals(List.of("primary", "primary", "primary"), models());
+        assertEquals(List.of(Duration.ofSeconds(2), Duration.ofSeconds(4)), pauses);
+    }
+
+    @Test
+    void sameEndpointNormalizesCaseDefaultPortAndTrailingSlash() {
+        assertTrue(OpenAiCompatibleClient.sameEndpoint(
+                "https://Primary.Invalid:443/v1/", "https://primary.invalid/v1"));
+        assertTrue(OpenAiCompatibleClient.sameEndpoint(
+                "http://Primary.Invalid:80/v1/?a=1", "http://primary.invalid/v1?a=1"));
+        assertFalse(OpenAiCompatibleClient.sameEndpoint(
+                "https://primary.invalid/v1", "https://reserve.invalid/v1"));
+    }
+
+    @Test
+    void sameEndpointDoesNotFailOverOnServerError() throws Exception {
+        codes.addAll(List.of(503, 503, 503));
+        var client = client("""
+                fallback_model=reserve
+                fallback_base_url=http://Primary.Invalid:80/v1/
+                """);
+
+        assertThrows(LlmFailure.class, () -> client.chat("test", List.of(), null));
+        assertEquals(List.of("primary", "primary", "primary"), models());
+    }
+
+    @Test
+    void sameEndpointDoesNotFailOverOnTransportError() throws Exception {
+        var client = transportClient("""
+                fallback_model=reserve
+                fallback_base_url=http://Primary.Invalid:80/v1/
+                """, new ConnectException("connect failed"));
+
+        assertEquals("ok", client.chat("test", List.of(), null).text());
+        assertEquals(List.of("primary", "primary", "primary"), models());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {401, 404})
+    void permanentReserveFailureAfterServerErrorIsRetryable(int reserveStatus) throws Exception {
+        codes.addAll(List.of(503, 503, reserveStatus));
+        var client = client("""
+                fallback_model=reserve
+                fallback_base_url=http://reserve.invalid/v1
+                """);
+
+        var failure = assertThrows(LlmFailure.class,
+                () -> client.chat("test", List.of(), null));
+        assertTrue(failure.retryable());
+        assertFalse(failure.requiresOperator());
+        codes.clear();
+        assertEquals("ok", client.chat("test", List.of(), null).text());
+        assertEquals("primary", models().getLast());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {401, 404})
+    void permanentReserveFailureAfterTransportErrorIsRetryable(int reserveStatus) throws Exception {
+        Transcript.directory(dir.resolve("transcript"));
+        var client = new OpenAiCompatibleClient(config("""
+                fallback_model=reserve
+                fallback_base_url=http://reserve.invalid/v1
+                """).llm(), "embedding-test", request -> {
+            requests.add(request);
+            bodies.add(mapper.readTree(bodyOf(request)));
+            if (requests.size() <= 2) {
+                throw new ConnectException("connect failed");
+            }
+            if (requests.size() == 3) {
+                return new Reply(reserveStatus, error, request, headers());
+            }
+            return new Reply(200, success, request, headers());
+        }, pauses::add);
+
+        var failure = assertThrows(LlmFailure.class,
+                () -> client.chat("test", List.of(), null));
+        assertTrue(failure.retryable());
+        assertFalse(failure.requiresOperator());
+        assertEquals("ok", client.chat("test", List.of(), null).text());
+        assertEquals("primary", models().getLast());
+    }
+
+    @Test
+    void transportAndServerFailuresDoNotUseConversationReserveForOtherPurposes()
+            throws Exception {
+        var transport = new OpenAiCompatibleClient(config("""
+                fallback_model=reserve
+                fallback_base_url=http://reserve.invalid/v1
+                """).llm(), "embedding-test", request -> {
+            requests.add(request);
+            bodies.add(mapper.readTree(bodyOf(request)));
+            throw new ConnectException("connect failed");
+        }, pauses::add);
+        assertThrows(UncheckedIOException.class,
+                () -> transport.embedding("memory"));
+        assertThrows(UncheckedIOException.class,
+                () -> transport.describeImage("vision", "test", "test", new byte[]{1}));
+        assertEquals(List.of("embedding-test", "embedding-test", "embedding-test",
+                "vision", "vision", "vision"), models());
+
+        requests.clear();
+        bodies.clear();
+        codes.addAll(List.of(503, 503, 503));
+        var server = client("""
+                fallback_model=reserve
+                fallback_base_url=http://reserve.invalid/v1
+                """);
+        assertThrows(LlmFailure.class, () -> server.embedding("memory"));
+        codes.addAll(List.of(503, 503, 503));
+        assertThrows(LlmFailure.class,
+                () -> server.describeImage("vision", "test", "test", new byte[]{1}));
+        assertEquals(List.of("embedding-test", "embedding-test", "embedding-test",
+                "vision", "vision", "vision"), models());
     }
 
     @ParameterizedTest

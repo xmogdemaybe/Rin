@@ -1,16 +1,23 @@
 package ru.rainedev.raine.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import ru.rainedev.raine.llm.ChatResponse;
@@ -151,6 +158,145 @@ class LostNotificationTest {
 
         assertEquals(8, llm.calls(), "к отложенному уведомлению не вернулись");
         assertEquals(0, loop.strandedCount(), "неотвеченное осталось висеть");
+    }
+
+    @Test
+    void strandedNotificationProbesItselfWithoutNewMessage() throws Exception {
+        FlakyNetwork llm = new FlakyNetwork(6);
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(10));
+        loop.retryPause(Duration.ofMillis(1));
+        loop.strandedProbePause(Duration.ZERO);
+        loop.strandedTtl(Duration.ofHours(2));
+        CountDownLatch done = new CountDownLatch(2);
+        loop.onNotificationDone(ignored -> done.countDown());
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("Серёжа написал: привет"));
+        assertTrue(done.await(5, TimeUnit.SECONDS), "проба не вернула отложенное сама");
+        worker.interrupt();
+
+        assertEquals(7, llm.calls());
+        assertEquals(0, loop.strandedCount());
+        assertEquals(1, copiesOf(loop.context(), "Серёжа написал: привет"));
+    }
+
+    @Test
+    void failedProbesUseOneBackoffWindowAndDoNotDuplicateContext() throws Exception {
+        ProbeCountingNetwork llm = new ProbeCountingNetwork();
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(10));
+        loop.retryPause(Duration.ofMillis(1));
+        loop.strandedProbePause(Duration.ofSeconds(2));
+        loop.strandedTtl(Duration.ofHours(2));
+        CountDownLatch parked = new CountDownLatch(2);
+        AtomicInteger failures = new AtomicInteger();
+        loop.onNotificationDone(ignored -> parked.countDown());
+        loop.onNotificationFailed((n, e) -> failures.incrementAndGet());
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("первое отложенное"));
+        loop.submit(new Notification("второе отложенное"));
+        assertTrue(parked.await(5, TimeUnit.SECONDS), "оба уведомления не отложились");
+        failures.set(0);
+
+        assertTrue(llm.firstProbe.await(5, TimeUnit.SECONDS), "первая проба не началась");
+        assertEquals(1, copiesOf(loop.context(), "первое отложенное"));
+        assertEquals(1, copiesOf(loop.context(), "второе отложенное"));
+        assertFalse(llm.secondProbe.await(300, TimeUnit.MILLISECONDS),
+                "в одном окне бэкоффа сделано больше одной пробы");
+        assertTrue(llm.secondProbe.await(4, TimeUnit.SECONDS), "вторая проба не началась");
+        assertEquals(0, failures.get(), "неуспешные пробы снова вызвали onNotificationFailed");
+        worker.interrupt();
+    }
+
+    @Test
+    void expiredStrandedNotificationReturnsChatToUnread() throws Exception {
+        MutableClock clock = new MutableClock();
+        FlakyNetwork llm = new FlakyNetwork(6);
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(10));
+        loop.retryPause(Duration.ofMillis(1));
+        loop.strandedProbePause(Duration.ofHours(1));
+        loop.strandedTtl(Duration.ofMinutes(1));
+        loop.clock(clock);
+        CountDownLatch parked = new CountDownLatch(1);
+        loop.onNotificationDone(ignored -> parked.countDown());
+        UnreadMark marks = new UnreadMark();
+        marks.watch(loop);
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("старое уведомление").from(777));
+        assertTrue(parked.await(5, TimeUnit.SECONDS));
+        clock.advance(Duration.ofSeconds(61));
+
+        assertEquals(777, marks.take().chatId());
+        worker.interrupt();
+        assertEquals(0, loop.strandedCount());
+    }
+
+    @Test
+    void discardMatchingRemovesStrandedNotification() throws Exception {
+        FlakyNetwork llm = new FlakyNetwork(6);
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(10));
+        loop.retryPause(Duration.ofMillis(1));
+        loop.strandedProbePause(Duration.ofHours(1));
+        loop.strandedTtl(Duration.ofHours(2));
+        CountDownLatch parked = new CountDownLatch(1);
+        loop.onNotificationDone(ignored -> parked.countDown());
+        UnreadMark marks = new UnreadMark();
+        marks.watch(loop);
+
+        Thread worker = start(loop);
+        loop.submit(new Notification("старое уведомление").from(777));
+        assertTrue(parked.await(5, TimeUnit.SECONDS));
+        loop.discardMatching("старое уведомление");
+
+        assertEquals(0, loop.strandedCount());
+        assertEquals(0, marks.count());
+        worker.interrupt();
+    }
+
+    @Test
+    void freshMessageDuringFailedProbeDiscardsOldStrandedNotification() throws Exception {
+        BlockingProbeNetwork llm = new BlockingProbeNetwork();
+        NotificationLoop loop = new NotificationLoop(llm, () -> "системный промпт", new Toolbox(), 40_000);
+        loop.idleCheck(Duration.ofMillis(10));
+        loop.retryPause(Duration.ofMillis(1));
+        loop.strandedProbePause(Duration.ZERO);
+        loop.strandedTtl(Duration.ofHours(2));
+        CountDownLatch freshDone = new CountDownLatch(1);
+        CountDownLatch oldDone = new CountDownLatch(1);
+        AtomicBoolean probing = new AtomicBoolean();
+        loop.onNotificationDone(notification -> {
+            if (notification.text().contains("новое уведомление")) {
+                freshDone.countDown();
+            }
+            if (notification.text().contains("старое уведомление") && probing.get()) {
+                oldDone.countDown();
+            }
+        });
+        UnreadMark marks = new UnreadMark();
+        marks.watch(loop);
+
+        Thread worker = start(loop);
+        String tag = ru.rainedev.raine.phone.Notifications.openingTag(777);
+        loop.submit(new Notification(tag + "старое уведомление").from(777));
+        assertTrue(llm.probeStarted.await(5, TimeUnit.SECONDS), "проба не началась");
+        probing.set(true);
+
+        loop.discardMatching(tag);
+        loop.submit(new Notification(tag + "новое уведомление").from(777));
+        llm.releaseProbe.countDown();
+
+        assertTrue(freshDone.await(5, TimeUnit.SECONDS), "новое уведомление не обработано");
+        assertEquals(0, loop.strandedCount());
+        assertEquals(0, loop.queued(), "устаревшее уведомление вернулось в очередь");
+        assertFalse(oldDone.await(200, TimeUnit.MILLISECONDS),
+                "устаревшее уведомление обработано повторно");
+        assertEquals(0, marks.count());
+        worker.interrupt();
     }
 
     @Test
@@ -304,6 +450,85 @@ class LostNotificationTest {
         assertEquals(777, marks.take().chatId());
         assertEquals(888, marks.take().chatId(), "приостановленный чат остался прочитанным");
         worker.interrupt();
+    }
+
+    private static final class MutableClock extends Clock {
+        private volatile Instant now = Instant.parse("2026-11-27T00:00:00Z");
+
+        void advance(Duration step) {
+            now = now.plus(step);
+        }
+
+        @Override
+        public ZoneOffset getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+    }
+
+    private static final class ProbeCountingNetwork implements LlmClient {
+        final CountDownLatch firstProbe = new CountDownLatch(1);
+        final CountDownLatch secondProbe = new CountDownLatch(2);
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
+            int call = calls.incrementAndGet();
+            if (call > 12) {
+                if (call == 13) firstProbe.countDown();
+                if (call >= 13) secondProbe.countDown();
+            }
+            throw new UncheckedIOException("Сеть недоступна", new IOException("offline"));
+        }
+
+        @Override
+        public double[] embedding(String input) {
+            return new double[] {0};
+        }
+    }
+
+    private static final class BlockingProbeNetwork implements LlmClient {
+        final CountDownLatch probeStarted = new CountDownLatch(1);
+        final CountDownLatch releaseProbe = new CountDownLatch(1);
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        public ChatResponse chat(String systemPrompt, List<Message> history, JsonNode tools) {
+            int call = calls.incrementAndGet();
+            if (call <= 6) {
+                throw new UncheckedIOException("Сеть недоступна", new IOException("offline"));
+            }
+            if (call == 7) {
+                probeStarted.countDown();
+                try {
+                    assertTrue(releaseProbe.await(5, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                throw new UncheckedIOException("Сеть недоступна", new IOException("offline"));
+            }
+            Message message = new Message(Message.Role.ASSISTANT, "",
+                    List.of(new ToolCall("call_wait", "function",
+                            new ToolCall.Function("wait", "{}"))), null, null);
+            return new ChatResponse("id", "test",
+                    List.of(new ChatResponse.Choice(0, message, "tool_calls")),
+                    new ChatResponse.Usage(10, 0, 10));
+        }
+
+        @Override
+        public double[] embedding(String input) {
+            return new double[] {0};
+        }
     }
 
     /** Сколько чатов цикл потребовал вернуть в непрочитанные. */

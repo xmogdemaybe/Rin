@@ -63,6 +63,7 @@ public final class NotificationLoop {
      * эндпоинт снова отвечал через девять после этого.
      */
     private static final Duration RETRY_PAUSE_CEILING = Duration.ofMinutes(10);
+    private static final Duration STRANDED_PROBE_CEILING = Duration.ofMinutes(15);
 
     /** Сигнал «пора заканчивать»: кладётся в очередь, чтобы разбудить ожидание. */
     private static final Notification STOP = new Notification("", new Toolbox());
@@ -190,6 +191,8 @@ public final class NotificationLoop {
 
     private final LinkedBlockingDeque<Notification> queue = new LinkedBlockingDeque<>();
     private final List<Message> context = new ArrayList<>();
+    private long contextVersion;
+    private long contextResetVersion;
 
     /** Сколько раз подряд текущее уведомление уже спотыкалось о пропавшую сеть. */
     private int retries;
@@ -201,7 +204,15 @@ public final class NotificationLoop {
      * закончился сбой. Долбиться в отказавший эндпоинт бессмысленно, поэтому
      * они ждут здесь и возвращаются в очередь, стоит модели ответить хоть чему.
      */
-    private final java.util.Deque<Notification> stranded = new java.util.ArrayDeque<>();
+    private final Object strandedLock = new Object();
+    private final java.util.Deque<Stranded> stranded = new java.util.ArrayDeque<>();
+    private Duration strandedProbePause = Duration.ofMinutes(5);
+    private Duration strandedTtl = Duration.ofHours(2);
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+    private int strandedProbeAttempt;
+    private Instant nextStrandedProbeAt;
+    private Notification inFlightProbe;
+    private boolean inFlightProbeDiscarded;
 
     /** Больше стольких не копить: ответить на все нечем, а разговор уже устарел. */
     private static final int STRANDED_LIMIT = 20;
@@ -222,6 +233,7 @@ public final class NotificationLoop {
     private static final class Turn {
         final Notification notification;
         final long startedAt = System.currentTimeMillis();
+        final long contextResetVersion;
         long tokens;
         int step;
         boolean recall = true;
@@ -240,8 +252,14 @@ public final class NotificationLoop {
         List<Message> contextBefore;
         Origin originBefore;
         Runnable undoOutside;
-        Turn(Notification notification) { this.notification = notification; }
+        Turn(Notification notification, long contextResetVersion) {
+            this.notification = notification;
+            this.contextResetVersion = contextResetVersion;
+        }
     }
+
+    private record Stranded(Notification notification, Instant parkedAt, Instant expiresAt,
+                            Turn turn, long contextVersion) {}
 
     /**
      * Снимок вклейки: куда она легла, чем было сообщение до неё и что память
@@ -458,6 +476,18 @@ public final class NotificationLoop {
         this.retryPause = pause;
     }
 
+    void strandedProbePause(Duration pause) {
+        this.strandedProbePause = pause;
+    }
+
+    void strandedTtl(Duration ttl) {
+        this.strandedTtl = ttl;
+    }
+
+    void clock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
     /** Для проверок: повтор после отказа фильтра не должен стоить секунды теста. */
     void filterRetryPause(Duration pause) {
         this.filterRetryPause = pause;
@@ -495,6 +525,15 @@ public final class NotificationLoop {
     /** Убирает устаревшие уведомления — например, когда чат уже открыт вручную. */
     public void discardMatching(String substring) {
         queue.removeIf(notification -> notification.text().contains(substring));
+        synchronized (strandedLock) {
+            stranded.removeIf(entry -> entry.notification().text().contains(substring));
+            if (inFlightProbe != null && inFlightProbe.text().contains(substring)) {
+                inFlightProbeDiscarded = true;
+            }
+            if (stranded.isEmpty()) {
+                resetStrandedBackoffLocked();
+            }
+        }
     }
 
     /** Сколько уведомлений ждёт разбора. */
@@ -504,7 +543,9 @@ public final class NotificationLoop {
 
     /** Сколько так и не дождались ответа — но ещё не забыты. */
     int strandedCount() {
-        return stranded.size();
+        synchronized (strandedLock) {
+            return stranded.size();
+        }
     }
 
     /**
@@ -519,7 +560,13 @@ public final class NotificationLoop {
      * ещё десять минут бодрствования, само и будил её до полночи.
      */
     public boolean talkAlive() {
-        return !queue.isEmpty() || active != null || !stranded.isEmpty() || answeredAgo(TALK_GRACE);
+        return !queue.isEmpty() || active != null || hasStrandedOrProbe() || answeredAgo(TALK_GRACE);
+    }
+
+    private boolean hasStrandedOrProbe() {
+        synchronized (strandedLock) {
+            return !stranded.isEmpty() || inFlightProbe != null;
+        }
     }
 
     /**
@@ -593,6 +640,8 @@ public final class NotificationLoop {
     public void clearContext() {
         context.clear();
         // разговор ушёл в дневник — следующему его метка достаться не должна
+        contextVersion++;
+        contextResetVersion++;
         contextOrigin.set(Origin.GENERAL);
         // сообщений прошлых снимков в контексте больше нет, а метка «это уже
         // читали» осталась бы — следующие снимки вышли бы пустыми
@@ -604,19 +653,14 @@ public final class NotificationLoop {
         try {
             runUntilStopped();
         } finally {
-            // Отложенное без ответа умирает вместе с процессом: без этого его
-            // чат остался бы прочитанным, и при следующем запуске догон его не
-            // найдёт — ровно так потерялось сообщение владельца 22.10
-            for (Notification parked : stranded) {
-                giveUp(parked, "бот остановился");
-            }
-            stranded.clear();
+            abandonAllStranded("бот остановился");
         }
     }
 
     private void runUntilStopped() {
         while (!Thread.currentThread().isInterrupted()) {
             Notification taken = null;
+            Stranded probing = null;
             try {
                 if (rest != null) {
                     // отходит перед тем, как взяться за уведомление: накопившееся
@@ -631,7 +675,8 @@ public final class NotificationLoop {
                     notification = retrying;
                     retrying = null;
                 } else {
-                    notification = queue.poll(idleCheck.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+                    notification = queue.poll(pollTimeoutMillis(),
+                            java.util.concurrent.TimeUnit.MILLISECONDS);
                 }
                 if (stopping) {
                     log.info("Заканчиваю: новых уведомлений больше не беру");
@@ -639,6 +684,31 @@ public final class NotificationLoop {
                     return;
                 }
                 if (notification == null) {
+                    expireStranded();
+                    if (suspended) {
+                        abandonAllStranded("запросы приостановлены");
+                        continue;
+                    }
+                    probing = takeDueStranded();
+                    if (probing != null) {
+                        // Чужие отложенные ходы дописывают контекст, но не сбрасывают его.
+                        if (probing.turn() != null
+                                && probing.turn().contextResetVersion == contextResetVersion
+                                && (contextVersion == probing.contextVersion() || !context.isEmpty())) {
+                            active = probing.turn();
+                        }
+                        process(probing.notification());
+                        retries = 0;
+                        synchronized (strandedLock) {
+                            inFlightProbe = null;
+                            inFlightProbeDiscarded = false;
+                            resetStrandedBackoffLocked();
+                        }
+                        releaseStranded();
+                        notifyDone(probing.notification());
+                        onIdle.run();
+                        continue;
+                    }
                     continue;
                 }
                 taken = notification;
@@ -654,12 +724,28 @@ public final class NotificationLoop {
                 notifyDone(notification);
                 onIdle.run();
             } catch (InterruptedException e) {
+                if (probing != null) {
+                    synchronized (strandedLock) {
+                        boolean discarded = inFlightProbeDiscarded;
+                        inFlightProbe = null;
+                        inFlightProbeDiscarded = false;
+                        if (!discarded) {
+                            stranded.addFirst(probing);
+                        }
+                    }
+                }
                 Thread.currentThread().interrupt();
                 stopped.countDown();
                 return;
             } catch (RuntimeException e) {
                 if (Fatal.check(e)) {
                     return;
+                }
+                if (probing != null) {
+                    if (handleProbeFailure(probing, e)) {
+                        return;
+                    }
+                    continue;
                 }
                 Loss loss = retryLater(taken, e);
                 if (loss == Loss.RETRY) {
@@ -678,6 +764,7 @@ public final class NotificationLoop {
                 retries = 0;
                 if (e instanceof ru.rainedev.raine.llm.LlmFailure failure && failure.requiresOperator()) {
                     suspended = true;
+                    abandonAllStranded("запросы приостановлены");
                     log.error("Запросы приостановлены: проверьте баланс/доступ и перезапустите бота");
                 }
                 recoverFrom(e);
@@ -702,7 +789,7 @@ public final class NotificationLoop {
             return;
         }
         if (!resuming) {
-            active = new Turn(notification);
+            active = new Turn(notification, contextResetVersion);
             if (notification.trigger() == Notification.Trigger.IMPULSE) {
                 // молчание после порыва не должно оставить в истории ни его
                 // промпта, ни потраченных на него воспоминаний
@@ -839,7 +926,7 @@ public final class NotificationLoop {
                 // а шаг 1 под required ответил wait. В пересказ дневника этот блок
                 // не уезжает: её заметки о намерениях снимает withoutMentalNotes.
                 if (!response.text().isBlank()) {
-                    context.add(response.firstMessage().orElseThrow());
+                    addContext(response.firstMessage().orElseThrow());
                 }
                 // ответ текстом действием не является — напоминаем, и до конца
                 // хода текст запрещён: каждый следующий шаг обязан содержать вызов
@@ -862,7 +949,7 @@ public final class NotificationLoop {
             } catch (Toolbox.PartialFailure e) {
                 // Earlier actions are real: retain the complete tool protocol and do not replay them.
                 removeSpentOpen(notification, calls, e.results());
-                context.add(response.firstMessage().orElseThrow());
+                addContext(response.firstMessage().orElseThrow());
                 for (Message result : e.results()) {
                     appendContext(result);
                 }
@@ -888,7 +975,7 @@ public final class NotificationLoop {
                 continue;
             }
 
-            context.add(response.firstMessage().orElseThrow());
+            addContext(response.firstMessage().orElseThrow());
             for (Message result : results) {
                 appendContext(result);
             }
@@ -947,6 +1034,7 @@ public final class NotificationLoop {
         if (context.size() >= was.size() && context.subList(0, was.size()).equals(was)) {
             context.clear();
             context.addAll(was);
+            contextVersion++;
             contextOrigin.set(turn.originBefore);
             log.info("Холостой порыв убран из истории, шагов {}", turn.step);
         } else {
@@ -1018,6 +1106,7 @@ public final class NotificationLoop {
         String base = Objects.requireNonNullElse(last.content(), "");
         String updated = base.isEmpty() ? addition : base + "\n" + addition;
         context.set(context.size() - 1, last.withContent(updated));
+        contextVersion++;
     }
 
     private void appendContext(Message message) {
@@ -1025,7 +1114,12 @@ public final class NotificationLoop {
         if (shelf != null && shelf.equals(lastShelf())) {
             message = message.withContent(ScreenMarkup.stripShelf(message.content()));
         }
+        addContext(message);
+    }
+
+    private void addContext(Message message) {
         context.add(message);
+        contextVersion++;
     }
 
     private String lastShelf() {
@@ -1126,6 +1220,7 @@ public final class NotificationLoop {
         }
         Message last = context.get(at);
         context.set(at, last.withContent(recalled + last.content()));
+        contextVersion++;
         return new RecallSnapshot(at, last, before);
     }
 
@@ -1155,6 +1250,7 @@ public final class NotificationLoop {
             return;
         }
         context.set(was.index(), was.original());
+        contextVersion++;
         memory.restoreInjected(was.injectedBefore());
         turn.recallSnapshot = null;
         log.info("Вклейку памяти снято: страниц дневника в истории не осталось");
@@ -1224,11 +1320,15 @@ public final class NotificationLoop {
 
     /** Пауза перед попыткой: с каждой вдвое длиннее, но не больше потолка. */
     static Duration pauseBeforeAttempt(Duration base, int attempt) {
+        return pauseBeforeAttempt(base, attempt, RETRY_PAUSE_CEILING);
+    }
+
+    static Duration pauseBeforeAttempt(Duration base, int attempt, Duration ceiling) {
         Duration pause = base;
-        for (int doubling = 1; doubling < attempt && pause.compareTo(RETRY_PAUSE_CEILING) < 0;
+        for (int doubling = 1; doubling < attempt && pause.compareTo(ceiling) < 0;
                 doubling++) {
             Duration longer = pause.multipliedBy(2);
-            pause = longer.compareTo(RETRY_PAUSE_CEILING) > 0 ? RETRY_PAUSE_CEILING : longer;
+            pause = longer.compareTo(ceiling) > 0 ? ceiling : longer;
         }
         return pause;
     }
@@ -1239,12 +1339,30 @@ public final class NotificationLoop {
      * реплику в контексте.
      */
     private void strand(Notification notification) {
-        while (stranded.size() >= STRANDED_LIMIT) {
-            Notification forgotten = stranded.removeFirst();
-            log.warn("Неотвеченных уже накопилось {}, самое давнее забываю", STRANDED_LIMIT);
-            giveUp(forgotten, "неотвеченных больше " + STRANDED_LIMIT);
+        Instant now = clock.instant();
+        Stranded parked = new Stranded(notification, now, now.plus(strandedTtl),
+                active, contextVersion);
+        List<Notification> forgotten = new ArrayList<>();
+        synchronized (strandedLock) {
+            while (stranded.size() >= STRANDED_LIMIT) {
+                forgotten.add(stranded.removeFirst().notification());
+            }
+            if (stranded.isEmpty()) {
+                strandedProbeAttempt = 0;
+                nextStrandedProbeAt = now.plus(strandedProbePause);
+            } else {
+                Instant floor = now.plus(pauseBeforeAttempt(strandedProbePause,
+                        Math.max(1, strandedProbeAttempt), STRANDED_PROBE_CEILING));
+                if (nextStrandedProbeAt == null || nextStrandedProbeAt.isBefore(floor)) {
+                    nextStrandedProbeAt = floor;
+                }
+            }
+            stranded.addLast(parked);
         }
-        stranded.addLast(notification);
+        for (Notification notificationToForget : forgotten) {
+            log.warn("Неотвеченных уже накопилось {}, самое давнее забываю", STRANDED_LIMIT);
+            giveUp(notificationToForget, "неотвеченных больше " + STRANDED_LIMIT);
+        }
     }
 
     /**
@@ -1268,14 +1386,161 @@ public final class NotificationLoop {
 
     /** Эндпоинт ожил — возвращаем в очередь всё, что не досказали. */
     private void releaseStranded() {
-        if (stranded.isEmpty()) {
-            return;
+        int count;
+        synchronized (strandedLock) {
+            count = stranded.size();
+            while (!stranded.isEmpty()) {
+                queue.addLast(stranded.removeFirst().notification());
+            }
+            resetStrandedBackoffLocked();
         }
-        int count = stranded.size();
-        while (!stranded.isEmpty()) {
-            queue.addLast(stranded.removeFirst());
+        if (count > 0) {
+            log.info("Модель снова отвечает — возвращаю к разговору {} уведомл.", count);
         }
-        log.info("Модель снова отвечает — возвращаю к разговору {} уведомл.", count);
+    }
+
+    private void expireStranded() {
+        Instant now = clock.instant();
+        List<Notification> expired = new ArrayList<>();
+        synchronized (strandedLock) {
+            stranded.removeIf(entry -> {
+                if (now.isBefore(entry.expiresAt())) {
+                    return false;
+                }
+                expired.add(entry.notification());
+                return true;
+            });
+            if (stranded.isEmpty()) {
+                resetStrandedBackoffLocked();
+            }
+        }
+        for (Notification notification : expired) {
+            giveUp(notification, "слишком долго не было ответа модели");
+        }
+    }
+
+    private Stranded takeDueStranded() {
+        synchronized (strandedLock) {
+            if (stranded.isEmpty() || inFlightProbe != null
+                    || nextStrandedProbeAt == null
+                    || clock.instant().isBefore(nextStrandedProbeAt)) {
+                return null;
+            }
+            Stranded next = stranded.removeFirst();
+            inFlightProbe = next.notification();
+            inFlightProbeDiscarded = false;
+            return next;
+        }
+    }
+
+    private long pollTimeoutMillis() {
+        synchronized (strandedLock) {
+            Instant target = nextStrandedProbeAt;
+            for (Stranded entry : stranded) {
+                if (target == null || entry.expiresAt().isBefore(target)) {
+                    target = entry.expiresAt();
+                }
+            }
+            if (target == null) {
+                return idleCheck.toMillis();
+            }
+            Instant now = clock.instant();
+            if (!target.isAfter(now)) {
+                return 0L;
+            }
+            if (target.isAfter(now.plus(idleCheck))) {
+                return idleCheck.toMillis();
+            }
+            return Math.max(1L, Duration.between(now, target).toMillis());
+        }
+    }
+
+    private void resetStrandedBackoffLocked() {
+        strandedProbeAttempt = 0;
+        nextStrandedProbeAt = null;
+    }
+
+    private void abandonAllStranded(String reason) {
+        List<Notification> abandoned = new ArrayList<>();
+        synchronized (strandedLock) {
+            while (!stranded.isEmpty()) {
+                abandoned.add(stranded.removeFirst().notification());
+            }
+            if (inFlightProbe != null) {
+                abandoned.add(inFlightProbe);
+            }
+            inFlightProbe = null;
+            inFlightProbeDiscarded = false;
+            resetStrandedBackoffLocked();
+        }
+        for (Notification notification : abandoned) {
+            giveUp(notification, reason);
+        }
+    }
+
+    private boolean handleProbeFailure(Stranded probing, RuntimeException failure) {
+        boolean discarded;
+        synchronized (strandedLock) {
+            discarded = inFlightProbeDiscarded;
+            inFlightProbe = null;
+            inFlightProbeDiscarded = false;
+        }
+        Turn savedTurn = active;
+        long savedVersion = contextVersion;
+        active = null;
+        retries = 0;
+        if (stopping) {
+            if (!discarded) {
+                synchronized (strandedLock) {
+                    stranded.addFirst(probing);
+                }
+            }
+            finish();
+            return true;
+        }
+        boolean retryable = failure instanceof UncheckedIOException
+                || (failure instanceof ru.rainedev.raine.llm.LlmFailure endpoint
+                && endpoint.retryable());
+        if (retryable) {
+            Instant now = clock.instant();
+            if (!discarded) {
+                if (!now.isBefore(probing.expiresAt())) {
+                    giveUp(probing.notification(), "слишком долго не было ответа модели");
+                } else {
+                    synchronized (strandedLock) {
+                        stranded.addFirst(new Stranded(probing.notification(), probing.parkedAt(),
+                                probing.expiresAt(), savedTurn, savedVersion));
+                    }
+                }
+            }
+            Duration nextPause = null;
+            synchronized (strandedLock) {
+                if (!stranded.isEmpty()) {
+                    strandedProbeAttempt++;
+                    nextPause = pauseBeforeAttempt(strandedProbePause,
+                            strandedProbeAttempt, STRANDED_PROBE_CEILING);
+                    nextStrandedProbeAt = now.plus(nextPause);
+                } else {
+                    resetStrandedBackoffLocked();
+                }
+            }
+            if (nextPause != null) {
+                log.warn("Следующая проба отложенного уведомления через {} с", nextPause.toSeconds());
+            }
+        } else {
+            log.error("Не удалось обработать отложенное уведомление", failure);
+            if (!discarded) {
+                giveUp(probing.notification(), "ход не получился");
+            }
+            if (failure instanceof ru.rainedev.raine.llm.LlmFailure endpoint
+                    && endpoint.requiresOperator()) {
+                suspended = true;
+                log.error("Запросы приостановлены: проверьте баланс/доступ и перезапустите бот");
+                abandonAllStranded("запросы приостановлены");
+            }
+            recoverFrom(failure);
+        }
+        return false;
     }
 
     /**
