@@ -44,6 +44,7 @@ public final class LiveConfig implements AutoCloseable {
         var hot = java.util.Set.of("lockdown", "lockdownAllowChannels", "behaviour", "repeat",
                 "diaryInjectionMaxLength", "diaryMinRelatedness", "llmTranscript", "sleepConsolidation",
                 "characterGrowthEnabled", "trustLedgerEnabled", "consolidation", "diaryConsolidationBudget",
+                "spontaneityChance", "channelPost",
                 // задержки внимания правят, пока она отвечает невпопад по скорости, —
                 // перезапуск ради цифры в файле обиднее самой правки
                 "noticeDelaySeconds", "noticeDelayOtherMinSeconds", "noticeDelayOtherMaxSeconds");

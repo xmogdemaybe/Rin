@@ -193,6 +193,10 @@ class ChannelPostingTest {
         assertThrows(IllegalArgumentException.class, () -> new Config.ChannelPost(8, 6, 0.25));
         assertThrows(IllegalArgumentException.class, () -> new Config.ChannelPost(0, 8, 0.25));
         assertThrows(IllegalArgumentException.class, () -> new Config.ChannelPost(6, 8, 1.5));
+        assertThrows(IllegalArgumentException.class,
+                () -> new Config.ChannelPost(6, 8, Double.NaN));
+        assertThrows(IllegalArgumentException.class,
+                () -> new Config.ChannelPost(6, 8, Double.POSITIVE_INFINITY));
     }
 
     @Test

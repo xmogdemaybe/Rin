@@ -2,6 +2,7 @@ package ru.rainedev.raine.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -151,6 +152,67 @@ class LiveConfigTest {
             assertTrue(live.checkOnce());
             assertTrue(live.restartRequired().containsAll(List.of("vision", "embeddingBaseUrl")),
                     "адреса сервисов читаются при создании клиента: " + live.restartRequired());
+        }
+    }
+
+    @Test
+    void spontaneityChanceDefaultsAndAcceptsBoundaries(@TempDir Path dir) throws IOException {
+        assertEquals(0.5, Config.load(configIn(dir, "")).spontaneityChance());
+        for (String raw : List.of("0.0", "0.5", "1.0")) {
+            assertEquals(Double.parseDouble(raw),
+                    Config.load(configIn(dir, "spontaneity_chance=" + raw + "\n")).spontaneityChance());
+        }
+        Config negativeZero = Config.load(configIn(dir, "spontaneity_chance=-0.0\n"));
+        assertEquals(0L, Double.doubleToRawLongBits(negativeZero.spontaneityChance()));
+    }
+
+    @Test
+    void spontaneityChanceRejectsInvalidValues(@TempDir Path dir) throws IOException {
+        for (String raw : List.of("-0.01", "1.01", "NaN", "Infinity")) {
+            Path file = configIn(dir, "spontaneity_chance=" + raw + "\n");
+            assertThrows(IllegalArgumentException.class, () -> Config.load(file), raw);
+        }
+    }
+
+    @Test
+    void channelImpulseChanceRejectsNonFiniteValues(@TempDir Path dir) throws IOException {
+        for (String raw : List.of("NaN", "Infinity")) {
+            Path file = configIn(dir, "channel_impulse_chance=" + raw + "\n");
+            assertThrows(IllegalArgumentException.class, () -> Config.load(file), raw);
+        }
+    }
+
+    @Test
+    void impulseChancesArePickedUpWithoutRestart(@TempDir Path dir) throws IOException {
+        Path file = configIn(dir, "spontaneity_chance=0.5\nchannel_impulse_chance=0.25\n");
+        try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
+            Files.writeString(file, Files.readString(file)
+                    .replace("spontaneity_chance=0.5", "spontaneity_chance=0.8")
+                    .replace("channel_impulse_chance=0.25", "channel_impulse_chance=0.5"));
+            Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(
+                    System.currentTimeMillis() + 2000));
+
+            assertTrue(live.checkOnce());
+            assertEquals(0.8, live.current().spontaneityChance());
+            assertEquals(0.5, live.current().channelPost().chance());
+            assertTrue(live.restartRequired().isEmpty(), live.restartRequired().toString());
+        }
+    }
+
+    @Test
+    void invalidSpontaneityChanceLeavesLiveSettingsUntouched(@TempDir Path dir) throws IOException {
+        Path file = configIn(dir, "spontaneity_chance=0.5\n");
+        String valid = Files.readString(file);
+        try (LiveConfig live = new LiveConfig(file, Config.load(file))) {
+            for (String raw : List.of("1.5", "NaN")) {
+                Files.writeString(file, valid.replace("spontaneity_chance=0.5",
+                        "spontaneity_chance=" + raw));
+                Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(
+                        System.currentTimeMillis() + 2000));
+
+                assertFalse(live.checkOnce(), raw);
+                assertEquals(0.5, live.current().spontaneityChance(), raw);
+            }
         }
     }
 }

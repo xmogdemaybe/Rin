@@ -34,8 +34,8 @@ public final class Spontaneity implements AutoCloseable {
     static final int MIN_MINUTES = 27;
     private static final int MAX_MINUTES = 47;
 
-    /** Срабатывает примерно в половине случаев. */
-    private static final double CHANCE = 0.5;
+    /** Доля подходящих тиков, в которых появляется порыв. */
+    private volatile double chance = 0.5;
 
     /** Как часто признаться в журнале, что порыв не состоялся. */
     private static final Duration SKIP_REPORT = Duration.ofHours(6);
@@ -111,6 +111,14 @@ public final class Spontaneity implements AutoCloseable {
         this.asleep = asleep;
     }
 
+    public void chance(double chance) {
+        if (!Double.isFinite(chance) || chance < 0.0 || chance > 1.0) {
+            throw new IllegalArgumentException(
+                    "spontaneity_chance: ожидается число от 0.0 до 1.0, получено " + chance);
+        }
+        this.chance = chance == 0.0 ? 0.0 : chance;
+    }
+
     public void start() {
         // признак снимается, когда порыв дошёл до обработки и завершился
         loop.onNotificationDone(done -> {
@@ -120,7 +128,17 @@ public final class Spontaneity implements AutoCloseable {
             }
         });
         scheduleNext();
-        log.info("Спонтанность включена: порывы через {}–{} минут", MIN_MINUTES, MAX_MINUTES);
+        double current = this.chance;
+        if (current <= 0.0) {
+            log.info("Спонтанность отключена (spontaneity_chance=0)");
+        } else {
+            log.info("Спонтанность включена: порывы через {}–{} минут, шанс {}",
+                    MIN_MINUTES, MAX_MINUTES, formatChance(current));
+        }
+    }
+
+    private static String formatChance(double value) {
+        return java.math.BigDecimal.valueOf(value).movePointRight(2).stripTrailingZeros().toPlainString() + "%";
     }
 
     private void scheduleNext() {
@@ -148,6 +166,10 @@ public final class Spontaneity implements AutoCloseable {
      */
     private void maybeAct() {
         try {
+            double current = this.chance;
+            if (current <= 0.0) {
+                return;
+            }
             // спящему человеку ничего не приходит в голову: ни разговоров,
             // ни записей в память, ни строчек в журнале
             if (asleep.getAsBoolean()) {
@@ -160,7 +182,7 @@ public final class Spontaneity implements AutoCloseable {
                 reportSkip("переписка ещё жива");
                 return;
             }
-            if (random.nextDouble() >= CHANCE) {
+            if (random.nextDouble() >= current) {
                 return;
             }
             // порыв строится на воспоминании: без него в промпт ложится пустой

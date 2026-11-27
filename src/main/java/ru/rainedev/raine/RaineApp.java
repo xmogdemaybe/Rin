@@ -112,9 +112,9 @@ public final class RaineApp implements AutoCloseable {
 
     /** Насколько часто сообщение из заглушённого чата остаётся без внимания. */
     private static final double MUTED_IGNORE_CHANCE = 0.8;
-    private Spontaneity spontaneity;
+    private volatile Spontaneity spontaneity;
     /** Публикации в свой канал по собственному желанию, вне разговора. */
-    private ChannelImpulse channelImpulse;
+    private volatile ChannelImpulse channelImpulse;
     /** Разбирается один раз при старте: номер нужен промпту, порыву и фильтру уведомлений. */
     private volatile OwnChannel ownChannel = OwnChannel.NONE;
 
@@ -434,9 +434,6 @@ public final class RaineApp implements AutoCloseable {
                     lockdown.mode(circle);
                     lockdown.allowChannels(fresh.lockdownAllowChannels());
                     antiRepeat.limits(fresh.repeat());
-                    if (channelImpulse != null) {
-                        channelImpulse.frequency(fresh.channelPost());
-                    }
                     diaryMemory.limits(fresh.diaryInjectionMaxLength(), fresh.diaryMinRelatedness());
                     recall.limits(fresh.diaryMinRelatedness());
                     ru.rainedev.raine.llm.Transcript.enabled(fresh.llmTranscript());
@@ -447,7 +444,6 @@ public final class RaineApp implements AutoCloseable {
                     switchTool(always, fresh.trustLedgerEnabled(), "note_trust", trust::tool,
                             "Счёт доверия");
                 });
-        settings.watch();
 
         if (config.night().enabled()) {
             var night = new ru.rainedev.raine.core.NightSleep(
@@ -502,29 +498,34 @@ public final class RaineApp implements AutoCloseable {
         // отправка и реакция доступны сразу, как и молчание. Набор собирается
         // заново на каждый порыв — цикл раскрывает его инструментами чата, и
         // один общий набор на весь день закрыл бы автооткрытие после первого раза
-        spontaneity = new Spontaneity(loop, diary, this::ownerChatTools, config.ownerId(), random);
-        spontaneity.asleepWhen(rest::isResting);
-        tools.actingOnImpulse(spontaneity::isActing);
-        spontaneity.start();
+        var createdSpontaneity = new Spontaneity(
+                loop, diary, this::ownerChatTools, config.ownerId(), random);
+        createdSpontaneity.asleepWhen(rest::isResting);
+        spontaneity = createdSpontaneity;
+        settings.onChange(fresh -> createdSpontaneity.chance(fresh.spontaneityChance()));
+        tools.actingOnImpulse(createdSpontaneity::isActing);
+        createdSpontaneity.start();
         // порыв публикации живёт отдельным запросом: он не читает переписку
         // с владельцем и не пишет в неё, поэтому контекст разговора остаётся целым
-        channelImpulse = new ChannelImpulse(llm,
+        var createdChannel = new ChannelImpulse(llm,
                 () -> prompts.system(around.asPromptSuffix()
                         + workingMemory.asPromptSuffix(new ru.rainedev.raine.memory.Audience(
                                 ownChannel.chatId(), 0, false))),
                 random);
-        channelImpulse.channel(ownChannel.chatId());
-        channelImpulse.frequency(config.channelPost());
+        createdChannel.channel(ownChannel.chatId());
+        channelImpulse = createdChannel;
+        settings.onChange(fresh -> createdChannel.frequency(fresh.channelPost()));
         // переписка жива — пост в канал подождёт: он не ответ, а отдельный голос
-        channelImpulse.blockedWhen(() -> rest.isResting()
+        createdChannel.blockedWhen(() -> rest.isResting()
                 || !config.channelsPostingEnabled()
                 || loop.talkedRecently());
-        channelImpulse.recentPosts(this::herRecentPosts);
+        createdChannel.recentPosts(this::herRecentPosts);
         // лента, показанная модели, заодно попадает в память повторов: канал
         // могли с запуска ни разу не открыть, а сравнение с пустой памятью не спасает
-        channelImpulse.seeding(posts -> tools.seedChannelMemory(ownChannel.chatId(), posts));
-        channelImpulse.publishWith((chatId, post) -> tools.publishToOwnChannel(chatId, post));
-        channelImpulse.start();
+        createdChannel.seeding(posts -> tools.seedChannelMemory(ownChannel.chatId(), posts));
+        createdChannel.publishWith((chatId, post) -> tools.publishToOwnChannel(chatId, post));
+        createdChannel.start();
+        settings.watch();
         // холостой порыв не должен ни тратить воспоминания, ни помечать снимки
         // чатов как показанные
         loop.idleImpulseSnapshot(() -> {

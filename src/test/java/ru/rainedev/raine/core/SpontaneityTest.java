@@ -2,6 +2,7 @@ package ru.rainedev.raine.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
@@ -168,6 +169,75 @@ class SpontaneityTest {
     }
 
     @Test
+    void configuredChanceCanAllowEveryTick(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("что-то из прошлого", new double[] {1, 0, 0});
+        NotificationLoop loop = loop();
+
+        try (Spontaneity spontaneity = new Spontaneity(
+                loop, diary, Toolbox::new, 0, fixedDouble(0.99))) {
+            spontaneity.chance(1.0);
+            spontaneity.actNow();
+
+            assertEquals(1, loop.queued());
+        }
+    }
+
+    @Test
+    void configuredChanceCanRejectTick(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        diary.save("что-то из прошлого", new double[] {1, 0, 0});
+        NotificationLoop loop = loop();
+
+        try (Spontaneity spontaneity = new Spontaneity(
+                loop, diary, Toolbox::new, 0, fixedDouble(0.5))) {
+            spontaneity.chance(0.1);
+            spontaneity.actNow();
+
+            assertEquals(0, loop.queued());
+        }
+    }
+
+    @Test
+    void disabledChanceReturnsBeforeSleepAndLogging(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        NotificationLoop loop = loop();
+        Logger logger = (Logger) LoggerFactory.getLogger(Spontaneity.class);
+        Level before = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+
+        try (Spontaneity spontaneity = new Spontaneity(
+                loop, diary, Toolbox::new, 0, fixedDouble(0.0))) {
+            spontaneity.chance(0.0);
+            spontaneity.asleepWhen(() -> true);
+            spontaneity.actNow();
+
+            assertEquals(0, loop.queued());
+            assertFalse(logs.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .anyMatch(message -> message.contains("Порыв пропущен")));
+        } finally {
+            logger.detachAppender(logs);
+            logger.setLevel(before);
+        }
+    }
+
+    @Test
+    void chanceRejectsInvalidValues(@TempDir Path dir) {
+        Diary diary = new Diary(dir);
+        try (Spontaneity spontaneity = new Spontaneity(
+                loop(), diary, Toolbox::new, 0, new Random(1))) {
+            for (double invalid : new double[] {-0.1, 1.1, Double.NaN, Double.POSITIVE_INFINITY}) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> spontaneity.chance(invalid), Double.toString(invalid));
+            }
+        }
+    }
+
+    @Test
     void anImpulseNeverUsesASecret(@TempDir Path dir) {
         // порыв не привязан к чату: он уходит в случайный разговор, и секрет
         // лички — даже владелецской — не должен становиться поводом написать
@@ -313,10 +383,14 @@ class SpontaneityTest {
      * ловим на входе, а не надеемся на конкретное зерно.
      */
     private static Random alwaysKeen() {
+        return fixedDouble(0);
+    }
+
+    private static Random fixedDouble(double value) {
         return new Random(7) {
             @Override
             public double nextDouble() {
-                return 0;
+                return value;
             }
         };
     }

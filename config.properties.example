@@ -331,6 +331,9 @@ wake_up_on_pinned_chat=false
 # отлучается ли она изредка среди дня
 randomly_go_sleep=true
 
+# шанс спонтанного порыва после тишины: 0.0–1.0 (0 — выключено; 1.0 — каждый подходящий тик)
+spontaneity_chance=0.5
+
 # может ли писать первой тем, с кем переписки ещё не было
 can_write_to_a_new_person=false
 

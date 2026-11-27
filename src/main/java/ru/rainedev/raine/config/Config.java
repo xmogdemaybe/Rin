@@ -40,6 +40,7 @@ public record Config(
         boolean channelsPostingEnabled,
         String ownChannel,
         ChannelPost channelPost,
+        double spontaneityChance,
         StickerWarmup stickerWarmup,
         boolean sleepConsolidation,
         boolean characterGrowthEnabled,
@@ -246,10 +247,18 @@ public record Config(
                 throw new IllegalArgumentException(
                         "Срок между порывами в канал должен расти: " + minHours + "–" + maxHours + " часов");
             }
-            if (chance <= 0 || chance > 1) {
+            if (!Double.isFinite(chance) || chance <= 0 || chance > 1) {
                 throw new IllegalArgumentException("Шанс порыва в канал — доля от 0 до 1, а не " + chance);
             }
         }
+    }
+
+    private static double spontaneityChance(double value) {
+        if (!Double.isFinite(value) || value < 0.0 || value > 1.0) {
+            throw new IllegalArgumentException(
+                    "spontaneity_chance: ожидается число от 0.0 до 1.0, получено " + value);
+        }
+        return value == 0.0 ? 0.0 : value;
     }
 
     /**
@@ -409,6 +418,8 @@ public record Config(
                                 "до какого срока в часах разбегается ожидание; ровный срок читается как расписание"),
                         s.fraction("channel_impulse_chance", 0.25,
                                 "какая доля попыток кончается постом; остальное — молчание")),
+                spontaneityChance(s.fraction("spontaneity_chance", 0.5,
+                        "шанс спонтанного порыва после тишины: от 0.0 до 1.0; 0 — выключено")),
                 new StickerWarmup(
                         s.flag("sticker_night_warmup_enabled", true,
                                 "досматривать ли во сне стикеры из установленных паков, до которых не дошло зрение"),
