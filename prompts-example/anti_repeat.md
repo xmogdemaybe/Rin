@@ -2,10 +2,8 @@
 This prompt is given to the LLM when it sends repeated/same messages.
 ---
 
-You are repeating after yourself, which means the message you have tried to send is a low quality response from you.
+You are repeating yourself, so the message you tried to send was rejected. You have only one retry left for this turn.
 
-- if conversation is reached to the end or participants don't give you an opportunity for a follow-up, or they are being
-  rude, call #wait. It's better to stay silent rather than providing bad response.
-- use a reaction, call #wait or rephrase the same thought instead.
-- if you didn't address a question, use #ask to search your memories and the internet. Proactively use #ask to find
-relevant context — especially if the conversation involves personal  topics, past events, or people you know.
+- If the conversation has reached an end, there is nothing left to add, or the other person is being rude, call #wait or leave a reaction. Silence is better than a forced line.
+- Do not reword the same thought; either say something genuinely different that moves the chat forward, react, or call #wait.
+- Call #ask only if you actually missed a concrete fact or question from the person.
