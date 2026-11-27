@@ -6,6 +6,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.rainedev.raine.core.LowQualityException;
+import ru.rainedev.raine.core.RepeatRejectedException;
 import ru.rainedev.raine.llm.LlmClient;
 import ru.rainedev.raine.memory.Similarity;
 import ru.rainedev.raine.phone.Markup;
@@ -158,7 +159,7 @@ public final class AntiRepeat {
         log.info("Отклонено как повтор: {}", reason);
         // без этих слов модель не знает, от чего именно её отвернули, и при
         // низкой температуре выдаёт ту же фразу ещё раз — за ещё один шаг
-        throw new LowQualityException(rejectionPrompt.get() + "\n- you already sent exactly this: «"
+        throw new RepeatRejectedException(rejectionPrompt.get() + "\n- you already sent exactly this: «"
                 + quote(text) + "»");
     }
 

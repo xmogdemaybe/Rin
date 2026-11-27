@@ -8,7 +8,7 @@ import java.util.Map;
 
 /** Инструмент, доступный модели. Действовать она может только через них. */
 public record Tool(String name, String description, ObjectNode parameters, ContextualHandler handler,
-                   boolean mutates) {
+                   boolean mutates, boolean deliversReply) {
 
     /**
      * Обработчик, которому нужен набор инструментов текущего хода. Открытие чата
@@ -63,6 +63,7 @@ public record Tool(String name, String description, ObjectNode parameters, Conte
         private final Map<String, ObjectNode> properties = new LinkedHashMap<>();
         private final java.util.List<String> required = new java.util.ArrayList<>();
         private boolean mutates;
+        private boolean deliversReply;
 
         private Builder(String name) {
             this.name = name;
@@ -75,6 +76,12 @@ public record Tool(String name, String description, ObjectNode parameters, Conte
          */
         public Builder mutating() {
             this.mutates = true;
+            return this;
+        }
+
+        /** Помечает инструмент как доставку реплики человеку (сообщение или стикер). */
+        public Builder deliversReply() {
+            this.deliversReply = true;
             return this;
         }
 
@@ -128,7 +135,7 @@ public record Tool(String name, String description, ObjectNode parameters, Conte
             properties.forEach(props::set);
             parameters.putArray("required").addAll(required.stream().map(JsonNodeFactory.instance::textNode).toList());
             parameters.put("additionalProperties", false);
-            return new Tool(name, description, parameters, handler, mutates);
+            return new Tool(name, description, parameters, handler, mutates, deliversReply);
         }
     }
 }

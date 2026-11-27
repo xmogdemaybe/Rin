@@ -45,11 +45,17 @@ public final class Toolbox {
 
     public static final class PartialFailure extends LowQualityException {
         private final List<ru.rainedev.raine.llm.Message> results;
+        private final int executedCount;
         public PartialFailure(String reason, List<ru.rainedev.raine.llm.Message> results) {
+            this(reason, results, results.size());
+        }
+        public PartialFailure(String reason, List<ru.rainedev.raine.llm.Message> results, int executedCount) {
             super(reason);
             this.results = List.copyOf(results);
+            this.executedCount = executedCount;
         }
         public List<ru.rainedev.raine.llm.Message> results() { return results; }
+        public int executedCount() { return executedCount; }
     }
 
     private final Map<String, Tool> tools = new LinkedHashMap<>();
@@ -163,7 +169,7 @@ public final class Toolbox {
                         results.add(ru.rainedev.raine.llm.Message.toolResult(calls.get(skipped).id(),
                                 "Not executed: previous action was rejected. Decide again."));
                     }
-                    throw new PartialFailure(failure.getMessage(), results);
+                    throw new PartialFailure(failure.getMessage(), results, index);
                 }
             }
             return results;

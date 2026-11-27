@@ -95,7 +95,8 @@ class GoodnightsTest {
         TrustLedger ledger = new TrustLedger(Path.of(ledger(dir)), 555, "Папик");
         Goodnights goodnights = new Goodnights(ledger, 555, "Папик", new FixedDice(0.0), clock);
 
-        assertTrue(goodnights.drawForNight().size() >= 1);
+        assertTrue(goodnights.drawForNight().contains(new Goodnights.Receiver(42, "Вика")));
+        goodnights.markSent(Goodnights.Kind.NIGHT, 42);
 
         List<Goodnights.Receiver> second = goodnights.drawForNight();
         assertEquals(List.of(new Goodnights.Receiver(555, "Папик")), second,
@@ -104,6 +105,16 @@ class GoodnightsTest {
         clock.advance(Duration.ofDays(15));
         assertTrue(goodnights.drawForNight().contains(new Goodnights.Receiver(42, "Вика")),
                 "спустя две недели слово можно сказать снова");
+    }
+
+    @Test
+    void drawWithoutDeliveryDoesNotStartCooldown(@TempDir Path dir) throws Exception {
+        TrustLedger ledger = new TrustLedger(Path.of(ledger(dir)), 555, "Папик");
+        Goodnights goodnights = new Goodnights(ledger, 555, "Папик", new FixedDice(0.0), clock);
+
+        assertTrue(goodnights.drawForNight().contains(new Goodnights.Receiver(42, "Вика")));
+        assertTrue(goodnights.drawForNight().contains(new Goodnights.Receiver(42, "Вика")),
+                "пока доставка не подтверждена markSent, 14-дневный кулдаун не включается");
     }
 
     @Test
@@ -122,8 +133,10 @@ class GoodnightsTest {
         Goodnights goodnights = new Goodnights(ledger, 555, "Папик", new FixedDice(0.0), clock);
 
         assertTrue(goodnights.drawForNight().contains(new Goodnights.Receiver(42, "Вика")));
+        goodnights.markSent(Goodnights.Kind.NIGHT, 42);
         assertTrue(goodnights.drawForMorning().contains(new Goodnights.Receiver(42, "Вика")),
                 "ночное слово не отнимает утреннее");
+        goodnights.markSent(Goodnights.Kind.MORNING, 42);
 
         assertFalse(goodnights.drawForMorning().contains(new Goodnights.Receiver(42, "Вика")),
                 "а второе утреннее подряд — уже навязчивость");

@@ -4,9 +4,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.random.RandomGenerator;
 import ru.rainedev.raine.memory.TrustLedger;
 
@@ -38,6 +38,9 @@ public final class Goodnights {
     /** С человеком, которому это слово только что сказала, пауза в две недели. */
     private static final Duration COOLDOWN = Duration.ofDays(14);
 
+    /** Ночное прощание и утреннее приветствие — у каждого своя книга пауз. */
+    public enum Kind { NIGHT, MORNING }
+
     /** Кому поставить порыв: id чата и имя, как она человека знает. */
     public record Receiver(long id, String name) {}
 
@@ -46,8 +49,8 @@ public final class Goodnights {
     private final String ownerName;
     private final RandomGenerator random;
     private final Clock clock;
-    private final Map<Long, Instant> lastGoodnight = new HashMap<>();
-    private final Map<Long, Instant> lastMorning = new HashMap<>();
+    private final Map<Long, Instant> lastGoodnight = new ConcurrentHashMap<>();
+    private final Map<Long, Instant> lastMorning = new ConcurrentHashMap<>();
 
     public Goodnights(TrustLedger ledger, long ownerId, String ownerName, RandomGenerator random) {
         this(ledger, ownerId, ownerName, random, Clock.systemDefaultZone());
@@ -73,6 +76,18 @@ public final class Goodnights {
     }
 
     /**
+     * Фиксирует реальную доставку приветствия или прощания — только после неё
+     * для человека начинается двухнедельная пауза.
+     */
+    public void markSent(Kind kind, long id) {
+        if (kind == null || id <= 0 || id == ownerId) {
+            return;
+        }
+        Map<Long, Instant> book = kind == Kind.NIGHT ? lastGoodnight : lastMorning;
+        book.put(id, Instant.now(clock));
+    }
+
+    /**
      * Кому выпало сказать слово: владелец идёт первым, близкие из файла —
      * за ним, каждый по уровню. Владельцу пауза не положена: он и есть
      * человек, к которому она возвращается каждый вечер, — ради него и
@@ -83,7 +98,6 @@ public final class Goodnights {
         Instant now = Instant.now(clock);
         if (ownerId > 0 && random.nextDouble() < OWNER_CHANCE) {
             picked.add(new Receiver(ownerId, ownerName));
-            book.put(ownerId, now);
         }
         for (TrustLedger.Entry entry : ledger.entries()) {
             if (entry.level() < MIN_LEVEL || !pauseIsOver(book, entry.id(), now)) {
@@ -92,7 +106,6 @@ public final class Goodnights {
             double chance = Math.min(entry.level() * CHANCE_PER_LEVEL, MAX_CHANCE);
             if (random.nextDouble() < chance) {
                 picked.add(new Receiver(entry.id(), entry.name()));
-                book.put(entry.id(), now);
             }
         }
         return picked;

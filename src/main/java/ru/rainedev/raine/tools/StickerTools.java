@@ -758,6 +758,7 @@ public final class StickerTools {
                 .optionalString("reply_to_message_id",
                         "Optional. Quote a specific message — a sticker in reply to something said earlier.")
                 .mutating()
+                .deliversReply()
                 .build(arguments -> {
                     // круг общения проверяется и здесь: открыть чат — одно,
                     // а отправить в него — другое, и запрет должен работать в обоих

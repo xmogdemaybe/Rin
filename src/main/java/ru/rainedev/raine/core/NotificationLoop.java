@@ -226,6 +226,13 @@ public final class NotificationLoop {
      */
     private volatile java.util.function.Consumer<Notification> backToUnread = notification -> {};
 
+    /** Вызывается при завершении GREETING-хода, в котором реплика реально доставлена. */
+    private volatile java.util.function.Consumer<Notification> onGreetingDelivered = n -> { };
+
+    public void onGreetingDelivered(java.util.function.Consumer<Notification> listener) {
+        this.onGreetingDelivered = listener == null ? n -> { } : listener;
+    }
+
     /** Чем обернулся отказ: новая попытка, ожидание пока эндпоинт оживёт, или потеря. */
     private enum Loss { RETRY, PARKED, LOST }
 
@@ -243,6 +250,10 @@ public final class NotificationLoop {
         int emptySteps;
         /** Повтор после отказа контент-фильтра сделан ровно один раз за ход. */
         boolean filterRetried;
+        /** Повтор после отказа антиповтора разрешён ровно один раз за ход. */
+        boolean repeatRetried;
+        /** Была ли в этом ходе фактически доставлена реплика человеку. */
+        boolean replyDelivered;
         /** Что вклеила память в этом ходе — чтобы снять, если ход провалился. */
         RecallSnapshot recallSnapshot;
         /** Последнее действие, видимое человеку: send_telegram_message, react_with_emoji. */
@@ -950,6 +961,26 @@ public final class NotificationLoop {
                     appendContext(result);
                 }
                 appendToLast(PARTIAL_NOTE_PREFIX + e.getMessage());
+                int executed = Math.min(e.executedCount(), calls.size());
+                boolean delivered = false;
+                for (int i = 0; i < executed; i++) {
+                    if (deliversReply(tools, calls.get(i))) {
+                        delivered = true;
+                        break;
+                    }
+                }
+                if (delivered) {
+                    turn.replyDelivered = true;
+                    if (notification.trigger() == Notification.Trigger.GREETING) {
+                        reportCost(startedAt, spentTokens, step + 1);
+                        if (response.totalTokens() >= contextTokenLimit) {
+                            onContextOverflow.run();
+                        }
+                        endTurn(turn);
+                        active = null;
+                        return;
+                    }
+                }
                 if (response.totalTokens() >= contextTokenLimit) {
                     onContextOverflow.run();
                     endTurn(turn);
@@ -958,6 +989,15 @@ public final class NotificationLoop {
                 }
                 continue;
             } catch (LowQualityException e) {
+                if (e instanceof RepeatRejectedException) {
+                    if (turn.repeatRetried) {
+                        log.info("Повторная переформулировка отклонена антиповтором — завершаю ход");
+                        endTurn(turn);
+                        active = null;
+                        return;
+                    }
+                    turn.repeatRetried = true;
+                }
                 // откат: сообщение модели в контекст не попадает, вместо него — подсказка
                 log.info("Ответ низкого качества, пробуем иначе: {}", e.getMessage());
                 appendContext(Message.user(e.getMessage()));
@@ -974,6 +1014,10 @@ public final class NotificationLoop {
             context.add(response.firstMessage().orElseThrow());
             for (Message result : results) {
                 appendContext(result);
+            }
+
+            if (calls.stream().anyMatch(call -> deliversReply(tools, call))) {
+                turn.replyDelivered = true;
             }
 
             String visible = visibleAction(calls, tools);
@@ -1019,6 +1063,9 @@ public final class NotificationLoop {
         if (turn.contextBefore != null && turn.lastAction.isEmpty()) {
             rollbackIdleImpulse(turn);
         }
+        if (turn.notification.trigger() == Notification.Trigger.GREETING && turn.replyDelivered) {
+            onGreetingDelivered.accept(turn.notification);
+        }
     }
 
     /**
@@ -1062,9 +1109,15 @@ public final class NotificationLoop {
         return acted;
     }
 
+    private static boolean deliversReply(Toolbox tools, ToolCall call) {
+        return tools.all().stream()
+                .anyMatch(tool -> tool.name().equals(call.name()) && tool.deliversReply());
+    }
+
     /**
      * Порыв заканчивается на первом видимом действии: чат уже открыт, и
-     * отправка не должна стоить дороже молчания. В обычном разговоре ход
+     * отправка не должна стоить дороже молчания. Приветствие заканчивается
+     * после фактической доставки реплики. В обычном разговоре ход
      * продолжается — там реплики складываются в беседу, кроме случаев, когда
      * дверь закрыта: после блокировки не с кем говорить.
      */
@@ -1072,8 +1125,11 @@ public final class NotificationLoop {
         if (Toolbox.FINISHING.contains(call.name()) || Toolbox.TERMINAL.contains(call.name())) {
             return true;
         }
-        return notification.trigger() == Notification.Trigger.IMPULSE && tools.all().stream()
-                .anyMatch(tool -> tool.name().equals(call.name()) && tool.mutates());
+        if (notification.trigger() == Notification.Trigger.IMPULSE && tools.all().stream()
+                .anyMatch(tool -> tool.name().equals(call.name()) && tool.mutates())) {
+            return true;
+        }
+        return notification.trigger() == Notification.Trigger.GREETING && deliversReply(tools, call);
     }
 
     /**

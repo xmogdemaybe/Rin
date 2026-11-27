@@ -96,6 +96,8 @@ public final class RaineApp implements AutoCloseable {
     private Thread brain;
     private Rest rest;
     private Goodnights goodnights;
+    private final java.util.Map<Long, Goodnights.Kind> pendingGreetingKind =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private CharacterGrowth growth;
     private TelegramMedia telegramMedia;
     private Vision vision;
@@ -365,6 +367,12 @@ public final class RaineApp implements AutoCloseable {
         // память режет выдачу по тому, кому она отвечает сейчас, — в коде, а не в
         // промпте: просить чужой секрет у модели можно теми же словами, что и свой
         loop.trustOf(trust::levelOf);
+        loop.onGreetingDelivered(notification -> {
+            Goodnights.Kind kind = pendingGreetingKind.remove(notification.personId());
+            if (kind != null && goodnights != null) {
+                goodnights.markSent(kind, notification.personId());
+            }
+        });
         DiaryMemory diaryMemory = new DiaryMemory(diary, llm,
                 config.diaryInjectionMaxLength(), config.diaryMinRelatedness());
         loop.memory(diaryMemory);
@@ -715,20 +723,22 @@ public final class RaineApp implements AutoCloseable {
      * по обычной механике: чат открывается сам, а что сказать — решает она.
      */
     private void goodnightsAtBedtime() {
-        greetCloseOnes(goodnights.drawForNight(), RaineApp::goodnightPrompt);
+        greetCloseOnes(goodnights.drawForNight(), Goodnights.Kind.NIGHT, RaineApp::goodnightPrompt);
     }
 
     /** Проснулась сама, ко времени: те же близкие слышат первые слова с утра. */
     private void goodnightsAtMorning() {
-        greetCloseOnes(goodnights.drawForMorning(), RaineApp::morningPrompt);
+        greetCloseOnes(goodnights.drawForMorning(), Goodnights.Kind.MORNING, RaineApp::morningPrompt);
     }
 
     /** Вечер и утро отличаются только книгой пауз и подсказкой — ход один на двоих. */
     private void greetCloseOnes(List<Goodnights.Receiver> receivers,
+                                Goodnights.Kind kind,
                                 java.util.function.Function<Goodnights.Receiver, String> prompt) {
         for (Goodnights.Receiver receiver : receivers) {
             Toolbox available = newToolbox();
             available.add(tools.open(receiver.id()));
+            pendingGreetingKind.put(receiver.id(), kind);
             loop.submit(new Notification(prompt.apply(receiver), available, true)
                     .about(receiver.id()).from(receiver.id()).asGreeting());
         }
@@ -857,14 +867,16 @@ public final class RaineApp implements AutoCloseable {
 
     private static String goodnightPrompt(Goodnights.Receiver receiver) {
         return ("You are about to go to bed soon. If you feel like it, say a couple of quiet goodnight "
-                + "words to %s: open the chat (id %d) and write them yourself. If you would rather stay "
-                + "silent tonight, call #wait.").formatted(knownAs(receiver), receiver.id());
+                + "words to %s (chat id %d): if the chat is already open below, write directly; otherwise "
+                + "open it first. If you would rather stay silent tonight, call #wait.")
+                .formatted(knownAs(receiver), receiver.id());
     }
 
     private static String morningPrompt(Goodnights.Receiver receiver) {
         return ("You just woke up on your own, the night is over. If you feel like it, send your first "
-                + "good-morning words to %s: open the chat (id %d) and write them yourself. If you would "
-                + "rather stay quiet, call #wait.").formatted(knownAs(receiver), receiver.id());
+                + "good-morning words to %s (chat id %d): if the chat is already open below, write directly; "
+                + "otherwise open it first. If you would rather stay quiet, call #wait.")
+                .formatted(knownAs(receiver), receiver.id());
     }
 
     private static String knownAs(Goodnights.Receiver receiver) {

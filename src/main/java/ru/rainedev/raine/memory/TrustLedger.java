@@ -115,6 +115,9 @@ public final class TrustLedger {
             }
             try {
                 long id = Long.parseLong(matcher.group(1));
+                if (id == ownerId) {
+                    continue;
+                }
                 String name = matcher.group(3) == null ? "" : matcher.group(3).strip();
                 out.add(new Entry(id, name, Integer.parseInt(matcher.group(4))));
             } catch (NumberFormatException ignored) {
@@ -243,6 +246,7 @@ public final class TrustLedger {
         out.append(ownerLine());
         List<String> lines = readLines();
         if (lines != null) {
+            lines = lines.stream().filter(line -> !isOwnerLine(line)).toList();
             if (lines.size() > MAX_LINES) {
                 tellAboutOverflow(lines.size());
                 // новые записи файл принимает в хвост — значит лишние уходят сверху
@@ -331,6 +335,21 @@ public final class TrustLedger {
                 ? ""
                 : (", " + sanitize(ownerName, NAME_LIMIT));
         return ("- id %d%s: +5 — your person, maximum trust, not yours to revise.").formatted(ownerId, shown);
+    }
+
+    private boolean isOwnerLine(String line) {
+        if (ownerId <= 0) {
+            return false;
+        }
+        Matcher matcher = ID_PREFIX.matcher(line);
+        if (!matcher.find()) {
+            return false;
+        }
+        try {
+            return Long.parseLong(matcher.group(1)) == ownerId;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
     }
 
     private String lineFor(long userId, String name, int level, String reason) {

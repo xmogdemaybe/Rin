@@ -1872,4 +1872,106 @@ class NotificationLoopTest {
         assertEquals(-1, NotificationLoop.recallTarget(List.of(Message.assistant("- thought: ок"))),
                 "и не вклеивается в её же реплику");
     }
+
+    @Test
+    void greetingFinishesOnReplyDeliveryAndNotifiesCallback() {
+        List<Long> deliveredTo = new ArrayList<>();
+        Tool send = Tool.named("send_telegram_message")
+                .describedAs("Отправляет")
+                .mutating()
+                .deliversReply()
+                .build(arguments -> "Sent.");
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox(send));
+        loop.onGreetingDelivered(n -> deliveredTo.add(n.personId()));
+        loop.process(new Notification("пожелай спокойной ночи", new Toolbox(), true).about(42).asGreeting());
+
+        assertEquals(1, llm.seenContexts.size(), "GREETING завершается на 1-м шаге после доставки реплики");
+        assertEquals(List.of(42L), deliveredTo, "коллбэк доставки приветствия вызван");
+    }
+
+    @Test
+    void greetingWaitFinishesWithoutDeliveryCallback() {
+        List<Long> deliveredTo = new ArrayList<>();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox());
+        loop.onGreetingDelivered(n -> deliveredTo.add(n.personId()));
+        loop.process(new Notification("пожелай спокойной ночи", new Toolbox(), true).about(42).asGreeting());
+
+        assertTrue(deliveredTo.isEmpty(), "молчание (#wait) не считается доставкой приветствия");
+    }
+
+    @Test
+    void greetingDoesNotFinishOnMutatingToolWithoutDeliversReply() {
+        List<Long> deliveredTo = new ArrayList<>();
+        Tool photo = Tool.named("take_photo")
+                .describedAs("Снимок")
+                .mutating()
+                .build(arguments -> "photo.jpg");
+        Tool send = Tool.named("send_telegram_message")
+                .describedAs("Отправляет")
+                .mutating()
+                .deliversReply()
+                .build(arguments -> "Sent.");
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("take_photo")), 10));
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox(photo, send));
+        loop.onGreetingDelivered(n -> deliveredTo.add(n.personId()));
+        loop.process(new Notification("пожелай спокойной ночи", new Toolbox(), true).about(42).asGreeting());
+
+        assertEquals(2, llm.seenContexts.size(), "mutating без deliversReply не завершает GREETING");
+        assertEquals(List.of(42L), deliveredTo, "доставка отмечена после send_telegram_message");
+    }
+
+    @Test
+    void greetingPartialFailureAfterDeliveredReplyFinishesTurn() {
+        List<Long> deliveredTo = new ArrayList<>();
+        Tool send = Tool.named("send_telegram_message")
+                .describedAs("Отправляет")
+                .mutating()
+                .deliversReply()
+                .build(arguments -> "Sent.");
+        Tool bad = Tool.simple("bad", "Ломается", arguments -> {
+            throw new LowQualityException("слишком длинно");
+        });
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message"), call("bad")), 10));
+        llm.willRespond(finishing());
+
+        NotificationLoop loop = loopWith(llm, new Toolbox(send, bad));
+        loop.onGreetingDelivered(n -> deliveredTo.add(n.personId()));
+        loop.process(new Notification("пожелай спокойной ночи", new Toolbox(), true).about(42).asGreeting());
+
+        assertEquals(1, llm.seenContexts.size(), "при частичном отказе после доставки GREETING завершается сразу");
+        assertEquals(List.of(42L), deliveredTo);
+    }
+
+    @Test
+    void repeatRejectionAllowsOnlyOneRephrasePerTurn() {
+        Tool send = Tool.named("send_telegram_message")
+                .describedAs("Отправляет")
+                .mutating()
+                .deliversReply()
+                .build(arguments -> {
+                    throw new RepeatRejectedException("повтор фразы");
+                });
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+        llm.willRespond(withToolCalls(List.of(call("send_telegram_message")), 10));
+
+        NotificationLoop loop = loopWith(llm, new Toolbox(send));
+        loop.process(new Notification("тебе написали"));
+
+        assertEquals(2, llm.seenContexts.size(),
+                "1-й отказ антиповтора даёт одну переформулировку, 2-й завершает ход");
+    }
 }

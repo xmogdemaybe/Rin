@@ -693,6 +693,7 @@ public final class TelegramTools {
                         "Optional. Quote a specific earlier message by its message_id. Leave empty for a normal "
                                 + "reply — quoting every message looks unnatural in a live conversation.")
                 .mutating()
+                .deliversReply()
                 .build(arguments -> {
                     String text = arguments.path("text").asText("").replace("\r", "").strip();
                     String photoName = arguments.path("photo_filename").asText("").strip();

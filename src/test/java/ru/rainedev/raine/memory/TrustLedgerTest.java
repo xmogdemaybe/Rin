@@ -326,4 +326,23 @@ class TrustLedgerTest {
         assertFalse(answer.contains("блокатор"), "путь и текст исключения наружу не уходят: " + answer);
         assertFalse(answer.contains("Exception"), "сырой текст ошибки остаётся в журнале: " + answer);
     }
+
+    @Test
+    void manualOwnerLineIsExcludedFromEntriesAndPromptSuffix(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("trust.md");
+        Files.writeString(file, """
+                - id 555, Владелец: +5 — ручная запись (2026-10-21)
+                - id 42, Вика: +3 — выручала (2026-10-21)
+                """);
+        TrustLedger ledger = new TrustLedger(file, 555, "Владелец", clock);
+
+        assertEquals(List.of(new TrustLedger.Entry(42, "Вика", 3)), ledger.entries(),
+                "владелец не должен попадать в entries() из ручной строки");
+
+        String suffix = ledger.asPromptSuffix();
+        long ownerLines = suffix.lines().filter(line -> line.startsWith("- id 555")).count();
+        assertEquals(1, ownerLines, "строка владельца не должна дублироваться в <your_trust>: " + suffix);
+        assertFalse(suffix.contains("ручная запись"), "ручная строка владельца вырезана из суффикса");
+        assertTrue(suffix.contains("- id 42, Вика: +3"), "остальные записи сохранены");
+    }
 }

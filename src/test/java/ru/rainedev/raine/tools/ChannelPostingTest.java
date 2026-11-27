@@ -510,7 +510,7 @@ class ChannelPostingTest {
         } catch (RuntimeException e) {
             outcome = "исключение " + e.getClass().getSimpleName();
         }
-        assertEquals("исключение LowQualityException", outcome);
+        assertEquals("исключение RepeatRejectedException", outcome);
         assertEquals(sends, actionCalls.size(), "повтор не доходит до Telegram");
     }
 
