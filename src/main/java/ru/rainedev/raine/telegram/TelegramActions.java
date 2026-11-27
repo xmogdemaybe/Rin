@@ -174,7 +174,11 @@ public interface TelegramActions {
                 replyTo.messageId = replyToMessageId;
                 request.replyTo = replyTo;
             }
-            return ask(request).id;
+            long id = ask(request).id;
+            if (telegram != null) {
+                telegram.rememberSent(chatId, id);
+            }
+            return id;
         }
 
         @Override
@@ -331,7 +335,11 @@ public interface TelegramActions {
                 replyTo.messageId = replyToMessageId;
                 request.replyTo = replyTo;
             }
-            return ask(request).id;
+            long id = ask(request).id;
+            if (telegram != null) {
+                telegram.rememberSent(chatId, id);
+            }
+            return id;
         }
 
         @Override

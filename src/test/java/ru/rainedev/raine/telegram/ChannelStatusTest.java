@@ -37,4 +37,33 @@ class ChannelStatusTest {
         assertFalse(Telegram.isMemberStatus(new TdApi.ChatMemberStatusBanned()));
         assertFalse(Telegram.isMemberStatus(null));
     }
+
+    @Test
+    void onlyCreatorMemberAndAdminWithPostRightsCanPostInChannel() {
+        TdApi.ChatMemberStatusCreator creatorMember = new TdApi.ChatMemberStatusCreator();
+        creatorMember.isMember = true;
+        TdApi.ChatMemberStatusCreator creatorNotMember = new TdApi.ChatMemberStatusCreator();
+        creatorNotMember.isMember = false;
+
+        TdApi.ChatMemberStatusAdministrator adminCanPost = new TdApi.ChatMemberStatusAdministrator();
+        adminCanPost.rights = new TdApi.ChatAdministratorRights();
+        adminCanPost.rights.canPostMessages = true;
+
+        TdApi.ChatMemberStatusAdministrator adminNoPost = new TdApi.ChatMemberStatusAdministrator();
+        adminNoPost.rights = new TdApi.ChatAdministratorRights();
+        adminNoPost.rights.canPostMessages = false;
+
+        TdApi.ChatMemberStatusAdministrator adminNullRights = new TdApi.ChatMemberStatusAdministrator();
+        adminNullRights.rights = null;
+
+        assertTrue(Telegram.canPostStatus(creatorMember));
+        assertFalse(Telegram.canPostStatus(creatorNotMember));
+        assertTrue(Telegram.canPostStatus(adminCanPost));
+        assertFalse(Telegram.canPostStatus(adminNoPost));
+        assertFalse(Telegram.canPostStatus(adminNullRights));
+        assertFalse(Telegram.canPostStatus(new TdApi.ChatMemberStatusMember()));
+        assertFalse(Telegram.canPostStatus(new TdApi.ChatMemberStatusRestricted()));
+        assertFalse(Telegram.canPostStatus(new TdApi.ChatMemberStatusLeft()));
+        assertFalse(Telegram.canPostStatus(null));
+    }
 }

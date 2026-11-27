@@ -46,4 +46,19 @@ class TelegramDeliveryTest {
         telegram.onSendSucceeded(-7, 812);
         assertEquals(812, telegram.confirmedId(-7));
     }
+
+    @Test
+    void sentRegistryTracksByChatAndEvictsOldestBeyondCap() {
+        telegram.onSendSucceeded(100L, -7L, 812L);
+        assertTrue(telegram.wasSentByMe(100L, -7L));
+        assertTrue(telegram.wasSentByMe(100L, 812L));
+        assertFalse(telegram.wasSentByMe(200L, 812L));
+
+        for (long i = 1; i <= 512; i++) {
+            telegram.rememberSent(300L, i);
+        }
+        assertFalse(telegram.wasSentByMe(100L, -7L));
+        assertFalse(telegram.wasSentByMe(100L, 812L));
+        assertTrue(telegram.wasSentByMe(300L, 512L));
+    }
 }

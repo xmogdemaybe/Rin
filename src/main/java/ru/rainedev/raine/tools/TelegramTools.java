@@ -103,6 +103,11 @@ public final class TelegramTools {
     private final ChatScreen screen;
     private volatile boolean channelsPostingEnabled;
     private volatile long writingChatId;
+    private volatile java.util.function.LongPredicate canPostInChannel;
+    private volatile java.time.Duration channelPostCooldown = java.time.Duration.ZERO;
+    private volatile java.util.function.Supplier<java.time.Instant> clock = java.time.Instant::now;
+    private final java.util.Map<Long, java.time.Instant> lastChannelPostAt = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile java.util.function.LongConsumer onChannelPublished = chatId -> { };
     private java.nio.file.Path gallery = java.nio.file.Path.of("data/gallery");
     private java.nio.file.Path voiceDir = java.nio.file.Path.of("data/voice_messages");
     private java.util.function.Supplier<String> speechPrompt =
@@ -217,6 +222,7 @@ public final class TelegramTools {
         this.screen = screen;
         this.lockdown = lockdown;
         this.antiRepeat = antiRepeat;
+        this.canPostInChannel = telegram == null ? chatId -> true : telegram::canPostInChannel;
         this.rhythm = new TypingRhythm(random);
         this.stickers = new StickerTools(telegram, actions, screen);
         this.stickers.allowedTo(chatId -> allowed(telegram.chatCached(chatId)));
@@ -476,7 +482,7 @@ public final class TelegramTools {
     void addWritingTools(ChatKind kind, long chatId, java.util.function.Consumer<Tool> addTool) {
         writingChatId = chatId;
         if (kind == ChatKind.CHANNEL) {
-            if (channelsPostingEnabled) {
+            if (channelsPostingEnabled && canPostInChannel.test(chatId)) {
                 addTool.accept(postToChannel(chatId));
             }
             return;
@@ -498,6 +504,22 @@ public final class TelegramTools {
     /** Разрешение владельца при запуске; само по себе не даёт прав в Telegram. */
     public void channelsPosting(boolean enabled) {
         channelsPostingEnabled = enabled;
+    }
+
+    void canPostInChannel(java.util.function.LongPredicate check) {
+        this.canPostInChannel = check == null ? chatId -> true : check;
+    }
+
+    public void channelPostCooldown(java.time.Duration cooldown) {
+        this.channelPostCooldown = cooldown == null ? java.time.Duration.ZERO : cooldown;
+    }
+
+    void clock(java.util.function.Supplier<java.time.Instant> clock) {
+        this.clock = clock == null ? java.time.Instant::now : clock;
+    }
+
+    public void onChannelPublished(java.util.function.LongConsumer listener) {
+        this.onChannelPublished = listener == null ? chatId -> { } : listener;
     }
 
     /** Один текстовый пост в уже открытый канал, без повадок разговорной отправки. */
@@ -541,6 +563,9 @@ public final class TelegramTools {
                 .requiredString("text", "Non-blank post text, at most 4096 UTF-16 characters")
                 .mutating()
                 .build(arguments -> {
+                    if (ru.rainedev.raine.core.CurrentStep.countOf("post_to_channel") > 1) {
+                        return "You can only publish one post at a time. Nothing sent.";
+                    }
                     var value = arguments == null ? null : arguments.get("text");
                     String text = value == null || !value.isTextual() ? null : value.textValue();
                     return publish(chatId, text, chat, confirmedId, true);
@@ -578,6 +603,16 @@ public final class TelegramTools {
             Fatal.check(e);
             return channelPostingError(chatId,
                     "Channel check failed before sending. Nothing sent.", e.getMessage());
+        }
+        if (!canPostInChannel.test(chatId)) {
+            return "You do not have permission to post in this channel. Nothing sent.";
+        }
+        if (requireOpened && channelPostCooldown != null
+                && !channelPostCooldown.isZero() && !channelPostCooldown.isNegative()) {
+            java.time.Instant last = lastChannelPostAt.get(chatId);
+            if (last != null && java.time.Duration.between(last, clock.get()).compareTo(channelPostCooldown) < 0) {
+                return "You posted to this channel very recently. Wait a bit before posting again. Nothing sent.";
+            }
         }
 
         // канал она ведёт сама, и повторяться в нём так же заметно, как в разговоре
@@ -620,6 +655,8 @@ public final class TelegramTools {
         if (screen != null) {
             screen.markSent(chatId, finalId);
         }
+        lastChannelPostAt.put(chatId, clock.get());
+        onChannelPublished.accept(chatId);
         return "Post published. message_id=" + finalId;
     }
 

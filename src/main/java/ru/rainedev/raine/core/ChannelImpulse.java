@@ -114,6 +114,11 @@ public final class ChannelImpulse implements AutoCloseable {
         this.clock = clock;
     }
 
+    /** Реактивный пост в свой канал тоже сбрасывает окно спонтанного порыва. */
+    public void notePublished() {
+        lastPublished = clock.get();
+    }
+
     public void start() {
         if (chatId == 0) {
             log.info("Своего канала нет — порывов публиковать не будет");

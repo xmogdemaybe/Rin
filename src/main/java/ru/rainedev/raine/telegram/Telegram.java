@@ -889,7 +889,44 @@ public final class Telegram {
     /** Больше половины тысячи неподтверждённых отправок не бывает; это потолок на случай сбоя. */
     private static final int PENDING_SENDS_CAP = 500;
 
+    private record SentMessage(long chatId, long messageId) {}
+
+    private static final int SENT_MESSAGES_CAP = 512;
+
+    private final java.util.LinkedHashSet<SentMessage> sentMessages = new java.util.LinkedHashSet<>();
+
+    public void rememberSent(long chatId, long messageId) {
+        if (chatId == 0 || messageId == 0) {
+            return;
+        }
+        SentMessage entry = new SentMessage(chatId, messageId);
+        synchronized (sentMessages) {
+            sentMessages.remove(entry);
+            sentMessages.add(entry);
+            while (sentMessages.size() > SENT_MESSAGES_CAP) {
+                var it = sentMessages.iterator();
+                it.next();
+                it.remove();
+            }
+        }
+    }
+
+    public boolean wasSentByMe(long chatId, long messageId) {
+        if (chatId == 0 || messageId == 0) {
+            return false;
+        }
+        synchronized (sentMessages) {
+            return sentMessages.contains(new SentMessage(chatId, messageId));
+        }
+    }
+
     public void onSendSucceeded(long temporaryId, long finalId) {
+        note(temporaryId, finalId);
+    }
+
+    public void onSendSucceeded(long chatId, long temporaryId, long finalId) {
+        rememberSent(chatId, temporaryId);
+        rememberSent(chatId, finalId);
         note(temporaryId, finalId);
     }
 
@@ -1021,6 +1058,28 @@ public final class Telegram {
             case TdApi.ChatMemberStatusAdministrator ignored -> true;
             case TdApi.ChatMemberStatusCreator ignored -> true;
             case TdApi.ChatMemberStatusRestricted restricted -> restricted.isMember;
+            case null, default -> false;
+        };
+    }
+
+    public boolean canPostInChannel(long chatId) {
+        try {
+            TdApi.Chat chat = chatCached(chatId);
+            if (!(chat.type instanceof TdApi.ChatTypeSupergroup supergroup) || !supergroup.isChannel) {
+                return false;
+            }
+            TdApi.ChatMemberStatus status = ask(new TdApi.GetSupergroup(supergroup.supergroupId)).status;
+            return canPostStatus(status);
+        } catch (RuntimeException e) {
+            log.debug("Права публикации в канале {} не получены: {}", chatId, e.getMessage());
+            return false;
+        }
+    }
+
+    static boolean canPostStatus(TdApi.ChatMemberStatus status) {
+        return switch (status) {
+            case TdApi.ChatMemberStatusCreator creator -> creator.isMember;
+            case TdApi.ChatMemberStatusAdministrator admin -> admin.rights != null && admin.rights.canPostMessages;
             case null, default -> false;
         };
     }

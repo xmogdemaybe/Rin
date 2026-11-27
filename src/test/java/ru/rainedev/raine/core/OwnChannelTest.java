@@ -24,6 +24,8 @@ class OwnChannelTest {
         assertTrue(line.contains("chat_id=-100123"), line);
         assertTrue(line.contains("Заметки"), line);
         assertTrue(line.contains("@rin_notes"), line);
+        assertTrue(line.contains("open_chat_by_id"), line);
+        assertFalse(line.contains("open_chat,"), line);
         assertTrue(line.contains("post_to_channel"), "номер без тулзы бесполезен");
     }
 

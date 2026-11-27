@@ -36,6 +36,11 @@ public final class Notifications {
                 .formatted(Markup.attribute(chat.title), chat.id));
     }
 
+    public static String ownChannelPost(TdApi.Chat chat) {
+        return wrap(chat.id, "New post in your own channel \"%s\" (chat_id=%d)"
+                .formatted(Markup.attribute(chat.title), chat.id));
+    }
+
     private static String wrap(long chatId, String body) {
         return openingTag(chatId) + body + "\n</notification>\n"
                 + "You don't have any chat open. Use #open tool to open the chat";

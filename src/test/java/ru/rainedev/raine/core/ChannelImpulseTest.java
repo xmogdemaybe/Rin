@@ -230,4 +230,12 @@ class ChannelImpulseTest {
 
         assertTrue(requests.isEmpty(), "спящий человек не постит");
     }
+
+    @Test
+    void notePublishedResetsCooldownWindow() {
+        ChannelImpulse impulse = impulse();
+        assertTrue(impulse.cooldownExpired());
+        impulse.notePublished();
+        assertFalse(impulse.cooldownExpired());
+    }
 }

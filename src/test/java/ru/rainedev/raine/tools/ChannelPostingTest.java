@@ -578,4 +578,53 @@ class ChannelPostingTest {
             logs.stop();
         }
     }
+
+    @Test
+    void withoutPostPermissionToolIsNotRegisteredAndDirectCallRefuses() {
+        tools.channelsPosting(true);
+        tools.canPostInChannel(id -> false);
+        Toolbox box = new Toolbox();
+        tools.addWritingTools(ChatKind.CHANNEL, CHANNEL, box::add);
+        assertTrue(box.isEmpty());
+
+        String result = post().call(text("пост"));
+        assertTrue(result.contains("permission"), result);
+        noSend();
+    }
+
+    @Test
+    void secondPostInSameStepIsBlocked() {
+        Tool post = enabledPost();
+        Toolbox box = new Toolbox(post);
+        var results = box.invoke(List.of(
+                new ToolCall("c1", "function", new ToolCall.Function("post_to_channel", "{\"text\":\"первый\"}")),
+                new ToolCall("c2", "function", new ToolCall.Function("post_to_channel", "{\"text\":\"второй\"}"))));
+        assertEquals(2, results.size());
+        assertTrue(results.get(0).content().contains("one post at a time"));
+        assertTrue(results.get(1).content().contains("one post at a time"));
+        noSend();
+    }
+
+    @Test
+    void reactiveCooldownBlocksUntilWindowExpiresAndSyncsWithImpulse() {
+        java.time.Instant[] now = { java.time.Instant.parse("2026-11-27T10:00:00Z") };
+        List<Long> publishedChats = new ArrayList<>();
+        tools.clock(() -> now[0]);
+        tools.channelPostCooldown(java.time.Duration.ofMinutes(5));
+        tools.onChannelPublished(publishedChats::add);
+
+        Tool post = enabledPost();
+        assertTrue(post.call(text("первый пост")).contains("Post published"));
+        assertEquals(List.of(CHANNEL), publishedChats);
+
+        assertTrue(post.call(text("слишком рано")).contains("Wait a bit"));
+        now[0] = now[0].plus(java.time.Duration.ofMinutes(5));
+        assertTrue(post.call(text("второй пост")).contains("Post published"));
+        assertEquals(List.of(CHANNEL, CHANNEL), publishedChats);
+
+        String impulse = tools.publishToOwnChannel(CHANNEL, "пост из порыва", lookup, id -> FINAL);
+        assertTrue(impulse.contains("Post published"));
+        assertEquals(List.of(CHANNEL, CHANNEL, CHANNEL), publishedChats);
+        assertTrue(post.call(text("после порыва рано")).contains("Wait a bit"));
+    }
 }

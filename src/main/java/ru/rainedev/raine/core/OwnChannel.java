@@ -26,7 +26,7 @@ public record OwnChannel(long chatId, String title, String username) {
             return "";
         }
         String how = canPost
-                ? "Open it with open_chat, then publish with post_to_channel. Write there in your own voice."
+                ? "Open it with open_chat_by_id, then publish with post_to_channel. Write there in your own voice."
                 : "Publishing there is switched off in settings, so reading is all this channel is for.";
         return """
 

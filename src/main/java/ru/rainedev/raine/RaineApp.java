@@ -110,6 +110,9 @@ public final class RaineApp implements AutoCloseable {
     /** Сколько ждём, пока начатый ход договорит. Дольше — уже не остановка, а зависание. */
     private static final java.time.Duration SHUTDOWN_GRACE = java.time.Duration.ofMinutes(2);
 
+    /** Минимальная пауза между реактивными постами в канал. */
+    private static final java.time.Duration REACTIVE_CHANNEL_POST_COOLDOWN = java.time.Duration.ofMinutes(5);
+
     /** Насколько часто сообщение из заглушённого чата остаётся без внимания. */
     private static final double MUTED_IGNORE_CHANCE = 0.8;
     private volatile Spontaneity spontaneity;
@@ -140,7 +143,7 @@ public final class RaineApp implements AutoCloseable {
         // Telegram подтверждает отправку отдельным событием и только там называет
         // настоящий номер сообщения
         builder.addUpdateHandler(TdApi.UpdateMessageSendSucceeded.class,
-                update -> telegram.onSendSucceeded(update.oldMessageId, update.message.id));
+                update -> telegram.onSendSucceeded(update.message.chatId, update.oldMessageId, update.message.id));
         builder.addUpdateHandler(TdApi.UpdateMessageSendFailed.class,
                 update -> telegram.onSendFailed(update.oldMessageId,
                         update.error == null ? "причина неизвестна" : update.error.message));
@@ -241,6 +244,12 @@ public final class RaineApp implements AutoCloseable {
         // ней уже лежат, можно выкладывать и тогда, когда рисовать нечем
         tools.gallery(config.camera().gallery());
         tools.channelsPosting(config.channelsPostingEnabled());
+        tools.channelPostCooldown(REACTIVE_CHANNEL_POST_COOLDOWN);
+        tools.onChannelPublished(chatId -> {
+            if (chatId == ownChannel.chatId() && channelImpulse != null) {
+                channelImpulse.notePublished();
+            }
+        });
         ownChannel = resolveOwnChannel();
         // карточка, раскрытая из сообщения владельца, — его наводка: решение
         // «да, напиши» приходит следующим сообщением, а ссылка уже прочитана
@@ -806,6 +815,9 @@ public final class RaineApp implements AutoCloseable {
             log.warn("Чат {} не канал — own_channel игнорируется", chatId);
             return OwnChannel.NONE;
         }
+        if (config.channelsPostingEnabled() && !telegram.canPostInChannel(chatId)) {
+            log.warn("В своём канале {} нет права canPostMessages — публикация будет недоступна до выдачи прав", chatId);
+        }
         return new OwnChannel(chatId, chat.title == null ? "" : chat.title, username);
     }
 
@@ -928,7 +940,7 @@ public final class RaineApp implements AutoCloseable {
             return;
         }
         TdApi.Message message = update.message;
-        if (message.isOutgoing) {
+        if (message.isOutgoing || message.sendingState != null || telegram.wasSentByMe(message.chatId, message.id)) {
             return;
         }
 
@@ -1029,7 +1041,15 @@ public final class RaineApp implements AutoCloseable {
 
             int found = 0;
             for (TdApi.Chat chat : chats) {
-                if (!awaitsAnswer(chat) || chat.lastMessage == null || chat.lastMessage.isOutgoing) {
+                if (!awaitsAnswer(chat) || chat.lastMessage == null
+                        || chat.lastMessage.isOutgoing
+                        || chat.lastMessage.sendingState != null
+                        || telegram.wasSentByMe(chat.id, chat.lastMessage.id)) {
+                    continue;
+                }
+                if (ru.rainedev.raine.phone.ChatKind.of(chat) == ru.rainedev.raine.phone.ChatKind.CHANNEL
+                        && chat.id != ownChannel.chatId()
+                        && !telegram.isChannelMember(chat.id)) {
                     continue;
                 }
                 long senderId = chat.lastMessage.senderId instanceof TdApi.MessageSenderUser user ? user.userId : 0L;
@@ -1092,7 +1112,9 @@ public final class RaineApp implements AutoCloseable {
         String text = switch (kind) {
             case DM -> Notifications.directMessage(chat);
             case GROUP -> Notifications.groupMessage(chat, telegram.nameOf(senderId), senderId);
-            case CHANNEL -> Notifications.channelPost(chat);
+            case CHANNEL -> chat.id == ownChannel.chatId()
+                    ? Notifications.ownChannelPost(chat)
+                    : Notifications.channelPost(chat);
         };
 
         // набор живёт вместе с уведомлением: инструменты одного чата не должны
